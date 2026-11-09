@@ -147,6 +147,38 @@ def tv_loss(input):
     return (x_diff**2 + y_diff**2).mean([1, 2, 3])
 
 
+# LPIPS runs VGG on the whole frame with gradients, about 3.9KB per pixel: 3.6GB at 1280x768, which an 8GB card
+# doesn't have to spare. There, frames larger than 768x512 are compared at 768x512, which was tested at every
+# size and still shows the start image's layout and colors that LPIPS guards. A larger card compares at the
+# largest size that fits in what is free at the first step, full size when it can.
+LPIPS_FLOOR_PIXELS = 768 * 512
+LPIPS_BYTES_PER_PIXEL = 3930  # what its forward and backward pass add per compared pixel, measured from 512x320 to 1280x768
+LPIPS_FIXED_UP_TO_GB = 8.5  # cards this size or smaller keep the tested 768x512
+_lpips_pixels = {}
+
+
+def lpips_pixels(pixels):
+    if pixels not in _lpips_pixels:
+        if torch.cuda.get_device_properties(0).total_memory <= LPIPS_FIXED_UP_TO_GB * 2**30:
+            _lpips_pixels[pixels] = min(pixels, LPIPS_FLOOR_PIXELS)
+            return _lpips_pixels[pixels]
+        free = (memory.cap_bytes or torch.cuda.mem_get_info()[0]) - torch.cuda.memory_allocated()
+        fits = int(free * 0.75 / LPIPS_BYTES_PER_PIXEL)  # slack for the allocator's rounding and later steps
+        _lpips_pixels[pixels] = min(pixels, max(fits, LPIPS_FLOOR_PIXELS))
+    return _lpips_pixels[pixels]
+
+
+def lpips_distance(model, image, target):
+    pixels = image.shape[-2] * image.shape[-1]
+    allowed = lpips_pixels(pixels)
+    if pixels > allowed:
+        scale = math.sqrt(allowed / pixels)
+        size = (max(round(image.shape[-2] * scale), 32), max(round(image.shape[-1] * scale), 32))
+        image = F.interpolate(image, size=size, mode="area")
+        target = F.interpolate(target, size=size, mode="area")
+    return model(image, target)
+
+
 def range_loss(input):
     return (input - input.clamp(-1, 1)).pow(2).mean([1, 2, 3])
 
@@ -566,7 +598,7 @@ def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_
             loss = (tv_loss(x_in).sum() * cfg["tv_scale"] + range_loss(x_in).sum() * cfg["range_scale"]
                     + sat_losses.sum() * cfg["sat_scale"])
             if lpips_model is not None and init is not None and init_scale:
-                loss = loss + lpips_model(x_in, init).sum() * init_scale
+                loss = loss + lpips_distance(lpips_model, x_in, init).sum() * init_scale
             x_in_grad += torch.autograd.grad(loss, x_in)[0]
             if torch.isnan(x_in_grad).any():
                 return torch.zeros_like(x)

@@ -47,7 +47,7 @@ UPSCALE_DIRS = LOCAL.get("upscale_dirs", [])
 BUILT_IN_CHECKPOINTS = os.path.join(paths.MODELS, "checkpoints")
 CHECKPOINT_DIRS = LOCAL.get("checkpoint_dirs") or [BUILT_IN_CHECKPOINTS]
 OTHER_GPU_PORTS = LOCAL.get("other_gpu_ports", [8188, 7860])  # ComfyUI and Stable Diffusion web UIs
-HOST, PORT = "127.0.0.1", 7861
+HOST, PORT = "127.0.0.1", int(os.environ.get("DISCO_NANO_PORT") or 7861)  # another port runs a second copy
 URL = f"http://{HOST}:{PORT}"
 KEEP_JOBS = 20
 try:
@@ -138,6 +138,7 @@ def pump(task):
             task.message = FRIENDLY["error"]
             task.error = f"Worker exited unexpectedly (code {code})."
         task.finished_at = time.time()
+        _gpu_seen["at"] = 0.0  # the last reading still counts the worker's memory
 
 
 def handle_event(task, e):
@@ -193,10 +194,11 @@ def task_json(task):
 _gpu_seen = {"at": 0.0, "info": None}
 
 
-def gpu_info():
+def gpu_info(since=0.0):
     """Calls nvidia-smi at most once every 5 seconds. Each call asks the driver for a report,
-    and polling once a second during a render makes the screen hitch more often."""
-    if time.time() - _gpu_seen["at"] < 5:
+    and polling once a second during a render makes the screen hitch more often. A reading taken
+    before `since` is read again. A failed reading is retried at the next call."""
+    if _gpu_seen["info"] and time.time() - _gpu_seen["at"] < 5 and _gpu_seen["at"] >= since:
         return _gpu_seen["info"]
     _gpu_seen["info"] = read_gpu()
     _gpu_seen["at"] = time.time()
@@ -238,8 +240,22 @@ _idle = {"gpu": None, "ram": None}
 
 def idle_memory():
     if not (current and current.proc.poll() is None):
-        _idle["gpu"], _idle["ram"] = gpu_info() or _idle["gpu"], ram_info() or _idle["ram"]
+        # Windows takes a moment to hand back a finished worker's memory, so only later readings count.
+        settled = (current.finished_at or time.time()) + 1.5 if current else 0.0
+        gpu = gpu_info(since=settled)
+        if gpu and _gpu_seen["at"] >= settled:
+            _idle["gpu"] = gpu
+        _idle["ram"] = ram_info() or _idle["ram"]
     return _idle["gpu"], _idle["ram"]
+
+
+def take_idle_reading():
+    """A fresh reading just before a job starts, so what it adds is measured from what was really in use."""
+    gpu = read_gpu()
+    if gpu:
+        _gpu_seen["info"], _gpu_seen["at"] = gpu, time.time()
+        _idle["gpu"] = gpu
+    _idle["ram"] = ram_info() or _idle["ram"]
 
 
 def memory_plan(settings):
@@ -333,6 +349,7 @@ def safe_output_path(rel):
 
 def spawn(kind, label, cmd, job_id, job_dir):
     global current
+    take_idle_reading()
     env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT)
     # Below normal priority: a render still gets every idle cycle, but Windows serves the desktop first,
     # so the PC stays usable while it runs.
@@ -567,8 +584,9 @@ def render_plan(body: dict):
     settings = {k: v for k, v in body.get("settings", {}).items() if k in KNOWN_FIELDS}
     with lock:
         result = memory_plan(settings)
+        idle = not (current and current.proc.poll() is None)
     blocked = rules.blocked(settings)
-    return {**result, "blocked": blocked, "conflicts": rules.conflicts(settings, ruled=blocked),
+    return {**result, "idle": idle, "blocked": blocked, "conflicts": rules.conflicts(settings, ruled=blocked),
             "clashing": rules.clashing(settings, ruled=blocked)}
 
 
@@ -800,8 +818,9 @@ def writable_folder(path):
 
 @app.post("/api/folders")
 async def set_folders(request: Request):
+    """Model folders can be set from a browser on another PC too, since they only say where to read. Where
+    images are saved is set on the PC that renders."""
     global OUT_DIR, UPSCALE_DIRS, CHECKPOINT_DIRS, current
-    local_only(request)
     body = await request.json()
     with lock:
         if current and current.proc.poll() is None:
@@ -809,6 +828,8 @@ async def set_folders(request: Request):
         wanted = str(body.get("output_dir", OUT_DIR)).strip() or paths.OUTPUT
         if not os.path.isabs(wanted):
             raise HTTPException(400, "Use a full folder path, such as D:\\Art\\Disco.")
+        if not is_local(request) and os.path.normcase(os.path.abspath(wanted)) != os.path.normcase(OUT_DIR):
+            raise HTTPException(403, "Choose where images are saved on the PC that renders.")
         output_dir = writable_folder(wanted)
         dirs = [d.strip() for d in body.get("upscale_dirs", UPSCALE_DIRS) if isinstance(d, str) and d.strip()]
         for d in dirs:
@@ -921,6 +942,49 @@ def add_checkpoint_dir(folder):
     if folder and os.path.isdir(folder) and folder not in CHECKPOINT_DIRS:
         CHECKPOINT_DIRS = CHECKPOINT_DIRS + [folder]
         paths.save_local_settings({"checkpoint_dirs": CHECKPOINT_DIRS})
+
+
+HIDDEN_FOLDERS = {"$recycle.bin", "system volume information", "recovery", "config.msi"}
+# The files each kind of choice shows. A folder choice shows its models too, so you can tell the right folder.
+BROWSE_KINDS = {"checkpoint": (".safetensors",), "checkpoint-folder": (".safetensors",), "upscaler": (".pth", ".safetensors"), "folder": ()}
+
+
+@app.get("/api/browse")
+def browse(path: str = "", kind: str = "folder"):
+    """Folders, and the model files a kind wants, on the PC that renders. A browser on another PC can't open
+    Windows' file dialogs here, so the page draws its own from this."""
+    wanted = BROWSE_KINDS.get(kind, ())
+    machine = socket.gethostname()
+    if not path:
+        drives = [f"{letter}:\\" for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ" if os.path.isdir(f"{letter}:\\")]
+        return {"path": "", "parent": None, "folders": [{"name": d, "path": d} for d in drives], "files": [], "machine": machine}
+    path = os.path.abspath(path)
+    try:
+        entries = sorted(os.scandir(path), key=lambda e: e.name.lower())
+    except OSError:
+        raise HTTPException(400, f"Can't open {path}.") from None
+    folders, files = [], []
+    for entry in entries:
+        try:
+            if entry.is_dir():
+                if not entry.name.startswith((".", "$")) and entry.name.lower() not in HIDDEN_FOLDERS:
+                    folders.append({"name": entry.name, "path": entry.path})
+            elif wanted and entry.name.lower().endswith(wanted):
+                files.append({"name": entry.name, "path": entry.path, "gb": round(entry.stat().st_size / 2**30, 1)})
+        except OSError:
+            continue  # a folder Windows won't let us look into
+    parent = os.path.dirname(path)
+    return {"path": path, "parent": "" if parent == path else parent, "folders": folders, "files": files, "machine": machine}
+
+
+@app.post("/api/add-checkpoint")
+def add_checkpoint(body: dict):
+    """A checkpoint chosen in the page's own browser. Its folder joins the checkpoint folders, as with Browse."""
+    path = os.path.abspath(str(body.get("path", "")))
+    if not path.lower().endswith(".safetensors") or not os.path.isfile(path):
+        raise HTTPException(400, "Choose a .safetensors checkpoint.")
+    add_checkpoint_dir(os.path.dirname(path))
+    return {"path": path}
 
 
 @app.get("/api/checkpoints")

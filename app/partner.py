@@ -72,6 +72,11 @@ def taesd_decoder():
 class Capture:
     """An attention processor that also keeps the self-attention maps."""
 
+    # The most one block of attention scores may take at once. At 1280x768 the finest grid's scores are
+    # 3.5GB in one piece, so larger ones are worked out a band of rows at a time. Each row is its own
+    # softmax, so the result is the same.
+    PIECE_BYTES = 256 * 2**20
+
     def __init__(self, keep):
         self.keep, self.on, self.maps, self.counts = keep, False, {}, {}
 
@@ -80,13 +85,20 @@ class Capture:
         query = attn.head_to_batch_dim(attn.to_q(hidden_states))
         key = attn.head_to_batch_dim(attn.to_k(context))
         value = attn.head_to_batch_dim(attn.to_v(context))
-        probs = attn.get_attention_scores(query, key, None)
-        length = probs.shape[1]
-        if self.on and encoder_hidden_states is None and length in self.keep:
-            average = probs.float().mean(0)
-            self.maps[length] = self.maps.get(length, 0) + average
+        length = query.shape[1]
+        keeping = self.on and encoder_hidden_states is None and length in self.keep
+        rows = max(1, self.PIECE_BYTES // (query.shape[0] * key.shape[1] * query.element_size()))
+        outs, kept = [], []
+        for start in range(0, length, rows):
+            probs = attn.get_attention_scores(query[:, start:start + rows], key, None)
+            if keeping:
+                kept.append(probs.float().mean(0))
+            outs.append(torch.bmm(probs, value))
+            del probs
+        if keeping:
+            self.maps[length] = self.maps.get(length, 0) + torch.cat(kept)
             self.counts[length] = self.counts.get(length, 0) + 1
-        out = attn.batch_to_head_dim(torch.bmm(probs, value))
+        out = attn.batch_to_head_dim(torch.cat(outs, 1) if len(outs) > 1 else outs[0])
         return attn.to_out[1](attn.to_out[0](out))
 
     def take(self):

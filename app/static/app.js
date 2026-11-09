@@ -23,6 +23,20 @@ const MOTION = {
 };
 QUICK.push(...Object.keys(MOTION));
 const HANDLED = new Set(QUICK);
+// Settings drawn inside the cards, beside the controls they shape. All settings points to them.
+const CARD_FIELDS = {
+  cutouts: ["cut_ic_pow", "cut_overview", "cut_innercut", "cut_icgray_p", "cutn_batches", "skip_augs"],
+  guidance: ["tv_scale", "sat_scale", "range_scale", "clamp_grad", "clamp_max", "fuzzy_prompt", "rand_mag",
+    "diffusion_sampling_mode", "eta", "clip_denoised", "use_horizontal_symmetry", "use_vertical_symmetry", "transformation_percent"],
+  model: ["RN101", "RN50x4", "RN50x16", "RN50x64"],
+  handoff: ["handoff_steps", "handoff_guidance", "handoff_few_steps", "handoff_negative", "handoff_keep"],
+  tiles: ["tile_overlap"],
+  guides: ["ghost_lowfreq", "ghost_structure", "ghost_crops", "ghost_curve", "style_strength"],
+  lab: ["time_travel_curve", "graft_curve", "borrow_curve", "detail_curve", "guidance_curve", "painters_curve", "painters_strength",
+    "painters_color", "painters_path", "partner_model", "partner_file", "sketch_steps", "partner_every", "partner_follow", "partner_keep_sketch"],
+};
+const CARD_TITLES = { cutouts: "{Cutouts}", guidance: "Guidance", model: "Model", handoff: "Handoff", tiles: "Tiles", guides: "Guide images", lab: "Experiments" };
+const CARD_OF = Object.fromEntries(Object.entries(CARD_FIELDS).flatMap(([card, names]) => names.map((n) => [n, card])));
 
 const EXACT_REPEAT_COST = 1.28;  // measured: 0.84 to 1.08 seconds per step at 512×512
 const TIME_TRAVEL_COST = 1.35;  // measured at 512×512 with the default curve
@@ -43,7 +57,7 @@ function afterHandoff() {
 /* A look sets how the prompt shapes the picture, apart from its size. Settings it leaves out go back to
    their defaults. Each was compared with the others on the same prompts and seeds. */
 const LOOKS = {
-  balanced: { label: "Balanced", hint: "Lays out the whole scene first, then looks closer toward the end for detail. Strong single subjects. The default.", values: {} },
+  balanced: { label: "Balanced", hint: "Lays out the whole scene first, then looks closer toward the end for detail, using the close-up ramp in the {Cutouts} card. Strong single subjects. The default.", values: {} },
   detail: { label: "Fine detail", hint: "The prompt checkers look closely from start to end. The crispest subjects, faces and textures, with busier scenes.", values: { cut_ic_pow: "[80]*1000" } },
   shapes: { label: "Big shapes", hint: "Looks at the whole picture from start to end. Bold, simple scenes and dioramas, with softer detail.", values: { cut_ic_pow: "[1]*1000" } },
   classic: {
@@ -120,6 +134,7 @@ function withWords(el, text) {
 
 function applyNames() {
   document.querySelectorAll("[data-words]").forEach((el) => { el.textContent = worded(el.dataset.words); });
+  showHoverHelp();
   document.querySelectorAll("[data-names]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.names === state.names)));
   document.querySelectorAll("[data-shown-names]").forEach((el) => { el.hidden = el.dataset.shownNames !== state.names; });
 }
@@ -184,6 +199,27 @@ function buildAccents() {
   custom.append(pick);
   box.append(custom);
   applyAccent(state.accent || ACCENTS[0][0]);
+}
+
+/* The setting a label names: the control it is for, or the one inside it. */
+function settingOf(label) {
+  let id = label.htmlFor || label.querySelector("input:not([type=hidden]), select")?.id || "";
+  if (id.startsWith("adv-")) id = id.slice(4);
+  if (id === "denoise") id = "skip_steps";
+  return byName[id] ? id : null;
+}
+
+/* Resting the pointer on a setting's name shows its help, unless that is turned off in All settings. */
+function showHoverHelp() {
+  const on = state.hover_help !== false;
+  if ($("hoverHelp")) $("hoverHelp").checked = on;
+  document.body.classList.toggle("hover-help", on);
+  document.querySelectorAll(".controls label, .controls .guide > .field-name").forEach((label) => {
+    const name = label.matches("label") ? settingOf(label) : label.dataset.words?.match(/^\{(\w+)\}$/)?.[1];
+    const help = name && byName[name]?.help;
+    if (!help) return;
+    if (on) label.title = worded(help); else label.removeAttribute("title");
+  });
 }
 
 function setNames(names) {
@@ -431,7 +467,7 @@ function currentLook() {
 function showLook() {
   const key = currentLook();
   $("look").value = key;
-  $("lookAbout").textContent = key === "custom" ? "Some of its settings were changed in All settings." : worded(LOOKS[key].hint);
+  $("lookAbout").textContent = key === "custom" ? "Some of its settings were changed. Choose a look to set them back." : worded(LOOKS[key].hint);
 }
 
 function applyLook(key) {
@@ -568,7 +604,7 @@ function setAnimation(mode) {
 }
 
 // ---- cards ----
-const CARDS_OPEN = { size: true, render: true, model: false, handoff: false, animation: true, tiles: false, guides: false, lab: false };
+const CARDS_OPEN = { size: true, render: true, model: false, cutouts: false, guidance: false, handoff: false, animation: true, tiles: false, guides: false, lab: false };
 
 function cardOpen(name) { return state.cards?.[name] ?? CARDS_OPEN[name]; }
 
@@ -601,10 +637,16 @@ function showSummaries() {
     tiles: state.tile_scale === "Off" ? "Off" : String(state.tile_scale).split(",")[0],
     lab: on ? `${on} on` : "Off",
     handoff: handingOff() ? `${state.handoff_share}%, ${baseName(state.handoff_file).replace(/\.safetensors$/i, "")}` : "Off",
+    cutouts: changedIn("cutouts") ? `${changedIn("cutouts")} changed` : "Close-up ramp",
+    guidance: changedIn("guidance") ? `${changedIn("guidance")} changed` : "Default",
   };
   for (const [name, text] of Object.entries(sums)) $(`sum-${name}`).textContent = text;
   $("handoff_share").closest(".slider-row").hidden = !state.handoff_file;
   if (model) $("modelAbout").textContent = model.about;
+}
+
+function changedIn(card) {
+  return CARD_FIELDS[card].filter((n) => n in state.advanced).length;
 }
 
 // ---- sliders ----
@@ -912,7 +954,15 @@ function showTiles() {
   $("tile_denoise").disabled = grid === 1 || !(state.init_image || renderFirst || video);
   $("tile_start").disabled = !!state.init_image || video;
   const [width, height] = finalSize(state.width, state.height);
-  $("tileNote").textContent = `Final size ${width}×${height}, from ${grid * grid} tiles at the frame size.`;
+  // With tiles, a start image is repainted by Tile denoise, so the start image's own Denoise has no say.
+  const tiledStart = grid > 1 && !!(state.init_image || video);
+  for (const id of ["denoise", "skip_steps"]) {
+    const row = $(id).closest(".slider-row");
+    row.classList.toggle("unused", tiledStart);
+    row.title = tiledStart ? worded("Tiles use Tile denoise for the start image, so {skip_steps} isn't used.") : "";
+  }
+  $("tileNote").textContent = `Final size ${width}×${height}, from ${grid * grid} tiles at the frame size.`
+    + (tiledStart ? " Tile denoise sets how much of the start image is repainted." : "");
 }
 
 /* The frame closest to the start image's shape, and never larger than the frame Match began from,
@@ -1044,7 +1094,8 @@ function showMemory() {
   const s = lastStatus;
   const busy = !!s?.task?.active && s.task.kind === "render";
   if (!busy) renderPlan = null;
-  if (!busy && plan?.vram) {
+  // A plan worked out while the last render was still running has its memory in "other", so it waits for a new one.
+  if (!busy && plan?.vram && plan.idle) {
     const { vram, ram } = plan;
     const moved = movedOf(plan);
     const discoVram = vram.parts.map((p) => ({ ...p, kind: "vram", plan: true, label: `Next render: ${p.label}` }));
@@ -1071,6 +1122,9 @@ function showMemory() {
       { kind: "vram", label: "Disco, now", gb: s.gpu.used_gb - other }]);
     $("vramText").textContent = `${s.gpu.used_gb.toFixed(1)} / ${s.gpu.total_gb.toFixed(0)} GB`;
     $("vramText").classList.remove("over");
+  } else {  // the driver didn't answer this time, so show nothing rather than an old reading
+    drawTrack($("vramPlan"), 1, []);
+    $("vramText").textContent = "–";
   }
   if (s?.ram) {
     const other = busy && idle.ram ? Math.min(idle.ram.used_gb, s.ram.used_gb) : s.ram.used_gb;
@@ -1153,7 +1207,7 @@ function buildAdvanced() {
   const body = $("advBody");
   const sections = new Map();
   for (const f of fields) {
-    if (HANDLED.has(f.name)) continue;
+    if (HANDLED.has(f.name) && !CARD_OF[f.name]) continue;
     if (!sections.has(f.section)) sections.set(f.section, []);
     sections.get(f.section).push(f);
   }
@@ -1163,10 +1217,90 @@ function buildAdvanced() {
     const s = document.createElement("summary");
     withWords(s, `{${title}} (${list.length})`);
     d.append(s);
-    list.forEach((f) => d.append(advField(f)));
+    list.forEach((f) => d.append(CARD_OF[f.name] ? cardLink(f) : advField(f)));
     body.append(d);
   }
   makeSwitches(body);
+}
+
+/* A setting shown in a card is listed here too, so a search finds it, with a way to it. */
+function cardLink(f) {
+  const wrap = document.createElement("div");
+  wrap.className = "adv-field moved";
+  const everyName = (text) => text.replace(TOKEN, (_, name) => (terms[name] ?? [name]).join(" "));
+  wrap.dataset.text = everyName(`${f.name} {${f.name}} ${f.help}`).toLowerCase();
+  const name = withWords(document.createElement("span"), `{${f.name}}`);
+  name.className = "adv-name";
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "link";
+  withWords(go, `In the ${CARD_TITLES[CARD_OF[f.name]]} card`);
+  go.addEventListener("click", () => showInCard(f.name));
+  const cell = document.createElement("div");
+  cell.className = "adv-control";
+  cell.append(go);
+  wrap.append(name, cell);
+  return wrap;
+}
+
+function showInCard(name) {
+  $("advanced").close();
+  openCard(CARD_OF[name]);
+  const row = $(`adv-${name}`)?.closest(".adv-field");
+  if (!row) return;
+  const more = row.closest("details");
+  if (more) more.open = true;
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.classList.add("flash");
+  setTimeout(() => row.classList.remove("flash"), 1600);
+}
+
+/* Fills each card's settings. Called again whenever saved settings change all at once. */
+function buildCardFields() {
+  document.querySelectorAll(".card-fields[data-fields]").forEach((box) => {
+    box.replaceChildren(...CARD_FIELDS[box.dataset.fields].filter((n) => byName[n]).map((n) => advField(byName[n], true)));
+    makeSwitches(box);
+  });
+  showMoreCounts();
+  showHoverHelp();
+}
+
+function showMoreCounts() {
+  document.querySelectorAll("details.card-more .card-fields").forEach((box) => {
+    const n = changedIn(box.dataset.fields);
+    box.closest("details").querySelector("summary").textContent = n ? `More settings (${n} changed)` : "More settings";
+  });
+}
+
+/* A small drawing of a schedule, from the start of the render on the left to the end on the right. */
+function schedulePicture(name, text) {
+  const spec = { low: 0, ...SCHEDULES[name] };
+  const levels = parseSchedule(text) || [];
+  const hi = Math.max(spec.top, ...levels.map((l) => l.v));
+  const lowest = spec.log ? spec.low : Math.min(spec.low, ...levels.map((l) => l.v));
+  const share = (v) => (spec.log ? Math.log(Math.max(v, lowest) / lowest) / Math.log(hi / lowest) : (v - lowest) / (hi - lowest || 1));
+  const W = 200, H = 28;
+  const y = (v) => (H - 2 - share(v) * (H - 4)).toFixed(1);
+  let at = 0, line = "";
+  for (const l of levels) {
+    const x0 = ((at / 1000) * W).toFixed(1), x1 = (((at + l.n) / 1000) * W).toFixed(1);
+    line += `${line ? "L" : "M"}${x0} ${y(l.v)}L${x1} ${y(l.v)}`;
+    at += l.n;
+  }
+  const values = levels.map((l) => fmtValue(l.v));
+  const sum = values.length > 4 ? `${values[0]} … ${values.at(-1)}` : values.join(" → ");
+  return { svg: `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><path class="sched-fill" d="${line}L${W} ${H}L0 ${H}Z"/><path class="sched-line" d="${line}"/></svg>`, sum };
+}
+
+/* Every schedule's graph, in the cards and in All settings, redrawn from the saved settings. */
+function showSchedulePreviews() {
+  document.querySelectorAll(".sched-preview[data-field]").forEach((button) => {
+    const name = button.dataset.field;
+    const text = name in state.advanced ? state.advanced[name] : byName[name].default;
+    const { svg, sum } = schedulePicture(name, text);
+    button.innerHTML = `${svg}<span class="sched-sum">${sum}</span>`;
+    button.title = `${text}. Click to change it.`;
+  });
 }
 
 // ---- schedules ----
@@ -1231,6 +1365,8 @@ function commitSchedule() {
   $("changedCount").textContent = changedLabel();
   showLook();
   showResets();
+  showSchedulePreviews();
+  showMoreCounts();
   save();
   updateFit();
 }
@@ -1428,19 +1564,23 @@ function makeSwitches(root = document) {
   });
 }
 
-function advField(f) {
+function advField(f, compact = false) {
   const wrap = document.createElement("div");
-  wrap.className = "adv-field";
+  wrap.className = compact ? "adv-field card-field" : "adv-field";
   wrap.dataset.name = f.name.toLowerCase();
   const everyName = (text) => text.replace(TOKEN, (_, name) => (terms[name] ?? [name]).join(" "));
   wrap.dataset.text = everyName(`${f.name} {${f.name}} ${f.help}`).toLowerCase();
   const name = document.createElement("label");
-  name.className = "adv-name";
+  name.className = compact ? "field-name" : "adv-name";
   withWords(name, `{${f.name}}`);
   name.htmlFor = "adv-" + f.name;
   let input;
   const current = f.name in state.advanced ? state.advanced[f.name] : f.default;
-  if (f.kind === "boolean") {
+  if (compact && SCHEDULES[f.name]) {
+    input = document.createElement("input");  // the schedule as text, kept for the editor and resets
+    Object.assign(input, { type: "hidden", value: current });
+    wrap.append(name, input);
+  } else if (f.kind === "boolean") {
     input = document.createElement("input");
     input.type = "checkbox";
     input.checked = !!current;
@@ -1487,11 +1627,20 @@ function advField(f) {
   cell.append(wrap.lastChild);
   if (SCHEDULES[f.name]) {
     const edit = document.createElement("button");
-    Object.assign(edit, { type: "button", className: "icon-link", title: "Edit the schedule" });
-    edit.setAttribute("aria-label", "Edit the schedule");
-    edit.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17h5V9h6v5h7"/></svg>';
+    Object.assign(edit, { type: "button", className: "sched-preview" });
+    edit.dataset.field = f.name;
+    edit.setAttribute("aria-label", `Edit ${term(f.name)}`);
     edit.addEventListener("click", () => openSchedule(f.name));
-    cell.append(edit);
+    if (compact) cell.replaceChildren(edit, input); else cell.append(edit);
+  }
+  if (f.name === "partner_file") {
+    const pick = document.createElement("button");
+    Object.assign(pick, { type: "button", className: "default", textContent: "Browse" });
+    pick.addEventListener("click", async () => {
+      const path = await chooseCheckpoint(input.value);
+      if (path) { input.value = path; input.dispatchEvent(new Event("change")); }
+    });
+    cell.append(pick);
   }
   const reset = document.createElement("button");
   Object.assign(reset, { type: "button", className: "icon-link adv-reset", title: "Back to the default" });
@@ -1501,7 +1650,7 @@ function advField(f) {
   reset.addEventListener("click", () => resetField(f.name));
   cell.append(reset);
   wrap.append(cell);
-  if (f.help) {
+  if (f.help && !compact) {  // in a card, the help shows on hover instead
     const h = document.createElement("div");
     h.className = "adv-help";
     withWords(h, f.help);
@@ -1532,6 +1681,8 @@ function advChanged(f, input, wrap) {
   showLook();
   if (LAB_IMAGES.includes(f.name)) showLabImages();
   wrap.querySelector(".adv-reset").hidden = !(f.name in state.advanced);
+  showSchedulePreviews();
+  showMoreCounts();
   save();
   updateFit();
 }
@@ -1544,6 +1695,8 @@ const changedLabel = () => {
 function resetAdvancedPanel() {
   $("advBody").replaceChildren();
   buildAdvanced();
+  buildCardFields();
+  showSchedulePreviews();
   $("changedCount").textContent = changedLabel();
 }
 
@@ -1613,9 +1766,87 @@ async function saveFolders() {
   } catch (e) { folderError(e.message); }
 }
 
-async function browseFolder(title, start) {
+async function browseFolder(title, start, kind = "folder") {
+  if (!isLocal()) return browseRemote({ title, kind, start });
   const { path } = await post("/api/pick-folder", { title, start });
   return path;
+}
+
+// ---- choosing on the PC that renders ----
+/* A browser on another PC can't open Windows' dialogs over there, so it walks that PC's folders here. */
+let browsing = null;
+const FOLDER_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/></svg>';
+const FILE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>';
+
+function browseRemote({ title, kind, start }) {
+  if (browsing) finishBrowse(null);
+  return new Promise((resolve) => {
+    browsing = { kind, resolve, path: "" };
+    $("browseTitle").textContent = title;
+    $("browsePick").hidden = kind === "checkpoint";
+    $("browseDialog").showModal();
+    browseTo(start || "");
+  });
+}
+
+async function browseTo(path) {
+  if (!browsing) return;
+  const kind = browsing.kind;
+  $("browseError").hidden = true;
+  let r;
+  try {
+    r = await api(`/api/browse?kind=${kind}&path=${encodeURIComponent(path)}`);
+  } catch (e) {
+    $("browseError").textContent = e.message;
+    $("browseError").hidden = false;
+    if (path && !browsing.path) browseTo("");  // a saved folder that is gone: start from the drives
+    return;
+  }
+  if (!browsing) return;
+  browsing.path = r.path;
+  browsing.parent = r.parent;
+  $("browsePath").value = r.path;
+  $("browseUp").disabled = r.parent == null;
+  $("browsePick").disabled = !r.path;
+  $("browseWhere").textContent = kind === "checkpoint"
+    ? `Folders on ${r.machine}, the PC that renders. Choose a .safetensors checkpoint.`
+    : `Folders on ${r.machine}, the PC that renders. Open a folder, then use it.`;
+  const rows = [];
+  for (const f of r.folders) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.innerHTML = FOLDER_ICON;
+    b.append(f.name);
+    b.addEventListener("click", () => browseTo(f.path));
+    rows.push(b);
+  }
+  for (const f of r.files) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "file";
+    b.innerHTML = FILE_ICON;
+    const size = document.createElement("span");
+    size.className = "size";
+    size.textContent = `${f.gb}GB`;
+    b.append(f.name, size);
+    if (kind === "checkpoint") b.addEventListener("click", () => finishBrowse(f.path));
+    else b.disabled = true;  // shown so you can tell the folder holds models
+    rows.push(b);
+  }
+  $("browseList").replaceChildren(...rows.map((b) => { const li = document.createElement("li"); li.append(b); return li; }));
+  if (!rows.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = kind === "checkpoint" ? "No folders or checkpoints here." : "No folders here.";
+    $("browseList").append(li);
+  }
+}
+
+function finishBrowse(path) {
+  const b = browsing;
+  browsing = null;
+  if ($("browseDialog").open) $("browseDialog").close();
+  b?.resolve(path || null);
 }
 
 // ---- models ----
@@ -2088,7 +2319,7 @@ function showCheckpoints() {
   select.replaceChildren(...options);
   select.value = current;
   $("handoffWhere").textContent = checkpointList.length ? ""
-    : isLocal() ? "Browse to a checkpoint, or add checkpoint folders in All settings." : "Add checkpoint folders in All settings on the PC that renders.";
+    : isLocal() ? "Browse to a checkpoint, or add checkpoint folders in All settings." : "Browse to a checkpoint on the PC that renders, or add checkpoint folders in All settings.";
 }
 
 function pickCheckpoint(path) {
@@ -2097,9 +2328,18 @@ function pickCheckpoint(path) {
   showCheckpoints();
 }
 
+/* A checkpoint file on the PC that renders: Windows' own dialog there, or the page's browser from another PC.
+   Its folder joins the checkpoint folders either way. */
+async function chooseCheckpoint(start) {
+  if (isLocal()) return (await post("/api/pick-checkpoint", { start: start || "" })).path;
+  const folder = start ? start.replace(/[\\/][^\\/]*$/, "") : $("checkpointDirs").value.split("\n")[0].trim();
+  const path = await browseRemote({ title: "Choose a Stable Diffusion 1.5 or SDXL checkpoint", kind: "checkpoint", start: folder });
+  return path ? (await post("/api/add-checkpoint", { path })).path : null;
+}
+
 async function browseCheckpoint() {
   try {
-    const { path } = await post("/api/pick-checkpoint", { start: state.handoff_file || "" });
+    const path = await chooseCheckpoint(state.handoff_file);
     if (!path) return;
     await loadCheckpoints();
     if (!state.handoff_share) { state.handoff_share = 30; $("handoff_share").value = 30; }
@@ -2242,9 +2482,10 @@ function showLocal(here) {
   local = here;
   document.body.dataset.place = here ? "local" : "remote";
   document.querySelectorAll(".local-only").forEach((el) => { el.hidden = !here; });
-  // Folders on the PC that renders are set there, so another PC sees them but can't change them.
-  for (const id of ["outputDir", "upscaleDirs", "checkpointDirs"]) $(id).readOnly = !here;
-  for (const id of ["outputBrowse", "upscaleBrowse", "checkpointBrowse", "openFolder"]) $(id).hidden = !here;
+  // Another PC can choose model folders over there, through the page's own browser. Where images are saved is
+  // set on the PC that renders.
+  $("outputDir").readOnly = !here;
+  for (const id of ["outputBrowse", "openFolder"]) $(id).hidden = !here;
   showCheckpoints();
   loadNetwork();
 }
@@ -2629,6 +2870,8 @@ async function init() {
   buildControls();
   makeSwitches();
   buildAdvanced();
+  buildCardFields();
+  showSchedulePreviews();
   applyNames();
   for (const name of ["tile_scale", "tile_start", "live_ghost", "animation_mode"]) byName[name].options.forEach((o) => $(name).append(option(o)));
   await loadModels();
@@ -2682,7 +2925,7 @@ async function init() {
     if (path) { $("outputDir").value = path; saveFolders(); }
   });
   $("upscaleBrowse").addEventListener("click", async () => {
-    const path = await browseFolder("Add an upscaler folder", "");
+    const path = await browseFolder("Add an upscaler folder", "", "upscaler");
     if (path) { $("upscaleDirs").value = [$("upscaleDirs").value.trim(), path].filter(Boolean).join("\n"); saveFolders(); }
   });
   $("galleryToggle").addEventListener("click", () => {
@@ -2720,9 +2963,15 @@ async function init() {
   wireDrop(document.querySelector('[data-drop="image_prompts"]'), { input: $("image_promptsFile"), onFiles: uploadPromptImages, onClear: () => setImagePrompts("") });
   $("checkpointDirs").addEventListener("change", saveFolders);
   $("checkpointBrowse").addEventListener("click", async () => {
-    const path = await browseFolder("Add a checkpoint folder", "");
+    const path = await browseFolder("Add a checkpoint folder", "", "checkpoint-folder");
     if (path) { $("checkpointDirs").value = [$("checkpointDirs").value.trim(), path].filter(Boolean).join("\n"); saveFolders(); }
   });
+  $("hoverHelp").addEventListener("change", () => { state.hover_help = $("hoverHelp").checked; save(); showHoverHelp(); });
+  $("browseUp").addEventListener("click", () => browsing && browseTo(browsing.parent || ""));
+  $("browsePath").addEventListener("change", () => browseTo($("browsePath").value.trim()));
+  $("browsePick").addEventListener("click", () => browsing?.path && finishBrowse(browsing.path));
+  $("browseCancel").addEventListener("click", () => finishBrowse(null));
+  $("browseDialog").addEventListener("close", () => { if (browsing) finishBrowse(null); });
   $("curveDone").addEventListener("click", closeCurve);
   $("curveDialog").addEventListener("cancel", (e) => { e.preventDefault(); closeCurve(); });
   $("curveShape").addEventListener("change", setCurveShape);

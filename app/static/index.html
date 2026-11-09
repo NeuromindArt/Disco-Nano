@@ -170,6 +170,21 @@
           <div class="group-label">Memory and speed</div>
           <label class="check"><input type="checkbox" id="use_secondary_model"> <span data-words="{use_secondary_model} (faster, lower quality)">Secondary model (faster, lower quality)</span></label>
           <label class="check"><input type="checkbox" id="exact_repeat"> Exact repeat (same seed, same image)</label>
+          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="model"></div></details>
+        </div>
+      </section>
+
+      <section class="card" data-card="cutouts">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title" data-words="{Cutouts}">Cutouts</span><span class="card-sum" id="sum-cutouts"></span></button>
+        <div class="card-body">
+          <div class="card-fields" data-fields="cutouts"></div>
+        </div>
+      </section>
+
+      <section class="card" data-card="guidance">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Guidance</span><span class="card-sum" id="sum-guidance"></span></button>
+        <div class="card-body">
+          <div class="card-fields" data-fields="guidance"></div>
         </div>
       </section>
 
@@ -178,11 +193,12 @@
         <div class="card-body">
           <div class="line">
             <label class="field-name" for="handoffPick" data-words="{handoff_file}">Handoff model</label>
-            <div class="pick-row"><select id="handoffPick"></select><button type="button" id="handoffBrowse" class="default local-only" title="Choose a checkpoint file on this PC">Browse</button></div>
+            <div class="pick-row"><select id="handoffPick"></select><button type="button" id="handoffBrowse" class="default" title="Choose a checkpoint file on the PC that renders">Browse</button></div>
           </div>
           <input type="hidden" id="handoff_file">
           <div class="slider-row"><label class="field-name" for="handoff_share" data-words="{handoff_share}">Handoff %</label><input type="range" data-for="handoff_share" min="0" max="100" step="5"><input id="handoff_share" class="readout" type="number" min="0" max="100" step="5"></div>
           <p class="hint">A Stable Diffusion 1.5 or SDXL checkpoint paints the start of each image or frame, and Disco finishes it. 0% is Disco alone, and about 30% keeps Disco's look on a sturdier layout. <span id="handoffWhere"></span></p>
+          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="handoff"></div></details>
         </div>
       </section>
 
@@ -197,6 +213,7 @@
             <label class="check tile-view"><input type="checkbox" id="tile_whole_view"> Whole picture view</label>
           </div>
           <p id="tileNote" class="hint" hidden></p>
+          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="tiles"></div></details>
         </div>
       </section>
 
@@ -239,7 +256,8 @@
           <input type="file" id="image_promptsFile" accept="image/png,image/jpeg,image/webp" multiple hidden>
           <input type="hidden" id="image_prompts">
           <div class="slider-row" id="imagePromptWeightRow" hidden><label class="field-name" for="image_prompt_weight" data-words="{image_prompt_weight}">Image prompt weight</label><input type="range" data-for="image_prompt_weight" min="-2" max="4" step="0.25"><input id="image_prompt_weight" class="readout" type="number" min="-10" max="10" step="0.25"></div>
-          <p class="hint">A ghost image guides the layout and a style image the texture and palette. Image prompts are a set of images whose shared subject, style or palette counts as one more prompt; ten to fifty that share one idea work best. Ghost and style strengths are under Experimental in All settings.</p>
+          <p class="hint">A ghost image guides the layout and a style image the texture and palette. Image prompts are a set of images whose shared subject, style or palette counts as one more prompt; ten to fifty that share one idea work best. Their strengths are under More settings.</p>
+          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="guides"></div></details>
         </div>
       </section>
 
@@ -257,6 +275,7 @@
           <div class="slider-row"><label class="field-name" for="gradient_momentum">Push momentum</label><input type="range" data-for="gradient_momentum" min="0" max="0.95" step="0.05"><input id="gradient_momentum" class="readout" type="number" min="0" max="0.95" step="0.05"></div>
           <div class="slider-row"><label class="field-name" for="evidence_map">Subject memory</label><input type="range" data-for="evidence_map" min="0" max="1" step="0.1"><input id="evidence_map" class="readout" type="number" min="0" max="1" step="0.1"></div>
           <p class="hint">New ways of shaping the image, so results vary a lot from seed to seed. Help explains each one.</p>
+          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="lab"></div></details>
         </div>
       </section>
 
@@ -354,6 +373,10 @@
         </div>
         <div class="adv-help">Plain names are easier to follow. Official names match Disco Diffusion's own, for anyone who knows the notebook or its guides. Settings Nano added have one name. Renders are the same either way.</div>
       </div>
+      <div class="folder-field">
+        <label class="check toggle"><input type="checkbox" id="hoverHelp" class="switch" role="switch"> Help on hover</label>
+        <div class="adv-help">Resting the pointer on a setting's name shows what it does. Help has the longer explanations.</div>
+      </div>
     </section>
     <section id="lookBox" class="folders" aria-label="Accent color">
       <div class="folder-field">
@@ -442,6 +465,11 @@
     <h3>Looks</h3>
     <p>A look sets how the prompt shapes the picture, at any size. Changing one of its settings by hand shows Custom.</p>
     <dl id="helpLooks"></dl>
+    <h3 data-words="{Cutouts} and schedules">Cutouts and schedules</h3>
+    <p data-words="Each step, the {clip_lower} judge {cuts_lower} of the picture: whole-image views and close-ups. The {Cutouts} card sets how many of each there are and how close the close-ups get."></p>
+    <p data-words="The default close-up ramp keeps {cut_ic_pow} low at the start, so close-ups are wide and lay out the scene, and raises it toward the end for detail. It made real scenes where flat settings gave texture. Big shapes and Fine detail under Look hold it flat instead."></p>
+    <p>Settings that change over the render are schedules. Each one shows as a graph from the start of the render on the left to the end on the right, with its values in the corner. Click a graph to drag its levels, or type the schedule as text, such as [12]*400+[4]*600: 12 for the first 400 of 1000 parts, then 4. A value that differs from the default shows in the accent color. Hover over a setting's name to read what it does.</p>
+    <p>Guidance holds how the push toward the prompt is smoothed and limited, and how the picture is sampled. More settings, at the bottom of some cards, holds the rest of that card's settings.</p>
     <h3>Seeds and Exact repeat</h3>
     <p>Seed 0 picks a new random seed for every render. Any other number starts from the same noise each time; slide it, or type any number up to 4294967295. A seed sets the starting noise, but the GPU adds tiny differences, so the same seed normally gives a similar start and a different image. Exact repeat removes those differences on this PC, at about 30% more time per step. Each image in a run has its own seed, so Reuse settings can make any of them again.</p>
     <h3>Images</h3>
@@ -472,7 +500,7 @@
     <p>Handoff lets a Stable Diffusion checkpoint you already have, SD 1.5 or SDXL, paint the start of every image or frame. It's not a start image: the checkpoint takes its share of the steps from noise, and Disco carries on from the exact point where it stopped, with its picture of the scene still blurry. The layout and subject come from the checkpoint, and the paint and detail from Disco.</p>
     <p>Handoff % is the checkpoint's share of the path. 0% is Disco alone, about 30% keeps Disco's look, 50% keeps more of the checkpoint, and 100% leaves Disco only the finishing touch. With a start image or in animation, the checkpoint takes its share of what would be repainted, so every frame of a 2D, 3D or Video Input clip gets it.</p>
     <p>The checkpoint waits in RAM and comes to the GPU only for its own steps. SD 1.5 fits beside Disco. SDXL is stored in 8 bits on cards under 12GB, which halves its memory, and takes about a minute to load. The first time, it downloads a few small configuration files. Handoff steps, prompt strength, the negative prompt and few-step models such as Lightning are under Handoff in All settings.</p>
-    <p>The Handoff list shows the checkpoints in your checkpoint folders. Browse picks a file anywhere on this PC and adds its folder, and Checkpoint folders in All settings holds the list.</p>
+    <p>The Handoff list shows the checkpoints in your checkpoint folders. Browse picks a file anywhere on the PC that renders and adds its folder, and Checkpoint folders in All settings holds the list.</p>
     <h3>Experiments</h3>
     <p>These change how the image forms. They're new, so results vary a lot from seed to seed, and they can't run with tiles, symmetry, plms or the secondary model. Whichever you choose first grays out the other, and hovering a grayed setting says why.</p>
     <p>Time travel backs up and repeats some steps, so the painter can absorb the prompt's push. Subjects get cleaner, for about 35% more time.</p>
@@ -486,7 +514,7 @@
     <h3>Models</h3>
     <p>Setup downloads the main model. The others are optional and grayed out in the Model list until you download them from Models in All settings. All of them were tested at 512×512. The style models use about 2GB less VRAM than the main model and take a little over half the time.</p>
     <h3>Rendering on another PC</h3>
-    <p>To render on a PC with a GPU while you work on another, turn on Share this PC under Network in All settings on the PC with the GPU. It shows an address and a code. On the other PC, open the address in any browser, or type it into Render on another PC in Nano's own All settings, and type the code once. That PC then uses Nano as if it sat at the GPU PC, and renders, images and settings all live there. Picking folders and opening Explorer only work on the GPU PC itself; from the other PC, drop files onto the page instead.</p>
+    <p>To render on a PC with a GPU while you work on another, turn on Share this PC under Network in All settings on the PC with the GPU. It shows an address and a code. On the other PC, open the address in any browser, or type it into Render on another PC in Nano's own All settings, and type the code once. That PC then uses Nano as if it sat at the GPU PC, and renders, images and settings all live there. From the other PC, Browse and Add folder show the GPU PC's own drives, so handoff checkpoints, the partner's SD 1.5 file and upscaler folders are picked from what is on the GPU PC. Start images, videos and guide images are dropped onto the page and uploaded. Where images are saved, and opening Explorer, are set on the GPU PC itself.</p>
     <h3>Folders</h3>
     <p>All settings sets where images are saved and where to look for upscalers and checkpoints. You can download Real-ESRGAN x4plus from Models in All settings, or point Nano at a folder of your own.</p>
     <p><button type="button" id="showWelcome" class="link">Show the welcome screen again</button></p>
@@ -555,6 +583,24 @@
     <input id="scheduleText" type="text" spellcheck="false" aria-label="Schedule">
     <p id="scheduleError" class="error" role="alert" hidden></p>
     <p class="hint">The render runs left to right. Drag a level up or down to change it, and drag the line between two levels to move the change. Double-click a level to split it there, and double-click a line to join its two sides. The text box takes the same schedule as text, such as [12]*400+[4]*600: 12 for the first 400 of 1000 parts, then 4.</p>
+  </div>
+</dialog>
+
+<dialog id="browseDialog" class="modal browse" aria-label="Choose a file or folder">
+  <div class="modal-head">
+    <h2 id="browseTitle">Choose</h2>
+    <span class="spacer"></span>
+    <button type="button" id="browseCancel" class="link">Cancel</button>
+    <button type="button" id="browsePick" class="default">Use this folder</button>
+  </div>
+  <div class="modal-body">
+    <div class="browse-path">
+      <button type="button" id="browseUp" class="icon-link" title="Up one folder" aria-label="Up one folder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+      <input id="browsePath" type="text" spellcheck="false" aria-label="Folder">
+    </div>
+    <p id="browseWhere" class="hint"></p>
+    <ul id="browseList" class="browse-list"></ul>
+    <p id="browseError" class="error" role="alert" hidden></p>
   </div>
 </dialog>
 

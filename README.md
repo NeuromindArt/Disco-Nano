@@ -51,6 +51,7 @@ RTX 3070 8GB.
 - Experiments that change how the image forms, including Time travel and Borrowed attention
 - Save images to any folder, with disk space shown beside VRAM
 - Upscaling with Real-ESRGAN x4plus or your own ESRGAN, DAT or HAT models
+- Every schedule drawn as a graph you can drag, in the card it belongs to
 - All settings searchable, with help for each one
 - A hard VRAM cap, so a render that is too big fails cleanly instead of stalling your PC
 - Renders run at below normal priority on 4 CPU threads by default, so the PC stays usable
@@ -203,8 +204,9 @@ another one.
 
 The other PC then uses Nano as if it sat at the GPU PC: renders run on that GPU, and images and
 settings are saved there. The menu bar says which PC you are rendering on. Start images, videos and
-guide images are uploaded when you drop them. Picking folders and opening Explorer only work on the
-GPU PC itself. **New code** signs every other PC out. Sharing stays off until you turn it on, and
+guide images are uploaded when you drop them. **Browse** for a handoff checkpoint, and **Add folder**
+for checkpoints and upscalers, show the GPU PC's own drives and folders, so you pick models that are
+on that PC. Where images are saved, and opening Explorer, are set on the GPU PC itself. **New code** signs every other PC out. Sharing stays off until you turn it on, and
 then Nano answers only on your local network, and only to browsers with the code.
 
 ### Optional machine settings
@@ -270,7 +272,7 @@ Disco Diffusion's memory problem is the opposite of Stable Diffusion's. The weig
 - **One UNet pass per step.** Disco Diffusion runs the UNet twice each step on the same input. Nano
   runs it once and shares the result, which took 768×512 from 1.5 to 1.16 seconds per step.
 - **One cutout batch.** Disco Diffusion's default of 4 repeats the CLIP work four times. Raise
-  `cutn_batches` in All settings if you prefer that.
+  **View rounds** (`cutn_batches`) in the Views card if you prefer that.
 - **Lean UNet blocks.** At 1280×768 one copy of a full-size layer is up to 0.7GB, and the stock blocks
   keep four or five copies alive at once. Nano's blocks reuse buffers when nothing needs gradients,
   and in the guidance backward pass each block keeps only its input and steps back through itself
@@ -327,7 +329,8 @@ the steps, which often gave a pleasant texture in place of the subject.
 A **Look** sets how the prompt shapes the picture, at any size:
 
 - **Balanced**, the default. The prompt checkers lay out the whole scene first, then look closer
-  toward the end to add detail. Strong single subjects.
+  toward the end to add detail. Strong single subjects. This is the close-up ramp: **Close-up
+  tightness** starts low, so close-ups are wide, and rises toward the end.
 - **Fine detail**. The checkers look closely from start to end. The crispest subjects, faces and
   textures, with busier scenes.
 - **Big shapes**. The checkers look at the whole picture throughout. Bold, simple scenes and dioramas.
@@ -335,6 +338,12 @@ A **Look** sets how the prompt shapes the picture, at any size:
   cutouts and the secondary model. Dreamy and loose, and about twice as long.
 
 Changing one of a look's settings by hand shows **Custom**.
+
+The **Views** card (**Cutouts** under official names) holds the schedules behind the looks: how many
+whole-image views and close-ups the checkers judge, how tight the close-ups are, and how many are
+gray. Each schedule shows as a graph from the start of the render to the end. Click one to drag its
+levels, for example to start the ramp later or end it tighter. The **Guidance** card holds smoothing,
+the saturation and step limits, and the sampler. Changed values show in the accent color.
 
 ## Handoff
 
@@ -350,7 +359,7 @@ Disco carries on from the exact point where it stopped, while the scene is still
 - With a start image, or on any frame of a 2D, 3D or Video Input clip, the checkpoint starts where
   Disco would have started and takes its share of what is left. Every painted frame gets it.
 - Handoff steps, its prompt strength, its negative prompt, and spacing for few-step models such as
-  Lightning are under Handoff in All settings. Prompt lines with a negative weight become part of
+  Lightning are under More settings in the Handoff card. Prompt lines with a negative weight become part of
   its negative prompt.
 
 The checkpoint waits in RAM and comes to the GPU only for its own steps. On cards under 12GB, SDXL's
@@ -386,7 +395,8 @@ straight line.
   full size from the first step and uses Denoise. **Render first** paints one image at the frame
   size and then tiles it using Tile denoise, which tends to give larger shapes.
 - **Whole picture view** lets CLIP see each tile as part of the full image.
-- **Tile overlap**, in All settings, is how many pixels neighbors share. The default is 96.
+- **Tile overlap**, under More settings in the Tiles card, is how many pixels neighbors share. The
+  default is 96.
 
 Tiles always use the ddim sampler, and symmetry doesn't apply.
 
