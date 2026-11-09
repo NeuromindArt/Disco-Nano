@@ -5,6 +5,7 @@ small margin for PyTorch's allocator. RAM is what the render process committed, 
 RAM or the page file. Each part grows the same way on any card, so the plan holds elsewhere too; only what
 is free differs.
 """
+import json
 import os
 
 import models
@@ -62,7 +63,7 @@ def plan(settings, gpu, ram):
         extras.append(LPIPS)
     hand = str(cfg.get("handoff_file") or "")
     if hand and float(cfg.get("handoff_share") or 0) > 0:
-        kind = "sdxl" if _is_sdxl(hand) else "sd15"
+        kind = "sdxl" if checkpoint_kind(hand) == "sdxl" else "sd15"
         extras.append(("Handoff model, between its steps", HANDOFF_VRAM_GB[kind], 0))
         ram_extras.append({"kind": "extra", "label": f"Handoff model ({'SDXL' if kind == 'sdxl' else 'SD 1.5'}), waiting in RAM",
                            "gb": HANDOFF_RAM_GB[kind]})
@@ -103,8 +104,27 @@ def plan(settings, gpu, ram):
     }
 
 
-def _is_sdxl(path):
+_kinds = {}
+
+
+def checkpoint_kind(path):
+    """"sd15" or "sdxl" for a checkpoint Handoff can use, or None for anything else, such as Flux, SD 3 or SD 2.
+    It reads the names in the file's header, which is quick and needs no torch. File size can't tell: some
+    SD 1.5 files are over 5GB."""
     try:
-        return os.path.getsize(path) > 4.5 * 2**30  # SD 1.5 files are 2 to 4GB, SDXL ones 6GB or more
-    except OSError:
-        return False
+        stat = os.stat(path)
+        key = (path, stat.st_mtime, stat.st_size)
+        if key not in _kinds:
+            with open(path, "rb") as f:
+                length = int.from_bytes(f.read(8), "little")
+                names = json.loads(f.read(length)) if 0 < length < 200 * 2**20 else {}
+            unet = any(k.startswith("model.diffusion_model.input_blocks.") for k in names)
+            if unet and any(k.startswith("conditioner.embedders.1.") for k in names):
+                _kinds[key] = "sdxl"
+            elif unet and any(k.startswith("cond_stage_model.transformer.") for k in names):
+                _kinds[key] = "sd15"
+            else:
+                _kinds[key] = None
+        return _kinds[key]
+    except (OSError, ValueError):
+        return None

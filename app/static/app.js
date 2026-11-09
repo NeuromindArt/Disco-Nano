@@ -2317,7 +2317,17 @@ async function loadCheckpoints() {
 function showCheckpoints() {
   const select = $("handoffPick");
   const current = state.handoff_file || "";
-  const options = [option("", "Off"), ...checkpointList.map((c) => option(c.path, c.sdxl ? `${c.name} (SDXL)` : c.name))];
+  // Grouped by the subfolder each checkpoint is in, as ComfyUI sorts them.
+  const options = [option("", "Off")];
+  const groups = new Map();
+  for (const c of checkpointList) {
+    const label = c.sdxl ? `${c.name} (SDXL)` : c.name;
+    if (!c.group) { options.push(option(c.path, label)); continue; }
+    if (!groups.has(c.group)) groups.set(c.group, document.createElement("optgroup"));
+    groups.get(c.group).label = c.group;
+    groups.get(c.group).append(option(c.path, label));
+  }
+  options.push(...groups.values());
   if (current && !checkpointList.some((c) => c.path === current)) options.push(option(current, baseName(current).replace(/\.safetensors$/i, "")));
   select.replaceChildren(...options);
   select.value = current;

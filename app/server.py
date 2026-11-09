@@ -620,6 +620,8 @@ async def render(request: Request):
         if handoff_file and float(settings.get("handoff_share", DEFAULTS["handoff_share"]) or 0) > 0:
             if not handoff_file.lower().endswith(".safetensors") or not os.path.isfile(handoff_file):
                 raise HTTPException(400, "The handoff model must be a .safetensors checkpoint that exists. Choose it again in Handoff.")
+            if not budget.checkpoint_kind(handoff_file):
+                raise HTTPException(400, "Handoff takes Stable Diffusion 1.5 and SDXL checkpoints, and this is another kind of model.")
         for name in needed:
             if name in models.FILES and not os.path.exists(models.path_of(name)):
                 raise HTTPException(400, f"{name} isn't downloaded yet. Get it from Models in All settings.")
@@ -983,24 +985,104 @@ def add_checkpoint(body: dict):
     path = os.path.abspath(str(body.get("path", "")))
     if not path.lower().endswith(".safetensors") or not os.path.isfile(path):
         raise HTTPException(400, "Choose a .safetensors checkpoint.")
+    if not budget.checkpoint_kind(path):
+        raise HTTPException(400, "Handoff takes Stable Diffusion 1.5 and SDXL checkpoints, and this is another kind of model.")
     add_checkpoint_dir(os.path.dirname(path))
     return {"path": path}
 
 
+# Install folders of other Stable Diffusion apps, and where each keeps its checkpoints.
+OTHER_APPS = ("comfyui", "stable-diffusion-webui", "sd-webui", "sd.webui", "webui", "forge", "automatic", "invokeai", "swarmui")
+APP_CHECKPOINTS = (("models", "checkpoints"), ("models", "Stable-diffusion"), ("Models", "Stable-Diffusion"))
+SKIP_FOLDERS = {"windows", "program files", "program files (x86)", "programdata", "appdata", "node_modules", "$recycle.bin",
+                "system volume information", "steam", "steamapps", "recovery"}
+_other_apps = {"at": 0.0, "dirs": [], "busy": False}
+
+
+def other_app_checkpoint_dirs():
+    """Checkpoint folders of ComfyUI and the Stable Diffusion web UIs on this PC, so their models show in the
+    Handoff list with nothing to set up. It looks beside the upscaler folders, and up to three folders deep on
+    each drive. The search runs on a thread at most every 10 minutes, and the list uses what it last found."""
+    if not _other_apps["busy"] and time.time() - _other_apps["at"] > 600:
+        _other_apps["busy"] = True
+        _other_apps["thread"] = threading.Thread(target=find_other_apps, daemon=True)
+        _other_apps["thread"].start()
+    if not _other_apps["at"]:  # the first search, at startup: worth a short wait so the list isn't empty
+        _other_apps["thread"].join(timeout=15)
+    return _other_apps["dirs"]
+
+
+def find_other_apps():
+    found = []
+
+    def add(*parts):
+        path = os.path.join(*parts)
+        if os.path.isdir(path) and path.lower() not in [f.lower() for f in found]:
+            found.append(path)
+
+    try:
+        for d in UPSCALE_DIRS:  # an upscale_models folder usually sits beside the checkpoints
+            add(os.path.dirname(os.path.normpath(d)), "checkpoints")
+            add(os.path.dirname(os.path.normpath(d)), "Stable-diffusion")
+        looked = 0
+        for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+            level = [f"{letter}:\\"]
+            if not os.path.isdir(level[0]):
+                continue
+            for _ in range(3):
+                deeper = []
+                for folder in level:
+                    try:
+                        entries = list(os.scandir(folder))
+                    except OSError:
+                        continue
+                    for entry in entries:
+                        looked += 1
+                        name = entry.name.lower()
+                        try:
+                            if not entry.is_dir() or name.startswith((".", "$")) or name in SKIP_FOLDERS:
+                                continue
+                        except OSError:
+                            continue
+                        if name.startswith(OTHER_APPS):
+                            for parts in APP_CHECKPOINTS:
+                                add(entry.path, *parts)
+                        deeper.append(entry.path)
+                level = deeper if looked < 50000 else []
+    finally:
+        _other_apps["dirs"], _other_apps["at"], _other_apps["busy"] = found, time.time(), False
+
+
 @app.get("/api/checkpoints")
 def checkpoints():
-    """Stable Diffusion checkpoints in the checkpoint folders, for the Handoff list. Like the upscalers, they are
-    read where they are, so a browser on another PC picks from the files on this one."""
-    found = []
-    for d in CHECKPOINT_DIRS:
-        try:
-            names = sorted(os.listdir(d), key=str.lower)
-        except OSError:
+    """Stable Diffusion checkpoints for the Handoff list: in the checkpoint folders and the folders of other
+    Stable Diffusion apps on this PC, subfolders included. Like the upscalers, they are read where they are,
+    so a browser on another PC picks from the files on this one. A file found twice, such as in a backup, shows
+    once. Models Handoff can't use, such as Flux or SD 3, are left out. Each one's group is its subfolder."""
+    found, seen = [], set()
+    folders = CHECKPOINT_DIRS + [d for d in other_app_checkpoint_dirs() if d not in CHECKPOINT_DIRS]
+    for top in folders:
+        if not os.path.isdir(top):
             continue  # a drive that is unplugged for now
-        for n in names:
-            path = os.path.join(d, n)
-            if n.lower().endswith(".safetensors") and os.path.isfile(path) and path not in [f["path"] for f in found]:
-                found.append({"path": path, "name": n[:-12], "sdxl": budget._is_sdxl(path)})
+        for folder, subfolders, names in os.walk(top):
+            subfolders[:] = sorted(s for s in subfolders if not s.startswith(".")) if folder.count(os.sep) - top.count(os.sep) < 3 else []
+            for n in sorted(names, key=str.lower):
+                if not n.lower().endswith(".safetensors"):
+                    continue
+                path = os.path.join(folder, n)
+                try:
+                    size = os.path.getsize(path)
+                except OSError:
+                    continue
+                name = os.path.relpath(path, top)[:-12].replace(os.sep, "/")
+                if (name.lower(), size) in seen:
+                    continue
+                seen.add((name.lower(), size))
+                kind = budget.checkpoint_kind(path)
+                if kind:
+                    group, _, short = name.rpartition("/")
+                    found.append({"path": path, "name": short, "group": group, "sdxl": kind == "sdxl"})
+    found.sort(key=lambda f: (f["group"].lower(), f["name"].lower()))
     return {"checkpoints": found, "folders": CHECKPOINT_DIRS}
 
 

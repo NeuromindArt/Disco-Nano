@@ -189,7 +189,8 @@ You can also clone this repository instead of downloading a release, and update 
 **All settings** sets where images are saved and which folders hold your upscalers and Stable
 Diffusion checkpoints. A welcome screen asks about the first two the first time you open the app.
 Point Nano at any folder of ESRGAN, DAT or HAT models, or download Real-ESRGAN x4plus from the app.
-Nano also looks in `models/upscale_models` and `models/checkpoints` in the data folder.
+Nano also looks in `models/upscale_models` and `models/checkpoints` in the data folder, and finds the
+checkpoints of ComfyUI and the Stable Diffusion web UIs on its own, grouped by their subfolders.
 
 ### Rendering on another PC
 
