@@ -32,7 +32,8 @@ import keyframes
 import models
 import paths
 import rules
-from settings import DEFAULTS, FIELDS, TERMS, uses_partner
+from renderer import signature as renderer_signature
+from settings import DEFAULTS, FIELDS, TERMS, handoff_parts, uses_partner
 
 
 APP_DIR = paths.APP_DIR
@@ -70,10 +71,12 @@ lock = threading.Lock()
 
 
 class Task:
-    """The one render or upscale allowed to run at a time."""
+    """The one render or upscale allowed to run at a time. An upscale has a process of its own. A render runs in
+    the render worker, which stays open after it."""
 
-    def __init__(self, kind, job_id, job_dir, proc, label):
+    def __init__(self, kind, job_id, job_dir, proc, label, worker=None):
         self.kind, self.job_id, self.job_dir, self.proc, self.label = kind, job_id, job_dir, proc, label
+        self.worker, self.ended, self.keep_models = worker, False, True
         self.state, self.message = "starting", "Starting"
         self.step = self.total = self.batch = 0
         self.n_batches = 1
@@ -88,6 +91,111 @@ class Task:
         self.error = None
         self.log = deque(maxlen=60)
         self.finished_at = None
+
+    def running(self):
+        if self.worker is not None:
+            return not self.ended and self.proc.poll() is None
+        return self.proc.poll() is None
+
+
+class Worker:
+    """The render process, kept open between renders so the models it loaded wait in RAM for the next one.
+    It reads job folders on stdin. Closing the app closes stdin, which ends it and frees its memory. A render
+    that needs what this process can't change, such as Exact repeat, starts a new one."""
+
+    def __init__(self, sig):
+        self.sig, self.task, self.log = sig, None, None
+        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT,
+                   NANO_EXACT="1" if sig["exact_repeat"] else "0", NANO_LARGE="1" if sig["large"] else "0")
+        # Below normal priority: a render still gets every idle cycle, but Windows serves the desktop first,
+        # so the PC stays usable while it runs.
+        self.proc = subprocess.Popen([PYTHON, "-B", os.path.join(APP_DIR, "renderer.py"), "--serve"],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                     encoding="utf-8", errors="replace", cwd=ROOT, env=env,
+                                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+        threading.Thread(target=self.read, daemon=True).start()
+
+    def alive(self):
+        return self.proc.poll() is None
+
+    def run(self, task):
+        self.task = task
+        self.log = open(os.path.join(task.job_dir, "run.log"), "a", encoding="utf-8", errors="replace")
+        self.proc.stdin.write(task.job_dir + "\n")
+        self.proc.stdin.flush()
+
+    def read(self):
+        for raw in self.proc.stdout:
+            line = raw.rstrip("\r\n")
+            task, log = self.task, self.log
+            if task is None:
+                continue  # between renders, such as its ready line
+            log.write(line + "\n")
+            log.flush()
+            marker = line.find("@@EVT ")
+            if marker < 0:
+                if line.strip():
+                    task.log.append(line[-300:])
+                continue
+            try:
+                event = json.loads(line[marker + 6:])
+                handle_event(task, event)
+            except ValueError:
+                continue
+            if event.get("type") == "finished":
+                self.done(task)
+        code = self.proc.wait()
+        task = self.task
+        if task is not None and not task.ended:
+            with lock:
+                if task.state not in ("done", "stopped", "oom", "error"):
+                    task.state = "error"  # the worker died without reporting why
+                    task.message = FRIENDLY["error"]
+                    task.error = f"Worker exited unexpectedly (code {code})."
+            self.done(task)
+
+    def done(self, task):
+        with lock:
+            task.ended = True
+            task.finished_at = time.time()
+            _gpu_seen["at"] = 0.0  # the last reading still counts the render's memory
+        self.task = None
+        if self.log:
+            self.log.close()
+            self.log = None
+        if not task.keep_models:
+            self.close()
+
+    def close(self):
+        """Ends the worker. Closing stdin lets it finish cleanly; one still busy loading is ended outright."""
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+        if self.task is not None:
+            self.proc.terminate()
+
+
+_worker = None
+
+
+def render_in_worker(label, job_id, job_dir, sig, keep_models):
+    """Hands a render to the worker, starting a new one when there is none or it can't take this render."""
+    global current, _worker
+    if _worker is not None and (not _worker.alive() or _worker.sig != sig):
+        _worker.close()
+        _worker = None
+    take_idle_reading()
+    if _worker is None:
+        _worker = Worker(sig)
+    current = Task("render", job_id, job_dir, _worker.proc, label, worker=_worker)
+    current.keep_models = keep_models
+    _worker.run(current)
+
+
+def close_worker():
+    if _worker is not None:
+        _worker.close()
 
 
 current = None
@@ -187,7 +295,7 @@ def task_json(task):
         "elapsed_s": round((task.finished_at or time.time()) - task.started), "preview_rev": task.preview_rev,
         "images": [image_url(p) for p in task.images], "peak_vram_gb": task.peak_vram, "error": task.error,
         "log": list(task.log)[-14:] if task.state in ("error", "oom") else [],
-        "active": task.proc.poll() is None,
+        "active": task.running(),
     }
 
 
@@ -239,7 +347,7 @@ _idle = {"gpu": None, "ram": None}
 
 
 def idle_memory():
-    if not (current and current.proc.poll() is None):
+    if not (current and current.running()):
         # Windows takes a moment to hand back a finished worker's memory, so only later readings count.
         settled = (current.finished_at or time.time()) + 1.5 if current else 0.0
         gpu = gpu_info(since=settled)
@@ -584,7 +692,7 @@ def render_plan(body: dict):
     settings = {k: v for k, v in body.get("settings", {}).items() if k in KNOWN_FIELDS}
     with lock:
         result = memory_plan(settings)
-        idle = not (current and current.proc.poll() is None)
+        idle = not (current and current.running())
     blocked = rules.blocked(settings)
     return {**result, "idle": idle, "blocked": blocked, "conflicts": rules.conflicts(settings, ruled=blocked),
             "clashing": rules.clashing(settings, ruled=blocked)}
@@ -597,7 +705,7 @@ async def render(request: Request):
     if not prompts:
         raise HTTPException(400, "Add a prompt first.")
     with lock:
-        if current and current.proc.poll() is None:
+        if current and current.running():
             raise HTTPException(409, "Something is already running.")
         settings = {k: v for k, v in body.get("settings", {}).items() if k in KNOWN_FIELDS}
         clash = rules.conflicts(settings)
@@ -617,7 +725,7 @@ async def render(request: Request):
             if animation == "Video Input" and not os.path.isfile(str(settings.get("video_init_path", ""))):
                 raise HTTPException(400, "Choose a video file for Video Input.")
         handoff_file = str(settings.get("handoff_file") or "")
-        if handoff_file and float(settings.get("handoff_share", DEFAULTS["handoff_share"]) or 0) > 0:
+        if any(handoff_parts(settings)):
             if not handoff_file.lower().endswith(".safetensors") or not os.path.isfile(handoff_file):
                 raise HTTPException(400, "The handoff model must be a .safetensors checkpoint that exists. Choose it again in Handoff.")
             if not budget.checkpoint_kind(handoff_file):
@@ -642,21 +750,21 @@ async def render(request: Request):
                    "output_dir": OUT_DIR}
         with open(os.path.join(job_dir, "job.json"), "w", encoding="utf-8") as f:
             json.dump({"settings": settings, "prompts": prompts, "options": options}, f, indent=1)
-        spawn("render", prompts[0][:90], [PYTHON, "-B", os.path.join(APP_DIR, "renderer.py"), "--job", job_dir],
-              job_id, job_dir)
+        render_in_worker(prompts[0][:90], job_id, job_dir, renderer_signature(settings),
+                         bool(settings.get("keep_models_loaded", DEFAULTS["keep_models_loaded"])))
     return {"id": job_id}
 
 
 @app.post("/api/stop")
 def stop():
     with lock:
-        if not current or current.proc.poll() is not None:
+        if not current or not current.running():
             return {"ok": False}
         if current.kind == "render" and current.sampling_started:
             open(os.path.join(current.job_dir, "stop"), "w").close()  # ends cleanly at the next step
             current.message = "Stopping after this step"
         else:
-            current.proc.terminate()  # still loading, nothing to preserve
+            current.proc.terminate()  # still loading, nothing to preserve; the next render starts a new worker
             current.state, current.message = "stopped", FRIENDLY["stopped"]
     return {"ok": True}
 
@@ -665,7 +773,7 @@ def stop():
 def preview(job_id: str):
     if not re.fullmatch(r"[0-9A-Za-z-]+", job_id):
         raise HTTPException(400, "Bad job id.")
-    path = os.path.join(JOBS_DIR, job_id, "preview.png")
+    path = os.path.join(JOBS_DIR, job_id, "preview.jpg")
     if not os.path.isfile(path):
         raise HTTPException(404, "No preview yet.")
     return FileResponse(path, headers={"Cache-Control": "no-store"})
@@ -731,7 +839,7 @@ def move_to_folder(body: dict):
     if os.path.normcase(os.path.abspath(here)) == os.path.normcase(os.path.abspath(target)):
         return {"moved": 0}
     with lock:
-        if current and current.proc.poll() is None and current.kind == "render":
+        if current and current.running() and current.kind == "render":
             raise HTTPException(409, "Wait for the render to finish, then move images.")
         match = RUN.match(name)
         run = match.group(1) if match else None
@@ -825,7 +933,7 @@ async def set_folders(request: Request):
     global OUT_DIR, UPSCALE_DIRS, CHECKPOINT_DIRS, current
     body = await request.json()
     with lock:
-        if current and current.proc.poll() is None:
+        if current and current.running():
             raise HTTPException(409, "Wait for the current job to finish.")
         wanted = str(body.get("output_dir", OUT_DIR)).strip() or paths.OUTPUT
         if not os.path.isabs(wanted):
@@ -1119,7 +1227,7 @@ async def upscale(request: Request):
     if model is None or os.path.basename(model) != str(body.get("model")):
         raise HTTPException(400, "Upscaler not found.")
     with lock:
-        if current and current.proc.poll() is not None or current is None:
+        if current is None or not current.running():
             job_id, job_dir = new_job_dir("upscale")
             spawn("upscale", os.path.basename(path),
                   [PYTHON, "-B", os.path.join(APP_DIR, "upscale.py"), "--input", path, "--model", model], job_id, job_dir)
@@ -1323,4 +1431,6 @@ if __name__ == "__main__":
         sys.exit(0)
     print("Starting the server", flush=True)
     threading.Thread(target=open_when_ready, daemon=True).start()
+    import atexit
+    atexit.register(close_worker)  # the worker also ends by itself when this process's end closes its stdin
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")

@@ -58,7 +58,9 @@ FIELDS = [
     field("eta", 0.8, SAMPLING, "Noise added each step with ddim. 0 is smoother and 1 is grainier."),
     field("randomize_class", True, SAMPLING, "Has no effect here. None of the models in Nano use ImageNet classes."),
     field("clip_denoised", False, SAMPLING, "Clamps each predicted image to the valid range."),
-    field("display_rate", 20, SAMPLING, "Steps between preview updates."),
+    field("display_rate", 1, SAMPLING, "Steps between preview updates. 1 shows every step."),
+    field("keep_models_loaded", True, SAMPLING, "Keeps the models of the last render waiting in RAM, so the next render skips loading them, which saves about 20 seconds and up to 2 minutes with an SDXL handoff model. They stay until the app closes, or a render needs a different setup. Off frees the RAM after every render."),
+    field("save_progress_video", False, SAMPLING, "Saves an MP4 of the picture forming beside each image, one frame per preview. Not for animation."),
 
     field("RN101", False, CLIP_MODELS, "Another model that compares the image with your prompt. Adds VRAM use and time."),
     field("RN50x4", False, CLIP_MODELS, "Compares the image with your prompt. Uses a lot of VRAM."),
@@ -80,6 +82,8 @@ FIELDS = [
 
     field("handoff_file", "", HANDOFF, "The full path of a Stable Diffusion 1.5 or SDXL checkpoint, a .safetensors file. It paints the start of every image or frame, and Disco finishes it. Empty is off."),
     field("handoff_share", 30, HANDOFF, "How much of the path from noise to picture the {handoff_file} paints before Disco takes over, in percent. 0 is Disco alone, and 100 leaves Disco only the finishing touch. About 30 keeps Disco's look on the checkpoint's layout. With a start image or in animation, it's a share of what would be repainted."),
+    field("handoff_denoise", 0, HANDOFF, "How much of the {handoff_file}'s picture Disco repaints, in percent, like Denoise for a start image. 0 carries on from exactly where the {handoff_file} stopped. With Handoff % at 60, 75 here has Disco repaint with 150 of 200 steps."),
+    field("handoff_finish", 0, HANDOFF, "After Disco, the {handoff_file} repaints this share of the finished image, in percent, to clean it up. 0 is off. About 20 to 35 keeps Disco's look. Works with Handoff % at 0, so the {handoff_file} only finishes. Still images only."),
     field("handoff_steps", 30, HANDOFF, "Steps for the {handoff_file}'s whole path. It takes only its share of them. Few-step models such as Lightning, Hyper or Turbo want 4 to 8."),
     field("handoff_guidance", 7.0, HANDOFF, "How closely the {handoff_file} follows the prompt. 5 to 8 suits most checkpoints, and 1 to 2 suits few-step models."),
     field("handoff_few_steps", False, HANDOFF, "Spaces the {handoff_file}'s steps the way Lightning, Hyper, Turbo and other few-step models expect."),
@@ -175,7 +179,7 @@ LABELS = {
     "cutn_batches": "View rounds", "skip_augs": "Plain views", "cut_overview": "Whole-image views",
     "cut_innercut": "Close-up views", "cut_ic_pow": "Close-up tightness", "cut_icgray_p": "Gray close-ups",
     "diffusion_sampling_mode": "Sampler", "eta": "Step noise", "randomize_class": "Random class",
-    "clip_denoised": "Keep colors in range", "display_rate": "Preview every",
+    "clip_denoised": "Keep colors in range", "display_rate": "Preview every", "save_progress_video": "Save progress video", "keep_models_loaded": "Keep models loaded",
     "use_horizontal_symmetry": "Mirror left and right", "use_vertical_symmetry": "Mirror top and bottom",
     "transformation_percent": "Mirror timing",
     "time_travel": "Time travel", "partner_model": "Partner model", "detail_bands": "Broad shapes first",
@@ -188,7 +192,7 @@ LABELS = {
     "partner_follow": "Follow the painting", "ghost_image": "Ghost image", "ghost_structure": "Ghost shapes",
     "ghost_crops": "Ghost areas", "ghost_lowfreq": "Ghost light and dark", "ghost_curve": "Ghost curve",
     "style_image": "Style image", "style_strength": "Style strength",
-    "handoff_file": "Handoff model", "handoff_share": "Handoff %", "handoff_steps": "Handoff steps",
+    "handoff_file": "Handoff model", "handoff_share": "Handoff %", "handoff_denoise": "Disco denoise %", "handoff_finish": "Finish %", "handoff_steps": "Handoff steps",
     "handoff_guidance": "Handoff prompt strength", "handoff_few_steps": "Few-step model", "handoff_negative": "Handoff negative prompt",
     "handoff_keep": "Keep the handoff picture",
     "animation_mode": "Animation", "max_frames": "Frames", "fps": "Frames per second", "frames_skip_steps": "Frame skip %", "frame_skip_keys": "Frame skip keyframes",
@@ -201,7 +205,7 @@ LABELS = {
 }
 
 # Nano's own settings, which have no official name.
-NANO_ONLY = {"exact_repeat", "cpu_threads", "image_prompts", "image_prompt_weight", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view", "tile_overlap",
+NANO_ONLY = {"exact_repeat", "cpu_threads", "save_progress_video", "keep_models_loaded", "image_prompts", "image_prompt_weight", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view", "tile_overlap",
              "color_hold", "frame_sharpen", "frame_skip_keys", "frame_ghost", "prompt_fade", "in_between", "video_blend", "video_flow", "save_mp4", "save_webp", "save_gif",
              *(f["name"] for f in FIELDS if f["section"] in (LAB, HANDOFF))}
 
@@ -259,6 +263,8 @@ RANGES = {
     "depth_target": (0, 3),
     "style_strength": (0, 3),
     "handoff_share": (0, 100),
+    "handoff_denoise": (0, 100),
+    "handoff_finish": (0, 100),
     "handoff_steps": (4, 60),
     "handoff_guidance": (1, 12),
     "max_frames": (1, 10000),
@@ -288,3 +294,11 @@ TERMS = {**WORDS, **{f["name"]: (f["label"], f["label"] if f["name"] in NANO_ONL
 def uses_partner(settings):
     return bool(settings.get("borrow_attention") or settings.get("two_painters") or settings.get("prompt_graft")
                 or settings.get("live_ghost", "Off") != "Off")
+
+
+def handoff_parts(settings):
+    """Whether the handoff model paints the start and whether it finishes, as (start, finish)."""
+    if not str(settings.get("handoff_file") or ""):
+        return False, False
+    number = lambda name: float(settings.get(name, DEFAULTS[name]) or 0)  # noqa: E731
+    return number("handoff_share") > 0, number("handoff_finish") > 0

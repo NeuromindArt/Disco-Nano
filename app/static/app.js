@@ -9,7 +9,7 @@ const QUICK = ["steps", "skip_steps", "clip_guidance_scale", "n_batches", "set_s
   "use_secondary_model", "exact_repeat", "init_scale", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view",
   "time_travel", "prompt_graft", "live_ghost", "depth_target", "two_painters", "borrow_attention", "detail_bands", "shaped_guidance", "gradient_momentum", "evidence_map", ...CLIPS.map((c) => c[0]),
   "animation_mode", "max_frames", "fps", "in_between", "frames_skip_steps", "video_init_path", "extract_nth_frame", "video_blend",
-  "color_hold", "turbo_mode", "turbo_steps", "frame_ghost", "handoff_file", "handoff_share", "image_prompts", "image_prompt_weight"];
+  "color_hold", "turbo_mode", "turbo_steps", "frame_ghost", "handoff_file", "handoff_share", "handoff_denoise", "handoff_finish", "image_prompts", "image_prompt_weight"];
 // Camera moves in the Animation section: the modes each one works in, and its slider's range.
 const MOTION = {
   zoom: { modes: ["2D"], min: 0.9, max: 1.1, step: 0.005 },
@@ -31,15 +31,12 @@ const CARD_FIELDS = {
   model: ["RN101", "RN50x4", "RN50x16", "RN50x64"],
   handoff: ["handoff_steps", "handoff_guidance", "handoff_few_steps", "handoff_negative", "handoff_keep"],
   tiles: ["tile_overlap"],
-  render: ["cpu_threads", "display_rate"],
   animation: ["frames_scale", "frame_sharpen", "prompt_fade", "frame_skip_keys", "interp_spline", "fov", "padding_mode", "sampling_mode",
     "video_init_seed_continuity", "video_flow", "save_mp4", "save_webp", "save_gif"],
   guides: ["ghost_lowfreq", "ghost_structure", "ghost_crops", "ghost_curve", "style_strength"],
   lab: ["time_travel_curve", "graft_curve", "borrow_curve", "detail_curve", "guidance_curve", "painters_curve", "painters_strength",
     "painters_color", "painters_path", "partner_model", "partner_file", "sketch_steps", "partner_every", "partner_follow", "partner_keep_sketch"],
 };
-const CARD_TITLES = { cutouts: "{Cutouts}", guidance: "Guidance", model: "Model", render: "Render", animation: "Animation", handoff: "Handoff", tiles: "Tiles", guides: "Guide images", lab: "Experiments" };
-const CARD_OF = Object.fromEntries(Object.entries(CARD_FIELDS).flatMap(([card, names]) => names.map((n) => [n, card])));
 
 const EXACT_REPEAT_COST = 1.28;  // measured: 0.84 to 1.08 seconds per step at 512×512
 const TIME_TRAVEL_COST = 1.35;  // measured at 512×512 with the default curve
@@ -47,7 +44,8 @@ const BORROW_SECONDS = 20;  // measured with Tiny SD at 512×512, loading includ
 const HANDOFF_SECONDS = 20;  // loading an SD 1.5 checkpoint and its own steps, at 512×512
 /* The share of Disco's steps left after a handoff, measured with 200 steps: 30% left 98 of 200, 50% left 69. */
 function afterHandoff() {
-  if (!handingOff()) return 1;
+  if (!handingOff() || !(Number(state.handoff_share) > 0)) return 1;
+  if (Number(state.handoff_denoise) > 0) return Math.min(Number(state.handoff_denoise) / 100, 1);  // Disco repaints its own share
   const share = Math.min(Math.max(Number(state.handoff_share) / 100, 0), 1);
   const points = [[0, 1], [0.3, 0.49], [0.5, 0.345], [1, 0.005]];
   for (let i = 1; i < points.length; i++) {
@@ -639,12 +637,13 @@ function showSummaries() {
     animation: kind ? `${kind}, ${state.max_frames} frames` : "",
     tiles: state.tile_scale === "Off" ? "Off" : String(state.tile_scale).split(",")[0],
     lab: on ? `${on} on` : "Off",
-    handoff: handingOff() ? `${state.handoff_share}%, ${baseName(state.handoff_file).replace(/\.safetensors$/i, "")}` : "Off",
+    handoff: handingOff() ? [Number(state.handoff_share) > 0 && `${state.handoff_share}%`, Number(state.handoff_finish) > 0 && `finish ${state.handoff_finish}%`,
+      baseName(state.handoff_file).replace(/\.safetensors$/i, "")].filter(Boolean).join(", ") : "Off",
     cutouts: changedIn("cutouts") ? `${changedIn("cutouts")} changed` : "Close-up ramp",
     guidance: changedIn("guidance") ? `${changedIn("guidance")} changed` : "Default",
   };
   for (const [name, text] of Object.entries(sums)) $(`sum-${name}`).textContent = text;
-  $("handoff_share").closest(".slider-row").hidden = !state.handoff_file;
+  for (const id of ["handoff_share", "handoff_denoise", "handoff_finish"]) $(id).closest(".slider-row").hidden = !state.handoff_file;
   if (model) $("modelAbout").textContent = model.about;
 }
 
@@ -905,8 +904,9 @@ function setCurveShape() {
   refreshCurve(true);
 }
 
+/* The handoff model paints the start, finishes, or both. */
 function handingOff() {
-  return !!state.handoff_file && Number(state.handoff_share) > 0;
+  return !!state.handoff_file && (Number(state.handoff_share) > 0 || Number(state.handoff_finish) > 0);
 }
 
 /* Seconds per step, measured on an RTX 3070 8GB. The memory plan comes from the server. */
@@ -1091,8 +1091,9 @@ function movedOf(p) {
 
 let renderPlan = null;  // the plan of the render that is running, for the part of its RAM that came from VRAM
 
-/* The status bar's VRAM and RAM. Gray on the left is the rest of the PC. Disco follows in color: before a render,
-   lighter, as the plan for the next one; while one runs, solid, as what it really uses. */
+/* The status bar's VRAM and RAM. Solid is what is in use now: gray for the rest of the PC, and Disco in color while
+   it renders. Between renders a hollow outline after it shows what the next render will add. The number is always
+   what is in use now. */
 function showMemory() {
   const s = lastStatus;
   const busy = !!s?.task?.active && s.task.kind === "render";
@@ -1103,18 +1104,19 @@ function showMemory() {
     const moved = movedOf(plan);
     const discoVram = vram.parts.map((p) => ({ ...p, kind: "vram", plan: true, label: `Next render: ${p.label}` }));
     const used = drawTrack($("vramPlan"), vram.total, [{ kind: "other", label: "Other apps and the desktop", gb: vram.other }, ...discoVram], vram.keep);
-    $("vramPlan").setAttribute("aria-label", `The next render needs ${gb(used - vram.other)} of VRAM, on top of ${gb(vram.other)} in use`);
-    $("vramText").textContent = `${used.toFixed(1)} / ${vram.total.toFixed(0)} GB`;
+    $("vramPlan").setAttribute("aria-label", `${gb(vram.other)} of VRAM in use. The next render needs ${gb(used - vram.other)} more`);
+    $("vramText").textContent = `${vram.other.toFixed(1)} / ${vram.total.toFixed(0)} GB`;
     $("vramText").classList.toggle("over", !!plan.too_big);
     const discoRam = ram.parts.filter((p) => p.kind !== "offloaded").map((p) => ({ ...p, kind: "ram", plan: true, label: `Next render: ${p.label}` }));
     const movedPart = moved ? [{ kind: "moved", plan: true, label: "Offloaded from VRAM, so it fits: the render runs slower", gb: moved }] : [];
     const ramUsed = drawTrack($("ramPlan"), ram.total, [{ kind: "other", label: "Other apps", gb: ram.other }, ...discoRam, ...movedPart]);
-    $("ramPlan").setAttribute("aria-label", `The next render takes ${gb(ramUsed - ram.other)} of system RAM${moved ? `, ${gb(moved)} of it offloaded from VRAM` : ""}`);
-    $("ramText").textContent = `${ramUsed.toFixed(0)} / ${ram.total.toFixed(0)} GB`;
+    $("ramPlan").setAttribute("aria-label", `${gb(ram.other)} of RAM in use. The next render takes ${gb(ramUsed - ram.other)} more${moved ? `, ${gb(moved)} of it offloaded from VRAM` : ""}`);
+    $("ramText").textContent = `${ram.other.toFixed(0)} / ${ram.total.toFixed(0)} GB`;
     $("ramText").classList.toggle("over", ramUsed > ram.total);
-    $("memPlan").title = plan.too_big ? "Too big for this GPU even with offloading. Lower the size or use fewer prompt checkers."
-      : moved ? "It doesn't all fit in VRAM, so part of the working data moves to RAM, shown green there. Slower, but it works." : "";
-    $("ramMeter").title = $("memPlan").title;
+    const next = `In use now: ${gb(vram.other)}. The outline is what the next render adds, about ${gb(used - vram.other)}.`;
+    $("memPlan").title = plan.too_big ? "The next render is too big for this GPU even with offloading. Lower the size or use fewer prompt checkers."
+      : moved ? `${next} It doesn't all fit in VRAM, so part of the working data moves to RAM, outlined green there. Slower, but it works.` : next;
+    $("ramMeter").title = `In use now: ${gb(ram.other)}. The outline is what the next render adds, about ${gb(ramUsed - ram.other)}.`;
     return;
   }
   if (busy && !renderPlan) renderPlan = plan;
@@ -1206,56 +1208,21 @@ function showBlocked() {
 }
 
 // ---- all settings ----
+/* All settings holds how the app behaves. Settings that shape the picture are in the cards. */
+const APP_FIELDS = ["keep_models_loaded", "cpu_threads", "display_rate", "save_progress_video"];
+
 function buildAdvanced() {
   const body = $("advBody");
-  const sections = new Map();
-  for (const f of fields) {
-    if (HANDLED.has(f.name) && !CARD_OF[f.name]) continue;
-    if (!sections.has(f.section)) sections.set(f.section, []);
-    sections.get(f.section).push(f);
-  }
-  for (const [title, list] of sections) {
-    const d = document.createElement("details");
-    d.className = "adv-section";
-    const s = document.createElement("summary");
-    withWords(s, `{${title}} (${list.length})`);
-    d.append(s);
-    list.forEach((f) => d.append(CARD_OF[f.name] ? cardLink(f) : advField(f)));
-    body.append(d);
-  }
+  const list = APP_FIELDS.filter((n) => byName[n]).map((n) => byName[n]);
+  const box = document.createElement("section");
+  box.className = "folders app-fields";
+  box.setAttribute("aria-label", "Rendering");
+  const title = document.createElement("span");
+  title.className = "adv-name";
+  title.textContent = "Rendering";
+  box.append(title, ...list.map((f) => advField(f)));
+  body.append(box);
   makeSwitches(body);
-}
-
-/* A setting shown in a card is listed here too, so a search finds it, with a way to it. */
-function cardLink(f) {
-  const wrap = document.createElement("div");
-  wrap.className = "adv-field moved";
-  const everyName = (text) => text.replace(TOKEN, (_, name) => (terms[name] ?? [name]).join(" "));
-  wrap.dataset.text = everyName(`${f.name} {${f.name}} ${f.help}`).toLowerCase();
-  const name = withWords(document.createElement("span"), `{${f.name}}`);
-  name.className = "adv-name";
-  const go = document.createElement("button");
-  go.type = "button";
-  go.className = "link";
-  withWords(go, `In the ${CARD_TITLES[CARD_OF[f.name]]} card`);
-  go.addEventListener("click", () => showInCard(f.name));
-  const cell = document.createElement("div");
-  cell.className = "adv-control";
-  cell.append(go);
-  wrap.append(name, cell);
-  return wrap;
-}
-
-function showInCard(name) {
-  $("advanced").close();
-  openCard(CARD_OF[name]);
-  const row = $(`adv-${name}`)?.closest(".adv-field");
-  if (!row) return;
-  const more = row.closest("details");
-  if (more) more.open = true;
-  row.scrollIntoView({ block: "center", behavior: "smooth" });
-  row.classList.add("flash");
-  setTimeout(() => row.classList.remove("flash"), 1600);
 }
 
 /* Fills each card's settings. Called again whenever saved settings change all at once. */
@@ -1690,8 +1657,9 @@ function advChanged(f, input, wrap) {
   updateFit();
 }
 
+// Counts only All settings' own settings. Changes in the cards show in each card's title row.
 const changedLabel = () => {
-  const n = Object.keys(state.advanced).length;
+  const n = APP_FIELDS.filter((name) => name in state.advanced).length;
   return n ? `(${n} changed)` : "";
 };
 
@@ -1704,9 +1672,10 @@ function resetAdvancedPanel() {
 }
 
 function resetAdvanced() {
-  state.advanced = {};
+  for (const name of APP_FIELDS) delete state.advanced[name];
   resetAdvancedPanel();
   save();
+  updateFit();
 }
 
 function filterAdvanced() {
@@ -1715,16 +1684,14 @@ function filterAdvanced() {
   $("lookBox").hidden = !!q && !"accent color colour theme".includes(q);
   $("foldersBox").hidden = !!q && !"save images folders upscalers".includes(q);
   $("modelsBox").hidden = !!q && !"models downloads upscalers".includes(q);
-  document.querySelectorAll(".adv-section").forEach((sec) => {
+  document.querySelectorAll(".app-fields").forEach((sec) => {
     let any = false;
     sec.querySelectorAll(".adv-field").forEach((row) => {
       const hit = !q || row.dataset.text.includes(q);
-      row.hidden = !hit;
       row.style.display = hit ? "" : "none";
       any = any || hit;
     });
-    sec.style.display = any ? "" : "none";
-    sec.open = !!q && any;
+    sec.hidden = !any;
   });
 }
 

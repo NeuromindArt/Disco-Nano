@@ -62,7 +62,7 @@ def plan(settings, gpu, ram):
     if cfg.get("init_image") and cfg["init_scale"]:
         extras.append(LPIPS)
     hand = str(cfg.get("handoff_file") or "")
-    if hand and float(cfg.get("handoff_share") or 0) > 0:
+    if any(setting_list.handoff_parts(cfg)):
         kind = "sdxl" if checkpoint_kind(hand) == "sdxl" else "sd15"
         extras.append(("Handoff model, between its steps", HANDOFF_VRAM_GB[kind], 0))
         ram_extras.append({"kind": "extra", "label": f"Handoff model ({'SDXL' if kind == 'sdxl' else 'SD 1.5'}), waiting in RAM",

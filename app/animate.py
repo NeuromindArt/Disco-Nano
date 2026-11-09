@@ -277,6 +277,30 @@ def save_video(frames, fps, path):
             box.mux(packet)
 
 
+def save_progress_video(frames, path, fps=24, hold=1.5):
+    """An MP4 of a picture forming, from its previews and the finished image last. Previews can differ in size,
+    as tiles show a small copy while a start picture is full size, so each is scaled to the finished image's
+    size. The finished image stays on screen for `hold` seconds at the end."""
+    av = need_av("MP4")
+    with Image.open(frames[-1]) as last:
+        width, height = last.size
+    scale = min(1.0, 1920 / max(width, height))  # past 1920 pixels the video only grows
+    even = (max(int(width * scale) // 2 * 2, 2), max(int(height * scale) // 2 * 2, 2))
+    with av.open(path, "w") as box:
+        stream = box.add_stream("libx264", rate=fps)
+        stream.width, stream.height = even
+        stream.pix_fmt = "yuv420p"
+        stream.options = {"crf": "18", "preset": "medium"}
+        names = frames + [frames[-1]] * round(fps * hold)
+        for name in names:
+            with Image.open(name) as picture:
+                frame = av.VideoFrame.from_image(picture.convert("RGB").resize(even, Image.LANCZOS))
+            for packet in stream.encode(frame):
+                box.mux(packet)
+        for packet in stream.encode():
+            box.mux(packet)
+
+
 def save_animation(frames, fps, path, longest=None):
     """Writes an animated WebP or GIF, chosen by the file's extension."""
     with Image.open(frames[0]) as first:

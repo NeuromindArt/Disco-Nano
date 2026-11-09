@@ -154,7 +154,6 @@
           <div class="slider-row seed-row"><label class="field-name" for="set_seed" data-words="{set_seed}">Seed</label><input type="range" data-for="set_seed" min="0" max="99999" step="1"><input id="set_seed" class="readout seed" type="text" inputmode="numeric" spellcheck="false" placeholder="Random"></div>
           <div class="slider-row image-only"><label class="field-name" for="n_batches" data-words="{n_batches}">Images</label><input type="range" data-for="n_batches" min="1" max="20" step="1"><input id="n_batches" class="readout" type="number" min="1" max="100"></div>
           <label class="line"><span class="field-name" data-words="{batch_name}">Folder name</span><input id="batch_name" maxlength="40"></label>
-          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="render"></div></details>
         </div>
       </section>
 
@@ -199,6 +198,8 @@
           </div>
           <input type="hidden" id="handoff_file">
           <div class="slider-row"><label class="field-name" for="handoff_share" data-words="{handoff_share}">Handoff %</label><input type="range" data-for="handoff_share" min="0" max="100" step="5"><input id="handoff_share" class="readout" type="number" min="0" max="100" step="5"></div>
+          <div class="slider-row"><label class="field-name" for="handoff_denoise" data-words="{handoff_denoise}">Disco denoise %</label><input type="range" data-for="handoff_denoise" min="0" max="100" step="5"><input id="handoff_denoise" class="readout" type="number" min="0" max="100" step="5"></div>
+          <div class="slider-row"><label class="field-name" for="handoff_finish" data-words="{handoff_finish}">Finish %</label><input type="range" data-for="handoff_finish" min="0" max="100" step="5"><input id="handoff_finish" class="readout" type="number" min="0" max="100" step="5"></div>
           <p class="hint">A Stable Diffusion 1.5 or SDXL checkpoint paints the start of each image or frame, and Disco finishes it. 0% is Disco alone, and about 30% keeps Disco's look on a sturdier layout. <span id="handoffWhere"></span></p>
           <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="handoff"></div></details>
         </div>
@@ -362,7 +363,7 @@
   <div class="modal-head">
     <h2>All settings</h2>
     <input id="advSearch" type="search" placeholder="Search settings" aria-label="Search settings">
-    <button type="button" id="advReset" class="link">Reset all</button>
+    <button type="button" id="advReset" class="link">Reset</button>
     <button type="button" id="advClose" class="default">Done</button>
   </div>
   <div class="modal-body">

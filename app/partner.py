@@ -238,9 +238,15 @@ class Partner:
         return self.decoder(self.z0).float().clamp(0, 1).mul(2).sub(1)
 
 
+_stock_attention = None
+
+
 def install(partner):
-    """Blends the partner's maps into Disco's attention blocks."""
+    """Blends the partner's maps into Disco's attention blocks. uninstall puts Disco's own attention back."""
+    global _stock_attention
     from guided_diffusion.unet import QKVAttentionLegacy
+    if _stock_attention is None:
+        _stock_attention = QKVAttentionLegacy.forward
 
     def forward(self, qkv):
         bs, width, length = qkv.shape
@@ -257,3 +263,9 @@ def install(partner):
         return a.reshape(bs, -1, length)
 
     QKVAttentionLegacy.forward = forward
+
+
+def uninstall():
+    if _stock_attention is not None:
+        from guided_diffusion.unet import QKVAttentionLegacy
+        QKVAttentionLegacy.forward = _stock_attention

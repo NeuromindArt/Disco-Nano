@@ -58,8 +58,9 @@ class Graft:
             self.push[grid] = moved.permute(0, 3, 1, 2).half()
 
     def install(self, model):
-        for grid, block in disco_blocks(model).items():
-            block.register_forward_hook(self.hook(grid))
+        """Adds the graft to Disco's blocks. Returns what takes it out again."""
+        handles = [block.register_forward_hook(self.hook(grid)) for grid, block in disco_blocks(model).items()]
+        return lambda: [handle.remove() for handle in handles]
 
     def hook(self, grid):
         def add(_, __, output):

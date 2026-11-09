@@ -103,7 +103,7 @@ def blocked(cfg, downloaded=_have):
     if not downloaded("secondary"):
         block(["use_secondary_model"], "Get the secondary model from Models in All settings first.")
     if animating:
-        block(["handoff_keep", "n_batches"], "Not for animation.")
+        block(["handoff_keep", "n_batches", "handoff_finish"], "Not for animation.")
     if cfg["animation_mode"] == "3D" and not downloaded(models.DEPTH):
         block(["animation_mode"], "3D needs Depth Anything. Get it from Models in All settings.")
     return out

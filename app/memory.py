@@ -10,6 +10,7 @@ import os
 import torch
 import torch.nn.functional as F
 
+_PATCHED = set()  # the patches already made in this process
 VRAM_HEADROOM_GB = 0.75  # left free for Windows to draw the screens; see limit_vram
 OFFLOAD_MIN_ELEMENTS = 5_000_000
 
@@ -22,6 +23,9 @@ def half_precision_norm():
     this change away from the deep layers that shape composition.
     """
     from guided_diffusion import nn as gd_nn
+    if "norm" in _PATCHED:  # a worker that stays open renders many times, and a second patch would wrap the first
+        return
+    _PATCHED.add("norm")
 
     def forward(self, x):
         if x.dtype == torch.float16 and x.shape[-1] >= 128:
@@ -192,6 +196,9 @@ def lean_unet():
     _block_forward, _LeanBlock and _Join. The UNet's weights must not require gradients (load_unet).
     """
     from guided_diffusion import unet as gd_unet
+    if "lean" in _PATCHED:
+        return
+    _PATCHED.add("lean")
 
     stock_forward = gd_unet.ResBlock.forward
 
@@ -230,12 +237,17 @@ def lean_unet():
     gd_unet.UNetModel.forward = unet_forward
 
 
-def offload_activations():
-    """Keeps the UNet's saved activations in system RAM instead of VRAM.
+def offload_activations(on=True):
+    """Keeps the UNet's saved activations in system RAM instead of VRAM, or with on=False stops doing so.
 
     They go through save_for_backward, so PyTorch's saved-tensor hooks can move the large ones to
     RAM and bring them back on demand, the same mechanism as torch.autograd.graph.save_on_cpu.
+    A worker that stays open switches it for each render.
     """
+    global _OFFLOAD
+    if not on:
+        _OFFLOAD = None  # the patched checkpoint and _LeanBlock both check this, so nothing is moved
+        return
     from torch.autograd.graph import saved_tensors_hooks
     from guided_diffusion import nn as gd_nn
 
@@ -250,15 +262,17 @@ def offload_activations():
         device, t = saved
         return t.to(device) if device is not None else t
 
-    global _OFFLOAD
     _OFFLOAD = (pack, unpack)  # _LeanBlock saves its input the same way
+    if "offload" in _PATCHED:
+        return
+    _PATCHED.add("offload")
 
     class OffloadingCheckpoint:
         @staticmethod
         def apply(func, length, *args):
-            if not any(a.requires_grad for a in args[:length]):
+            if _OFFLOAD is None or not any(a.requires_grad for a in args[:length]):
                 return original.apply(func, length, *args)  # no backward pass, nothing to keep
-            with saved_tensors_hooks(pack, unpack):
+            with saved_tensors_hooks(*_OFFLOAD):
                 return original.apply(func, length, *args)
 
     gd_nn.CheckpointFunction = OffloadingCheckpoint

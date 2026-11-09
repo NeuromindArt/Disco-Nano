@@ -19,7 +19,7 @@ import numpy as np
 import torch
 import torchvision.transforms as T
 import torchvision.transforms.functional as TF
-from guided_diffusion.script_util import create_model_and_diffusion, model_and_diffusion_defaults
+from guided_diffusion.script_util import create_gaussian_diffusion, create_model_and_diffusion, model_and_diffusion_defaults
 from PIL import Image, ImageFilter, ImageOps
 from resize_right import resize
 from torch import nn
@@ -36,7 +36,7 @@ import partner
 import paths
 import rules
 import tiles
-from settings import DEFAULTS, uses_partner
+from settings import DEFAULTS, handoff_parts, uses_partner
 
 device = torch.device("cuda")
 normalize = T.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
@@ -298,9 +298,36 @@ class SecondaryDiffusionImageNet2(nn.Module):
 
 
 # ---- loading ----
+# ---- models kept between renders ----
+# The render worker stays open between renders, and keeps the models it loaded in RAM for the next one. Each
+# render brings what it needs to the GPU, and put_away sends it all back to RAM when the render ends, so a
+# waiting worker holds no VRAM beyond its CUDA context. Closing the app ends the worker and frees it all.
+_kept = {}
+_after_render = []  # undoes what a render changed in kept models or shared code, such as hooks
+
+
+def kept(key, build):
+    """The model kept under key, built the first time it is asked for."""
+    if key not in _kept:
+        _kept[key] = build()
+    return _kept[key]
+
+
+def put_away():
+    while _after_render:
+        try:
+            _after_render.pop()()
+        except Exception:
+            pass
+    for item in _kept.values():
+        for module in (item.parts() if hasattr(item, "parts") else [item]):
+            module.to("cpu")
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
 def load_unet(cfg, hooks):
     name, steps = cfg["diffusion_model"], cfg["steps"]
-    path = models.ensure(name, hooks.status)
     config = model_and_diffusion_defaults()
     config.update(models.config(name))
     config.update({
@@ -309,19 +336,33 @@ def load_unet(cfg, hooks):
         # With the secondary model the UNet never runs backward, so checkpointing does nothing useful.
         "use_checkpoint": not cfg["use_secondary_model"],
     })
-    model, diffusion = create_model_and_diffusion(**config)
-    model.load_state_dict(torch.load(path, map_location="cpu"))
-    # Disco Diffusion turns gradients on for the norm, qkv and proj weights. Nothing uses them, they cost
-    # memory in every backward pass, and memory.lean_unet needs every weight frozen.
-    model.requires_grad_(False).eval()
-    model.convert_to_fp16()  # before moving, so the 32-bit weights never reach the GPU
+
+    def build():
+        path = models.ensure(name, hooks.status)
+        model, _ = create_model_and_diffusion(**config)
+        model.load_state_dict(torch.load(path, map_location="cpu"))
+        # Disco Diffusion turns gradients on for the norm, qkv and proj weights. Nothing uses them, they cost
+        # memory in every backward pass, and memory.lean_unet needs every weight frozen.
+        model.requires_grad_(False).eval()
+        model.convert_to_fp16()  # before moving, so the 32-bit weights never reach the GPU
+        return model
+
+    # The weights don't depend on the steps, so a kept model serves any number of them with a new schedule.
+    model = kept(("unet", name, config["use_checkpoint"]), build)
+    diffusion = create_gaussian_diffusion(
+        steps=config["diffusion_steps"], learn_sigma=config["learn_sigma"], noise_schedule=config["noise_schedule"],
+        use_kl=config["use_kl"], predict_xstart=config["predict_xstart"], rescale_timesteps=config["rescale_timesteps"],
+        rescale_learned_sigmas=config["rescale_learned_sigmas"], timestep_respacing=config["timestep_respacing"])
     return model.to(device), diffusion
 
 
 def load_secondary(hooks):
-    model = SecondaryDiffusionImageNet2()
-    model.load_state_dict(torch.load(models.ensure("secondary", hooks.status), map_location="cpu"))
-    return model.eval().requires_grad_(False).to(device)
+    def build():
+        model = SecondaryDiffusionImageNet2()
+        model.load_state_dict(torch.load(models.ensure("secondary", hooks.status), map_location="cpu"))
+        return model.eval().requires_grad_(False)
+
+    return kept(("secondary",), build).to(device)
 
 
 def load_clip_models(cfg):
@@ -329,11 +370,19 @@ def load_clip_models(cfg):
     loaded = []
     for key, name in CLIP_NAMES.items():
         if cfg.get(key):
-            model = memory.load_vit_l14(clip, weights) if key == "ViTL14" else clip.load(name, jit=False)[0]
-            loaded.append(model.eval().requires_grad_(False).to(device))
+            def build(key=key, name=name):
+                model = memory.load_vit_l14(clip, weights) if key == "ViTL14" else clip.load(name, jit=False)[0]
+                return model.eval().requires_grad_(False)
+
+            loaded.append(kept(("clip", key), build).to(device))
     if not loaded:
         raise ValueError("Choose at least one CLIP model (prompt checker).")
     return loaded
+
+
+def load_lpips():
+    import lpips  # loaded only when used: it takes VRAM and a few seconds
+    return kept(("lpips",), lambda: lpips.LPIPS(net="vgg", verbose=False).eval().requires_grad_(False)).to(device)
 
 
 def upright(path):
@@ -456,6 +505,14 @@ def set_seeds(seed):
 
 
 def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_dir=paths.OUTPUT):
+    """One render or clip. Whatever happens, the models it used go back to RAM for the next render."""
+    try:
+        _render(job_settings, prompts, hooks, offload, init_fit, output_dir)
+    finally:
+        put_away()
+
+
+def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     cfg = {**DEFAULTS, **job_settings}
     style = models.cut_style(cfg["diffusion_model"])
     if style:
@@ -482,9 +539,12 @@ def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_
     set_seeds(seed)
     sets = keyframes.prompt_sets(prompts) if animating else [(0, prompts)]
     handing = None
-    if cfg["handoff_file"] and float(cfg["handoff_share"]) > 0:
+    hand_start, hand_finish = handoff_parts(cfg)
+    if hand_start or hand_finish:
         import handoff  # loaded before Disco, so its text encoders can use the GPU and leave
-        handing = handoff.Handoff(cfg, sets, hooks.status, device, getattr(hooks, "stopped", lambda: False))
+        path = cfg["handoff_file"]
+        handing = kept(("handoff", path, os.path.getmtime(path)), lambda: handoff.Handoff(path, hooks.status, device))
+        handing.prepare(cfg, sets, hooks.status, getattr(hooks, "stopped", lambda: False))
     torch.backends.cudnn.benchmark = False  # same speed here, but its cached workspaces cost VRAM
 
     overview = schedule(cfg["cut_overview"])
@@ -509,8 +569,7 @@ def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_
     if start_image:
         source = size_start_image(upright(start_image), *final, init_fit)
         if init_scale:
-            import lpips  # loaded only when used: it takes VRAM and a few seconds
-            lpips_model = lpips.LPIPS(net="vgg", verbose=False).to(device)
+            lpips_model = load_lpips()
 
     drawing = cfg["live_ghost"] != "Off"
     if cfg["prompt_graft"] and cfg["partner_model"] != "Tiny SD":
@@ -524,9 +583,10 @@ def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_
         experiment.partner = partner.Partner(cfg["partner_model"], cfg["partner_file"], text, side_y, side_x,
                                              cfg["partner_follow"], device, hooks.status)
         partner.install(experiment.partner)
+        _after_render.append(partner.uninstall)
     if cfg["prompt_graft"]:
         experiment.graft = graft.Graft(schedule(cfg["graft_curve"]), device)
-        experiment.graft.install(model)
+        _after_render.append(experiment.graft.install(model))
         experiment.partner.watch(graft.sd_blocks(experiment.partner.unet))
     if cfg["ghost_image"] or cfg["style_image"] or drawing or frame_ghost:
         def sized(path):
@@ -758,7 +818,7 @@ def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_
         for noise) and Disco carries on from there. Returns the new start and skip. `size` is the size
         painted when there is no start."""
         pull["set"], pull["to"] = False, None
-        if handing is None:
+        if handing is None or not hand_start:
             return start, skip
         release()
         begins = float(diffusion.alphas_cumprod[diffusion.num_timesteps - skip - 1])
@@ -773,9 +833,25 @@ def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_
         if keep_as:
             image.save(keep_as)
         pull["set"], pull["to"] = True, start
-        skip = handoff.disco_skip(diffusion.alphas_cumprod, alpha, skip)
+        repaint = float(cfg["handoff_denoise"] or 0)
+        if repaint > 0:  # Disco repaints its own share of the handoff picture, like Denoise for a start image
+            skip = min(max(cfg["steps"] - round(cfg["steps"] * repaint / 100), 0), cfg["steps"] - 1)
+        else:  # it carries on from the point on its own path where the handoff model stopped
+            skip = handoff.disco_skip(diffusion.alphas_cumprod, alpha, skip)
         hooks.status(f"Disco carries on from step {skip + 1} of {cfg['steps']}")
         return TF.to_tensor(image).unsqueeze(0).mul(2).sub(1).to(device), skip
+
+    def finish(image, n, seed_value, keep_as=None):
+        """Finish %: the handoff model repaints the end of Disco's finished picture to clean it up."""
+        if handing is None or not hand_finish:
+            return image
+        release()
+        if keep_as:
+            image.save(keep_as)  # Disco's own picture, before the finish
+        resting = [model, secondary_model, lpips_model, *(m.visual for m in clip_models),
+                   experiment.partner if experiment else None]
+        with handoff.Parked(handing, resting, device, *handoff.finish_size(*image.size), painted=True):
+            return handing.finish(image, float(cfg["handoff_finish"]) / 100, n, seed_value)
 
     def save_sketch(sketch):
         to_image(sketch).save(os.path.join(folder, f"{batch_name}({run})_partner.png"))
@@ -851,8 +927,7 @@ def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_
         camera = animate.Camera(cfg, total, device, hooks.status, depth_model) if mode in ("2D", "3D") else None
         skips = [min(round(cfg["steps"] * share / 100), cfg["steps"] - 1) for share in keyframes.skips(cfg, total)]
         if cfg["frames_scale"] and lpips_model is None:
-            import lpips
-            lpips_model = lpips.LPIPS(net="vgg", verbose=False).to(device)
+            lpips_model = load_lpips()
         whole = denoise_lab if experiment else denoise
 
         def paint(start, skip, n, hand=True):
@@ -981,20 +1056,22 @@ def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_
         torch.cuda.empty_cache()
         set_seeds(seed + batch)  # each image can be made again on its own
         start = TF.to_tensor(source).unsqueeze(0).mul(2).sub(1).to(device) if start_image else None
-        kept = cfg["handoff_keep"] and os.path.join(folder, f"{batch_name}({run})_{batch}_handoff.png")
+        handoff_picture = cfg["handoff_keep"] and os.path.join(folder, f"{batch_name}({run})_{batch}_handoff.png")
         if grid == 1:
             paint = denoise_lab if experiment else denoise
-            start, skip = hand_over(start, skip_steps, batch, (side_x, side_y), seed + batch, kept)
+            start, skip = hand_over(start, skip_steps, batch, (side_x, side_y), seed + batch, handoff_picture)
             set_seeds(seed + batch)
             image = to_image(paint(start, side_x, side_y, skip, batch))
         else:
             if not start_image and cfg["tile_start"] == "Render first":
-                start, skip = hand_over(None, skip_steps, batch, (side_x, side_y), seed + batch, kept)
+                start, skip = hand_over(None, skip_steps, batch, (side_x, side_y), seed + batch, handoff_picture)
                 set_seeds(seed + batch)
                 first = to_image(denoise(start, side_x, side_y, skip, batch))
                 start, skip = TF.to_tensor(first.resize(final, Image.LANCZOS)).unsqueeze(0).mul(2).sub(1), tile_skip
             else:
-                start, skip = hand_over(start, tile_skip if start is not None else skip_steps, batch, final, seed + batch, kept)
+                start, skip = hand_over(start, tile_skip if start is not None else skip_steps, batch, final, seed + batch, handoff_picture)
                 set_seeds(seed + batch)
             image = to_image(paint_tiles(None if start is None else start.cpu(), skip, batch))
+        disco_own = cfg["handoff_keep"] and os.path.join(folder, f"{batch_name}({run})_{batch}_disco.png")
+        image = finish(image, batch, seed + batch, disco_own)
         hooks.image(save(image, batch))

@@ -52,9 +52,10 @@ RTX 3070 8GB.
 - Save images to any folder, with disk space shown beside VRAM
 - Upscaling with Real-ESRGAN x4plus or your own ESRGAN, DAT or HAT models
 - Every schedule drawn as a graph you can drag, in the card it belongs to
-- All settings searchable, with help for each one
+- Help on hover for every setting, and a Help page with the details
 - A hard VRAM cap, so a render that is too big fails cleanly instead of stalling your PC
 - Renders run at below normal priority on 4 CPU threads by default, so the PC stays usable
+- Models stay loaded between renders, so the next one starts in seconds
 
 ## What each option does
 
@@ -352,11 +353,19 @@ the saturation and step limits, and the sampler. Changed values show in the acce
 frame. It isn't a start image. The checkpoint takes its share of the steps from pure noise, and
 Disco carries on from the exact point where it stopped, while the scene is still blurry. The checkpoint decides the layout and subject, and Disco paints it.
 
-- **Handoff model** lists the `.safetensors` checkpoints in your checkpoint folders. **Browse**
-  picks one anywhere on the PC and adds its folder. Checkpoints are read where they are.
+- **Handoff model** lists the SD 1.5 and SDXL checkpoints in your checkpoint folders and in ComfyUI or
+  a Stable Diffusion web UI on the PC, grouped by subfolder. **Browse** picks one anywhere on the PC
+  and adds its folder. Checkpoints are read where they are.
 - **Handoff %** is the checkpoint's share of the path from noise to picture. 0% is Disco alone.
   About 30% keeps Disco's look on a sturdier layout, 50% keeps more of the checkpoint, and 100%
   leaves Disco only the finishing touch.
+- **Disco denoise %** is how much of the checkpoint's picture Disco repaints, like Denoise for a start
+  image. At 0 Disco carries on from exactly where the checkpoint stopped. With Handoff % at 60, 75
+  here has Disco repaint with 150 of 200 steps.
+- **Finish %** works the other way round: after Disco, the checkpoint repaints that share of the
+  finished image to clean it up. About 20 to 35 keeps Disco's look. It works with Handoff % at 0, so
+  the checkpoint only finishes, and on still images only. Keep the handoff picture also saves
+  Disco's own image beside it.
 - With a start image, or on any frame of a 2D, 3D or Video Input clip, the checkpoint starts where
   Disco would have started and takes its share of what is left. Every painted frame gets it.
 - Handoff steps, its prompt strength, its negative prompt, and spacing for few-step models such as
@@ -366,7 +375,8 @@ Disco carries on from the exact point where it stopped, while the scene is still
 The checkpoint waits in RAM and comes to the GPU only for its own steps. On cards under 12GB, SDXL's
 UNet is stored in 8 bits, which halves it to 2.6GB, and Disco repaints what follows, which hides the
 small loss. If the checkpoint and Disco still don't fit together, Nano moves Disco's models to RAM
-while the checkpoint paints. Loading an SDXL file takes about a minute. Whatever the frame size, the checkpoint paints at 512 to
+while the checkpoint paints. Loading an SDXL file takes a minute or two the first time; after that it
+waits in RAM for the next render (see Keep models loaded below). Whatever the frame size, the checkpoint paints at 512 to
 768 pixels a side, in the frame's shape. The first use downloads a few small configuration files from Hugging Face.
 
 ![The same prompt and seed with Handoff off, at 30% and at 50%](docs/handoff.jpg)
@@ -438,7 +448,7 @@ one, and **Frame skip %** decides how much of it is kept.
   travels with what moves.
 
 **Frame skip %** defaults to 75 for camera moves, which holds a scene while it moves, and to 55 for
-Video Input, so the video gets repainted more. **Frame skip keyframes** in All settings can lower it
+Video Input, so the video gets repainted more. **Frame skip keyframes**, under More settings in the Animation card, can lower it
 around a prompt change. For calmer, more painterly clips, try **Step noise** at about 0.3.
 
 Each move has a slider for a steady value and a keyframe box for change over time, in Disco
@@ -485,6 +495,13 @@ The last frame shows in Images with a play mark, and clicking it plays the clip.
   image onto a folder to move it there, with its settings, upscales and clip files. **New folder**
   makes one, and folders you make in Explorer show up too. **Folder name** under Render sets where
   new renders go.
+- **Keep models loaded**, in All settings and on by default, keeps the last render's models waiting in
+  RAM, so the next render starts in a few seconds instead of about 20, or about 2 minutes with an SDXL
+  handoff model. Changing a model loads only that one. Exact repeat and frames over about half a
+  megapixel need a fresh render process, so switching those starts one. Closing the app frees it all.
+- **Save progress video**, in All settings, saves an MP4 of the picture forming beside each still
+  image, one frame per preview. **Preview every** is 1 step by default, so the preview and the video
+  show every step.
 
 ## Support
 

@@ -274,7 +274,8 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
 .mem-track .ram { background: var(--mem-ram); }
 .mem-track .moved { background: var(--mem-vram); }
 .mem-track .disk { background: var(--mem-disk); }
-.mem-track .plan { opacity: .55; }
+.mem-track span.plan:not(.keep) { background: transparent; box-shadow: inset 0 0 0 1px var(--mem-vram); }  /* the next render, not in use */
+.mem-track span.ram.plan:not(.keep) { box-shadow: inset 0 0 0 1px var(--mem-ram); }
 .mem-track .spill { background: var(--danger); }
 .mem-track .keep { position: absolute; top: 0; right: 0; height: 100%;
   background: repeating-linear-gradient(135deg, transparent 0 3px, var(--ink-disabled) 3px 4px); }
@@ -496,9 +497,6 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
 
 .adv-field.changed .readout { color: var(--accent) !important; }
 .slider-row.unused { opacity: .45; }
-.adv-field.moved { align-items: center; }
-.adv-field.moved .link { color: var(--accent); justify-self: start; flex: none; }
-.adv-field.flash { background: var(--accent-soft); border-radius: var(--radius-sm); transition: background 600ms; }
 
 /* Settings inside a card: the same rows as All settings, sized for the panel, help on hover. */
 .card-fields { display: flex; flex-direction: column; gap: 2px; }
