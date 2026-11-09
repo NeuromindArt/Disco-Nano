@@ -637,13 +637,14 @@ function showSummaries() {
     animation: kind ? `${kind}, ${state.max_frames} frames` : "",
     tiles: state.tile_scale === "Off" ? "Off" : String(state.tile_scale).split(",")[0],
     lab: on ? `${on} on` : "Off",
-    handoff: handingOff() ? [Number(state.handoff_share) > 0 && `${state.handoff_share}%`, Number(state.handoff_finish) > 0 && `finish ${state.handoff_finish}%`,
+    handoff: handingOff() ? [Number(state.handoff_share) > 0 && `${state.handoff_share}%`, Number(state.handoff_finish) > 0 && `reverse ${state.handoff_finish}%`,
       baseName(state.handoff_file).replace(/\.safetensors$/i, "")].filter(Boolean).join(", ") : "Off",
     cutouts: changedIn("cutouts") ? `${changedIn("cutouts")} changed` : "Close-up ramp",
     guidance: changedIn("guidance") ? `${changedIn("guidance")} changed` : "Default",
   };
   for (const [name, text] of Object.entries(sums)) $(`sum-${name}`).textContent = text;
   for (const id of ["handoff_share", "handoff_denoise", "handoff_finish"]) $(id).closest(".slider-row").hidden = !state.handoff_file;
+  document.querySelectorAll(".handoff-part").forEach((el) => { el.hidden = !state.handoff_file; });
   if (model) $("modelAbout").textContent = model.about;
 }
 

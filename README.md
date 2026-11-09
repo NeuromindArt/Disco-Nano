@@ -362,7 +362,7 @@ Disco carries on from the exact point where it stopped, while the scene is still
 - **Disco denoise %** is how much of the checkpoint's picture Disco repaints, like Denoise for a start
   image. At 0 Disco carries on from exactly where the checkpoint stopped. With Handoff % at 60, 75
   here has Disco repaint with 150 of 200 steps.
-- **Finish %** works the other way round, like Denoise for the checkpoint after Disco is done: it
+- **Reverse handoff %** works the other way round, like Denoise for the checkpoint after Disco is done: it
   repaints that much of the finished image. 0 is off, about 20 to 35 tidies details and keeps
   Disco's look, and 100 replaces Disco's image. It works with Handoff % at 0, so
   the checkpoint only finishes, and on still images only. Keep the handoff picture also saves
