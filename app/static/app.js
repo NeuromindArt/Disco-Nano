@@ -31,11 +31,14 @@ const CARD_FIELDS = {
   model: ["RN101", "RN50x4", "RN50x16", "RN50x64"],
   handoff: ["handoff_steps", "handoff_guidance", "handoff_few_steps", "handoff_negative", "handoff_keep"],
   tiles: ["tile_overlap"],
+  render: ["cpu_threads", "display_rate"],
+  animation: ["frames_scale", "frame_sharpen", "prompt_fade", "frame_skip_keys", "interp_spline", "fov", "padding_mode", "sampling_mode",
+    "video_init_seed_continuity", "video_flow", "save_mp4", "save_webp", "save_gif"],
   guides: ["ghost_lowfreq", "ghost_structure", "ghost_crops", "ghost_curve", "style_strength"],
   lab: ["time_travel_curve", "graft_curve", "borrow_curve", "detail_curve", "guidance_curve", "painters_curve", "painters_strength",
     "painters_color", "painters_path", "partner_model", "partner_file", "sketch_steps", "partner_every", "partner_follow", "partner_keep_sketch"],
 };
-const CARD_TITLES = { cutouts: "{Cutouts}", guidance: "Guidance", model: "Model", handoff: "Handoff", tiles: "Tiles", guides: "Guide images", lab: "Experiments" };
+const CARD_TITLES = { cutouts: "{Cutouts}", guidance: "Guidance", model: "Model", render: "Render", animation: "Animation", handoff: "Handoff", tiles: "Tiles", guides: "Guide images", lab: "Experiments" };
 const CARD_OF = Object.fromEntries(Object.entries(CARD_FIELDS).flatMap(([card, names]) => names.map((n) => [n, card])));
 
 const EXACT_REPEAT_COST = 1.28;  // measured: 0.84 to 1.08 seconds per step at 512×512

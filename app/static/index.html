@@ -77,8 +77,6 @@
             </div>
           </div>
           <p id="initFitHint" class="hint"></p>
-          <div class="slider-row" data-shown-names="plain"><label class="field-name" for="denoise">Denoise %</label><input type="range" data-for="denoise" min="5" max="100" step="5"><input id="denoise" class="readout" type="number" min="1" max="100" step="5"></div>
-          <div class="slider-row" data-shown-names="official" hidden><label class="field-name" for="skip_steps" data-words="{skip_steps}">skip_steps</label><input type="range" data-for="skip_steps" min="0" max="500" step="5"><input id="skip_steps" class="readout" type="number" min="0" step="5"></div>
           <div class="slider-row"><label class="field-name" for="init_scale" data-words="{Strength|init_scale}" title="Start image strength">Strength</label><input type="range" data-for="init_scale" min="0" max="5000" step="100"><input id="init_scale" class="readout" type="number" min="0" step="100"></div>
           <p class="hint" data-words="{Denoise sets how much of the image is repainted, and lower keeps more of it.|skip_steps sets how much of the image survives, and higher keeps more of it.} {init_scale} keeps pulling the render back toward the image at every step, and 0 turns that off."></p>
         </div>
@@ -123,6 +121,7 @@
           <label class="check" id="turboCheck"><input type="checkbox" id="turbo_mode"> <span data-words="{turbo_mode} (repaints every few frames, much faster)">Turbo (repaints every few frames, much faster)</span></label>
           <div class="slider-row" id="turboEvery"><label class="field-name" for="turbo_steps" data-words="{turbo_steps}">Turbo every</label><input type="range" data-for="turbo_steps" min="2" max="6" step="1"><input id="turbo_steps" class="readout" type="number" min="2" max="6"></div>
           <label class="check"><input type="checkbox" id="frame_ghost"> <span data-words="{frame_ghost} (steadier)">Last frame as ghost (steadier)</span></label>
+          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="animation"></div></details>
         </div>
       </section>
 
@@ -149,10 +148,13 @@
           <label class="line"><span class="field-name">Look</span><select id="look"></select></label>
           <p class="hint" id="lookAbout"></p>
           <div class="slider-row"><label class="field-name" for="steps" data-words="{steps}">Steps</label><input type="range" data-for="steps" min="25" max="1000" step="25"><input id="steps" class="readout" type="number" min="25" max="1000" step="25"></div>
+          <div class="slider-row" data-shown-names="plain"><label class="field-name" for="denoise">Denoise %</label><input type="range" data-for="denoise" min="5" max="100" step="5"><input id="denoise" class="readout" type="number" min="1" max="100" step="5"></div>
+          <div class="slider-row" data-shown-names="official" hidden><label class="field-name" for="skip_steps" data-words="{skip_steps}">skip_steps</label><input type="range" data-for="skip_steps" min="0" max="500" step="5"><input id="skip_steps" class="readout" type="number" min="0" step="5"></div>
           <div class="slider-row"><label class="field-name" for="clip_guidance_scale" data-words="{clip_guidance_scale}">Prompt strength</label><input type="range" data-for="clip_guidance_scale" min="1500" max="60000" step="500"><input id="clip_guidance_scale" class="readout" type="number" min="0" step="1000"></div>
           <div class="slider-row seed-row"><label class="field-name" for="set_seed" data-words="{set_seed}">Seed</label><input type="range" data-for="set_seed" min="0" max="99999" step="1"><input id="set_seed" class="readout seed" type="text" inputmode="numeric" spellcheck="false" placeholder="Random"></div>
           <div class="slider-row image-only"><label class="field-name" for="n_batches" data-words="{n_batches}">Images</label><input type="range" data-for="n_batches" min="1" max="20" step="1"><input id="n_batches" class="readout" type="number" min="1" max="100"></div>
           <label class="line"><span class="field-name" data-words="{batch_name}">Folder name</span><input id="batch_name" maxlength="40"></label>
+          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="render"></div></details>
         </div>
       </section>
 
