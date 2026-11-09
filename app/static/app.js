@@ -68,13 +68,6 @@ const LOOKS = {
 };
 const LOOK_KEYS = [...new Set(Object.values(LOOKS).flatMap((l) => Object.keys(l.values)))];
 
-const INIT_SIZING = {
-  match: "Sets the frame to the image's shape, at about the same size. The image then fills it.",
-  fit: "Keeps the whole image. Spare space gets a blurred copy of it.",
-  fill: "Stretches the whole image to the frame.",
-  crop: "Fills the frame without stretching, cutting off what doesn't fit.",
-};
-
 let fields = [];
 let byName = {};
 let terms = {};
@@ -88,6 +81,24 @@ function load() {
   try { Object.assign(state, JSON.parse(localStorage.getItem(STORE)) || {}); } catch { /* start fresh */ }
 }
 function save() { localStorage.setItem(STORE, JSON.stringify(state)); }
+
+/* The main panel's values are saved in the browser, so a new default would never reach anyone who has opened
+   Nano before. A value still at the default it was saved under moves to the new default, and one changed by
+   hand stays. QUICK_DEFAULTS_BEFORE holds the defaults from before this was recorded. */
+const QUICK_DEFAULTS_BEFORE = { clip_guidance_scale: 20000 };
+
+function followNewDefaults() {
+  const seen = state.quick_defaults || QUICK_DEFAULTS_BEFORE;
+  const now = {};
+  for (const name of QUICK) {
+    const fresh = byName[name]?.default;
+    if (fresh === undefined) continue;
+    now[name] = fresh;
+    if (name in seen && name in state && String(state[name]) === String(seen[name]) && String(seen[name]) !== String(fresh)) state[name] = fresh;
+  }
+  state.quick_defaults = now;
+  save();
+}
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -215,12 +226,18 @@ function showHoverHelp() {
   const on = state.hover_help !== false;
   if ($("hoverHelp")) $("hoverHelp").checked = on;
   document.body.classList.toggle("hover-help", on);
-  document.querySelectorAll(".controls label, .controls .guide > .field-name").forEach((label) => {
+  document.querySelectorAll(".controls label, .controls .guide > .field-name, #advanced label, [data-help]").forEach((label) => {
     const name = label.matches("label") ? settingOf(label) : label.dataset.words?.match(/^\{(\w+)\}$/)?.[1];
-    const help = name && byName[name]?.help;
+    const help = label.dataset.help || (name && byName[name]?.help);
     if (!help) return;
     if (on) label.title = worded(help); else label.removeAttribute("title");
   });
+}
+
+/* Help for something whose meaning changes, such as the chosen model, shown on hover like the rest. */
+function setHelp(el, text) {
+  if (text) el.dataset.help = text; else delete el.dataset.help;
+  if (text && state.hover_help !== false) el.title = worded(text); else el.removeAttribute("title");
 }
 
 function setNames(names) {
@@ -468,7 +485,7 @@ function currentLook() {
 function showLook() {
   const key = currentLook();
   $("look").value = key;
-  $("lookAbout").textContent = key === "custom" ? "Some of its settings were changed. Choose a look to set them back." : worded(LOOKS[key].hint);
+  setHelp($("look"), key === "custom" ? "" : LOOKS[key].hint);
 }
 
 function applyLook(key) {
@@ -569,19 +586,12 @@ const CAMERA_SKIP = 75, VIDEO_SKIP = 55;
 
 function animating() { return state.animation_mode && state.animation_mode !== "None"; }
 
-const ANIM_ABOUT = {
-  "2D": "Zooms, turns and pans a flat picture.",
-  "3D": "Flies a camera into the scene. Needs Depth Anything from Models.",
-  "Video Input": "Repaints every frame of a video.",
-};
-
 function showAnimation() {
   const mode = state.animation_mode || "None";
   const camera = ["2D", "3D"].includes(mode);
   document.body.classList.toggle("animating", mode !== "None");
   document.querySelectorAll("[data-make]").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.make === "animation") === (mode !== "None"))));
   document.querySelectorAll("[data-anim]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.anim === mode)));
-  $("animAbout").textContent = ANIM_ABOUT[mode] || "";
   $("videoRow").hidden = mode !== "Video Input";
   $("cameraBlock").hidden = !camera;
   $("turboCheck").hidden = !camera;
@@ -635,7 +645,7 @@ function showSummaries() {
     render: `${state.steps} steps`,
     model: model ? (state.names === "official" ? model.name : model.label) : "",
     animation: kind ? `${kind}, ${state.max_frames} frames` : "",
-    tiles: state.tile_scale === "Off" ? "Off" : String(state.tile_scale).split(",")[0],
+    tiles: state.tile_scale === "Off" ? "Off" : `${String(state.tile_scale).split(",")[0]}, ${finalSize(state.width, state.height).join("×")}`,
     lab: on ? `${on} on` : "Off",
     handoff: handingOff() ? [Number(state.handoff_share) > 0 && `${state.handoff_share}%`, Number(state.handoff_finish) > 0 && `reverse ${state.handoff_finish}%`,
       baseName(state.handoff_file).replace(/\.safetensors$/i, "")].filter(Boolean).join(", ") : "Off",
@@ -645,7 +655,7 @@ function showSummaries() {
   for (const [name, text] of Object.entries(sums)) $(`sum-${name}`).textContent = text;
   for (const id of ["handoff_share", "handoff_denoise", "handoff_finish"]) $(id).closest(".slider-row").hidden = !state.handoff_file;
   document.querySelectorAll(".handoff-part").forEach((el) => { el.hidden = !state.handoff_file; });
-  if (model) $("modelAbout").textContent = model.about;
+  if (model) setHelp($("diffusion_model"), model.about);
 }
 
 function changedIn(card) {
@@ -953,11 +963,10 @@ function stepsRun() {
 function showTiles() {
   const grid = tileGrid();
   const renderFirst = state.tile_start === "Render first";
-  $("tileMore").hidden = $("tileNote").hidden = grid === 1;
+  $("tileMore").hidden = grid === 1;
   const video = animating() && state.animation_mode === "Video Input";
   $("tile_denoise").disabled = grid === 1 || !(state.init_image || renderFirst || video);
   $("tile_start").disabled = !!state.init_image || video;
-  const [width, height] = finalSize(state.width, state.height);
   // With tiles, a start image is repainted by Tile denoise, so the start image's own Denoise has no say.
   const tiledStart = grid > 1 && !!(state.init_image || video);
   for (const id of ["denoise", "skip_steps"]) {
@@ -965,8 +974,6 @@ function showTiles() {
     row.classList.toggle("unused", tiledStart);
     row.title = tiledStart ? worded("Tiles use Tile denoise for the start image, so {skip_steps} isn't used.") : "";
   }
-  $("tileNote").textContent = `Final size ${width}×${height}, from ${grid * grid} tiles at the frame size.`
-    + (tiledStart ? " Tile denoise sets how much of the start image is repainted." : "");
 }
 
 /* The frame closest to the start image's shape, and never larger than the frame Match began from,
@@ -1312,7 +1319,7 @@ function openSchedule(name) {
   const current = name in state.advanced ? state.advanced[name] : f.default;
   sched = { name, spec: { low: 0, ...SCHEDULES[name] }, levels: parseSchedule(current) || parseSchedule(f.default), drag: null };
   withWords($("scheduleTitle"), `{${name}}`);
-  withWords($("scheduleAbout"), f.help);
+  setHelp($("scheduleTitle"), f.help);
   $("scheduleError").hidden = true;
   $("scheduleDialog").showModal();
   showSchedule();
@@ -1620,13 +1627,7 @@ function advField(f, compact = false) {
   reset.hidden = !(f.name in state.advanced);
   reset.addEventListener("click", () => resetField(f.name));
   cell.append(reset);
-  wrap.append(cell);
-  if (f.help && !compact) {  // in a card, the help shows on hover instead
-    const h = document.createElement("div");
-    h.className = "adv-help";
-    withWords(h, f.help);
-    wrap.append(h);
-  }
+  wrap.append(cell);  // what it does shows on hover over its name, in the cards and in All settings
   return wrap;
 }
 
@@ -1838,7 +1839,7 @@ async function loadModels() {
   }));
   select.value = chosen;
   if (!select.value) select.value = byName.diffusion_model.default;  // a saved name that no longer exists
-  $("getModels").hidden = painters.every((m) => m.downloaded);
+  $("getModelsRow").hidden = painters.every((m) => m.downloaded);
   buildModelRows();
 }
 
@@ -2093,7 +2094,6 @@ function showInit() {
   for (const btn of document.querySelectorAll("[data-init-fit]")) {
     btn.setAttribute("aria-pressed", String(btn.dataset.initFit === state.init_fit));
   }
-  $("initFitHint").textContent = INIT_SIZING[state.init_fit];
 }
 
 function setInit(r) {
@@ -2848,6 +2848,7 @@ async function init() {
   ({ fields, terms } = await api("/api/schema"));
   buildHelpSettings();
   byName = Object.fromEntries(fields.map((f) => [f.name, f]));
+  followNewDefaults();
   buildControls();
   makeSwitches();
   buildAdvanced();

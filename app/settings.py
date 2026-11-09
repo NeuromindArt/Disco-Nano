@@ -22,7 +22,7 @@ ANIMATION = "Animation"
 FIELDS = [
     field("steps", 200, MAIN, "How many steps the image is refined over."),
     field("skip_steps", 0, MAIN, "{How much of the picture is painted. 100% paints from pure noise. With a start image, about 50% keeps its layout and colors and repaints the details, and lower stays closer to it. With text only, keep it at 100%: anything lower throws away the steps that lay out the scene.|Steps skipped at the start of the render. With a start image, about half of steps keeps its layout and colors and repaints the details, and more stays closer to it. With text only, keep it at 0: skipping throws away the steps that lay out the scene.}"),
-    field("clip_guidance_scale", 20000, MAIN, "How strongly the image is pushed toward the prompt."),
+    field("clip_guidance_scale", 10000, MAIN, "How strongly the image is pushed toward the prompt."),
     field("n_batches", 1, MAIN, "How many images to render."),
     field("set_seed", "random_seed", MAIN, "A number starts the render from the same noise. Turn on {exact_repeat} for an identical image."),
     field("exact_repeat", False, MAIN, "The same seed and settings give the identical image on this PC. About 30% slower."),
@@ -43,7 +43,7 @@ FIELDS = [
     field("range_scale", 0, GUIDANCE, "Pulls colors that run past black or white back into range, harder the further they go. In the original Disco Diffusion it did nothing, because of a bug Nano fixes, so 0 matches its look. {sat_scale} does a similar job more gently."),
     field("sat_scale", 22000, GUIDANCE, "Limits oversaturation."),
     field("clamp_grad", True, GUIDANCE, "Limits how far one step can change the image."),
-    field("clamp_max", 0.09, GUIDANCE, "The limit used by {clamp_grad}. Higher is bolder."),
+    field("clamp_max", 0.065, GUIDANCE, "The limit used by {clamp_grad}. Higher is bolder."),
     field("fuzzy_prompt", False, GUIDANCE, "Adds noisy copies of each prompt for looser results."),
     field("rand_mag", 0.05, GUIDANCE, "How much noise {fuzzy_prompt} adds."),
 

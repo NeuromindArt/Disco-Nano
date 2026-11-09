@@ -70,15 +70,13 @@
           <div class="line">
             <span class="field-name">Sizing</span>
             <div class="segmented" role="group" aria-label="Start image sizing">
-              <button type="button" data-init-fit="match" id="matchImage">Match</button>
-              <button type="button" data-init-fit="fit">Fit</button>
-              <button type="button" data-init-fit="fill">Fill</button>
-              <button type="button" data-init-fit="crop">Crop</button>
+              <button type="button" data-init-fit="match" id="matchImage" data-help="Sets the frame to the image's shape, at about the same size. The image then fills it.">Match</button>
+              <button type="button" data-init-fit="fit" data-help="Keeps the whole image. Spare space gets a blurred copy of it.">Fit</button>
+              <button type="button" data-init-fit="fill" data-help="Stretches the whole image to the frame.">Fill</button>
+              <button type="button" data-init-fit="crop" data-help="Fills the frame without stretching, cutting off what doesn't fit.">Crop</button>
             </div>
           </div>
-          <p id="initFitHint" class="hint"></p>
           <div class="slider-row"><label class="field-name" for="init_scale" data-words="{Strength|init_scale}" title="Start image strength">Strength</label><input type="range" data-for="init_scale" min="0" max="5000" step="100"><input id="init_scale" class="readout" type="number" min="0" step="100"></div>
-          <p class="hint" data-words="{Denoise sets how much of the image is repainted, and lower keeps more of it.|skip_steps sets how much of the image survives, and higher keeps more of it.} {init_scale} keeps pulling the render back toward the image at every step, and 0 turns that off."></p>
         </div>
       </div>
 
@@ -87,11 +85,10 @@
         <div class="card-body">
           <select id="animation_mode" hidden aria-hidden="true" tabindex="-1"></select>
           <div class="segmented" role="group" aria-label="Kind of animation">
-            <button type="button" data-anim="2D">2D</button>
-            <button type="button" data-anim="3D">3D</button>
-            <button type="button" data-anim="Video Input">Video</button>
+            <button type="button" data-anim="2D" data-help="Zooms, turns and pans a flat picture.">2D</button>
+            <button type="button" data-anim="3D" data-help="Flies a camera into the scene. Needs Depth Anything from Models.">3D</button>
+            <button type="button" data-anim="Video Input" data-help="Repaints every frame of a video.">Video</button>
           </div>
-          <p class="hint" id="animAbout"></p>
           <div id="videoRow">
             <div class="drop video" id="videoDrop" data-drop="video" tabindex="0" role="button" aria-label="Video: drop a video or click to choose">
               <div class="drop-empty">
@@ -146,7 +143,6 @@
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Render</span><span class="card-sum" id="sum-render"></span></button>
         <div class="card-body">
           <label class="line"><span class="field-name">Look</span><select id="look"></select></label>
-          <p class="hint" id="lookAbout"></p>
           <div class="slider-row"><label class="field-name" for="steps" data-words="{steps}">Steps</label><input type="range" data-for="steps" min="25" max="1000" step="25"><input id="steps" class="readout" type="number" min="25" max="1000" step="25"></div>
           <div class="slider-row" data-shown-names="plain"><label class="field-name" for="denoise">Denoise %</label><input type="range" data-for="denoise" min="5" max="100" step="5"><input id="denoise" class="readout" type="number" min="1" max="100" step="5"></div>
           <div class="slider-row" data-shown-names="official" hidden><label class="field-name" for="skip_steps" data-words="{skip_steps}">skip_steps</label><input type="range" data-for="skip_steps" min="0" max="500" step="5"><input id="skip_steps" class="readout" type="number" min="0" step="5"></div>
@@ -164,13 +160,12 @@
             <label class="field-name" for="diffusion_model" data-words="{diffusion_model}">Model</label>
             <select id="diffusion_model"></select>
           </div>
-          <p class="hint model-about"><span id="modelAbout"></span> <button type="button" id="getModels" class="link" hidden>Get more models</button></p>
-          <div class="group-label" data-words="{clip_models}">Prompt checkers</div>
-          <p class="hint">Each one compares the picture with your prompt. More of them add detail, VRAM and time.</p>
+          <p class="model-about" id="getModelsRow" hidden><button type="button" id="getModels" class="link">Get more models</button></p>
+          <div class="group-label" data-words="{clip_models}" data-help="Each one compares the picture with your prompt. More of them add detail, VRAM and time.">Prompt checkers</div>
           <div class="checks" id="clipChecks"></div>
           <div class="group-label">Memory and speed</div>
-          <label class="check"><input type="checkbox" id="use_secondary_model"> <span data-words="{use_secondary_model} (faster, lower quality)">Secondary model (faster, lower quality)</span></label>
-          <label class="check"><input type="checkbox" id="exact_repeat"> Exact repeat (same seed, same image)</label>
+          <label class="check"><input type="checkbox" id="use_secondary_model"> <span data-words="{use_secondary_model}">Secondary model</span></label>
+          <label class="check"><input type="checkbox" id="exact_repeat"> Exact repeat</label>
           <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="model"></div></details>
         </div>
       </section>
@@ -192,9 +187,9 @@
       <section class="card" data-card="handoff">
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Handoff</span><span class="card-sum" id="sum-handoff"></span></button>
         <div class="card-body">
-          <div class="line">
+          <div class="line stacked">
             <label class="field-name" for="handoffPick" data-words="{handoff_file}">Handoff model</label>
-            <div class="pick-row"><select id="handoffPick"></select><button type="button" id="handoffBrowse" class="default" title="Choose a checkpoint file on the PC that renders">Browse</button></div>
+            <div class="pick-row"><select id="handoffPick"></select><button type="button" id="handoffBrowse" class="default icon-button" title="Browse for a checkpoint file on the PC that renders" aria-label="Browse for a checkpoint file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button></div>
           </div>
           <input type="hidden" id="handoff_file">
           <div class="group-label handoff-part">Handoff: checkpoint, then Disco</div>
@@ -211,13 +206,11 @@
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Tiles</span><span class="card-sum" id="sum-tiles"></span></button>
         <div class="card-body">
           <label class="line"><span class="field-name">Tiles</span><select id="tile_scale"></select></label>
-          <p class="hint">Builds a bigger image from tiles the size of the frame, so it needs no more VRAM.</p>
           <div class="slider-row"><label class="field-name" for="tile_denoise">Tile denoise</label><input type="range" data-for="tile_denoise" min="0.1" max="1" step="0.05"><input id="tile_denoise" class="readout" type="number" min="0.1" max="1" step="0.05"></div>
           <div id="tileMore" hidden>
             <label class="line"><span class="field-name">Text start</span><select id="tile_start"></select></label>
             <label class="check tile-view"><input type="checkbox" id="tile_whole_view"> Whole picture view</label>
           </div>
-          <p id="tileNote" class="hint" hidden></p>
           <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="tiles"></div></details>
         </div>
       </section>
@@ -225,7 +218,6 @@
       <section class="card" data-card="guides" id="guideSection">
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Guide images</span><span class="card-sum" id="sum-guides"></span></button>
         <div class="card-body">
-          <p class="hint">Images that steer the render without being painted over. Leave any of them empty.</p>
           <div class="guides">
             <div class="guide" id="ghostGuide">
               <div class="field-name" data-words="{ghost_image}">Ghost image</div>
@@ -234,7 +226,6 @@
                 <img class="drop-image" alt="" hidden>
                 <button type="button" class="drop-clear" title="Remove" aria-label="Remove the ghost image" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
               </div>
-              <div class="hint">Layout</div>
             </div>
             <div class="guide" id="styleGuide">
               <div class="field-name" data-words="{style_image}">Style image</div>
@@ -243,7 +234,6 @@
                 <img class="drop-image" alt="" hidden>
                 <button type="button" class="drop-clear" title="Remove" aria-label="Remove the style image" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
               </div>
-              <div class="hint">Texture and palette</div>
             </div>
             <div class="guide" id="promptGuide">
               <div class="field-name" data-words="{image_prompts}">Image prompts</div>
@@ -253,7 +243,6 @@
                 <span class="drop-count"></span>
                 <button type="button" class="drop-clear" title="Remove" aria-label="Remove the image prompts" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
               </div>
-              <div class="hint">What they share</div>
             </div>
           </div>
           <input type="file" id="ghost_imageFile" accept="image/png,image/jpeg,image/webp" hidden>
@@ -261,7 +250,6 @@
           <input type="file" id="image_promptsFile" accept="image/png,image/jpeg,image/webp" multiple hidden>
           <input type="hidden" id="image_prompts">
           <div class="slider-row" id="imagePromptWeightRow" hidden><label class="field-name" for="image_prompt_weight" data-words="{image_prompt_weight}">Image prompt weight</label><input type="range" data-for="image_prompt_weight" min="-2" max="4" step="0.25"><input id="image_prompt_weight" class="readout" type="number" min="-10" max="10" step="0.25"></div>
-          <p class="hint">A ghost image guides the layout and a style image the texture and palette. Image prompts are a set of images whose shared subject, style or palette counts as one more prompt; ten to fifty that share one idea work best. Their strengths are under More settings.</p>
           <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="guides"></div></details>
         </div>
       </section>
@@ -269,7 +257,7 @@
       <section class="card" data-card="lab" id="labSection">
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Experiments</span><span class="card-sum" id="sum-lab"></span></button>
         <div class="card-body">
-          <label class="check"><input type="checkbox" id="time_travel"> Time travel (cleaner subjects, about 35% slower)</label>
+          <label class="check"><input type="checkbox" id="time_travel"> Time travel</label>
           <div class="slider-row"><label class="field-name" for="prompt_graft">Prompt graft</label><input type="range" data-for="prompt_graft" min="0" max="10" step="0.5"><input id="prompt_graft" class="readout" type="number" min="0" max="20" step="1"></div>
           <label class="line"><span class="field-name">Live ghost</span><select id="live_ghost"></select></label>
           <div class="slider-row"><label class="field-name" for="depth_target">Depth target</label><input type="range" data-for="depth_target" min="0" max="3" step="0.1"><input id="depth_target" class="readout" type="number" min="0" max="3" step="0.1"></div>
@@ -279,7 +267,6 @@
           <label class="check"><input type="checkbox" id="shaped_guidance"> <span data-words="Shaped {clip_guidance_scale}">Shaped Prompt strength</span></label>
           <div class="slider-row"><label class="field-name" for="gradient_momentum">Push momentum</label><input type="range" data-for="gradient_momentum" min="0" max="0.95" step="0.05"><input id="gradient_momentum" class="readout" type="number" min="0" max="0.95" step="0.05"></div>
           <div class="slider-row"><label class="field-name" for="evidence_map">Subject memory</label><input type="range" data-for="evidence_map" min="0" max="1" step="0.1"><input id="evidence_map" class="readout" type="number" min="0" max="1" step="0.1"></div>
-          <p class="hint">New ways of shaping the image, so results vary a lot from seed to seed. Help explains each one.</p>
           <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="lab"></div></details>
         </div>
       </section>
@@ -371,69 +358,61 @@
   <div class="modal-body">
     <section id="namesBox" class="folders" aria-label="Setting names">
       <div class="folder-field">
-        <span class="adv-name">Setting names</span>
+        <span class="adv-name" data-help="Plain names are easier to follow. Official names match Disco Diffusion's own, for anyone who knows the notebook or its guides. Settings Nano added have one name. Renders are the same either way.">Setting names</span>
         <div class="segmented names" role="group" aria-label="Setting names">
           <button type="button" data-names="plain">Plain</button>
           <button type="button" data-names="official">Official</button>
         </div>
-        <div class="adv-help">Plain names are easier to follow. Official names match Disco Diffusion's own, for anyone who knows the notebook or its guides. Settings Nano added have one name. Renders are the same either way.</div>
       </div>
       <div class="folder-field">
-        <label class="check toggle"><input type="checkbox" id="hoverHelp" class="switch" role="switch"> Help on hover</label>
-        <div class="adv-help">Resting the pointer on a setting's name shows what it does. Help has the longer explanations.</div>
+        <label class="check toggle" data-help="Resting the pointer on a setting's name shows what it does. Help has the longer explanations."><input type="checkbox" id="hoverHelp" class="switch" role="switch"> Help on hover</label>
       </div>
     </section>
     <section id="lookBox" class="folders" aria-label="Accent color">
       <div class="folder-field">
-        <span class="adv-name">Accent color</span>
+        <span class="adv-name" data-help="Colors the Render button, changed values, the selected image and the progress bar. It's saved in this browser.">Accent color</span>
         <div class="swatches" id="accentSwatches" role="group" aria-label="Accent color"></div>
-        <div class="adv-help">Colors the Render button, changed values, the selected image and the progress bar. It's saved in this browser.</div>
       </div>
     </section>
     <section id="networkBox" class="folders" aria-label="Network">
       <div class="folder-field local-only">
-        <span class="adv-name">Share this PC</span>
+        <span class="adv-name" data-help="On the other PC, open the address in a browser and type the code once. Renders run on this PC's GPU, and images are saved here; the other PC sees them in Images and can save them. Windows may ask once whether Python can use private networks: choose Allow. A new code signs out every other PC.">Share this PC</span>
         <label class="check toggle"><input type="checkbox" id="shareToggle"> Let other PCs on this network render here</label>
         <div id="shareInfo" class="share-info" hidden>
           <div class="share-line"><span class="hint">Address</span><span id="shareAddress" class="value"></span></div>
           <div class="share-line"><span class="hint">Code</span><span id="shareCode" class="value code"></span><button type="button" id="shareNewCode" class="link">New code</button></div>
         </div>
         <p id="shareError" class="error" role="alert" hidden></p>
-        <div class="adv-help">On the other PC, open the address in a browser and type the code once. Renders run on this PC's GPU, and images are saved here; the other PC sees them in Images and can save them. Windows may ask once whether Python can use private networks: choose Allow. A new code signs out every other PC.</div>
       </div>
       <div class="folder-field">
-        <label class="adv-name" for="remoteAddress">Render on another PC</label>
+        <label class="adv-name" for="remoteAddress" data-help="Turn on Share this PC on the PC with the GPU first. Its address and code are under Network in its All settings.">Render on another PC</label>
         <form class="folder-row" id="remoteForm">
           <input id="remoteAddress" type="text" spellcheck="false" placeholder="Its address, such as 192.168.1.20">
           <button type="submit" class="default">Open</button>
         </form>
-        <div class="adv-help">Turn on Share this PC on the PC with the GPU first. Its address and code are under Network in its All settings.</div>
       </div>
     </section>
     <section id="foldersBox" class="folders" aria-label="Folders">
       <div class="folder-field">
-        <label class="adv-name" for="outputDir">Save images to</label>
+        <label class="adv-name" for="outputDir" data-help="New images go here, and the gallery shows this folder. Images already saved stay where they are.">Save images to</label>
         <div class="folder-row">
           <input id="outputDir" type="text" spellcheck="false">
           <button type="button" id="outputBrowse" class="default">Browse</button>
         </div>
-        <div class="adv-help">New images go here, and the gallery shows this folder. Images already saved stay where they are.</div>
       </div>
       <div class="folder-field">
-        <label class="adv-name" for="upscaleDirs">Upscaler folders</label>
+        <label class="adv-name" for="upscaleDirs" data-help="One folder per line. Point this at any folder of ESRGAN, DAT or HAT models. Real-ESRGAN x4plus, under Models below, needs no folder.">Upscaler folders</label>
         <div class="folder-row">
           <textarea id="upscaleDirs" rows="2" spellcheck="false"></textarea>
           <button type="button" id="upscaleBrowse" class="default">Add folder</button>
         </div>
-        <div class="adv-help">One folder per line. Point this at any folder of ESRGAN, DAT or HAT models. Real-ESRGAN x4plus, under Models below, needs no folder.</div>
       </div>
       <div class="folder-field">
-        <label class="adv-name" for="checkpointDirs">Checkpoint folders</label>
+        <label class="adv-name" for="checkpointDirs" data-help="One folder per line. Stable Diffusion 1.5 and SDXL checkpoints here show in the Handoff list. They're read where they are, never copied.">Checkpoint folders</label>
         <div class="folder-row">
           <textarea id="checkpointDirs" rows="2" spellcheck="false"></textarea>
           <button type="button" id="checkpointBrowse" class="default">Add folder</button>
         </div>
-        <div class="adv-help">One folder per line. Stable Diffusion 1.5 and SDXL checkpoints here show in the Handoff list. They're read where they are, never copied.</div>
       </div>
       <p id="folderError" class="error" role="alert" hidden></p>
     </section>
@@ -473,14 +452,14 @@
     <h3 data-words="{Cutouts} and schedules">Cutouts and schedules</h3>
     <p data-words="Each step, the {clip_lower} judge {cuts_lower} of the picture: whole-image views and close-ups. The {Cutouts} card sets how many of each there are and how close the close-ups get."></p>
     <p data-words="The default close-up ramp keeps {cut_ic_pow} low at the start, so close-ups are wide and lay out the scene, and raises it toward the end for detail. It made real scenes where flat settings gave texture. Big shapes and Fine detail under Look hold it flat instead."></p>
-    <p>Settings that change over the render are schedules. Each one shows as a graph from the start of the render on the left to the end on the right, with its values in the corner. Click a graph to drag its levels, or type the schedule as text, such as [12]*400+[4]*600: 12 for the first 400 of 1000 parts, then 4. A value that differs from the default shows in the accent color. Hover over a setting's name to read what it does.</p>
+    <p>Settings that change over the render are schedules. Each one shows as a graph from the start of the render on the left to the end on the right, with its values in the corner. Click a graph to open its editor. Drag a level up or down to change it, and drag the line between two levels to move the change. Double-click a level to split it there, and double-click a line to join its two sides. The text box takes the same schedule as text, such as [12]*400+[4]*600: 12 for the first 400 of 1000 parts, then 4. A value that differs from the default shows in the accent color. Hover over a setting's name to read what it does.</p>
     <p>Guidance holds how the push toward the prompt is smoothed and limited, and how the picture is sampled. More settings, at the bottom of some cards, holds the rest of that card's settings.</p>
     <h3>Seeds and Exact repeat</h3>
     <p>Seed 0 picks a new random seed for every render. Any other number starts from the same noise each time; slide it, or type any number up to 4294967295. A seed sets the starting noise, but the GPU adds tiny differences, so the same seed normally gives a similar start and a different image. Exact repeat removes those differences on this PC, at about 30% more time per step. Each image in a run has its own seed, so Reuse settings can make any of them again.</p>
     <h3>Images</h3>
     <p>Right-click the large image or any thumbnail to open it full size, copy it, save it, use it as a start image, reuse its settings, upscale it, or open its folder.</p>
     <h3>Start images</h3>
-    <p>Drop an image on the box under the prompt, or click it to choose one. Sizing decides how the image meets the frame. Match sets the frame to the image's shape.</p>
+    <p>Drop an image on the box under the prompt, or click it to choose one. Sizing decides how the image meets the frame. Match sets the frame to the image's shape, at about the same size. Fit keeps the whole image and fills spare space with a blurred copy of it. Fill stretches the image to the frame. Crop fills the frame without stretching and cuts off what doesn't fit.</p>
     <p data-words="{Denoise decides how much of the start image is repainted. About 50% keeps the layout and colors and repaints the details. Lower stays closer to the image.|skip_steps decides how much of the start image survives. About half of steps keeps the layout and colors and repaints the details. Higher stays closer to the image.}"></p>
     <p data-words="{init_scale} pulls the render toward the start image at every step, using a comparison of how similar the two look. Higher follows the image more closely, and 0 turns it off. It uses a little more VRAM and only applies when there is a start image."></p>
     <h3>Memory and CPU</h3>
@@ -497,7 +476,7 @@
     <h3>Animation</h3>
     <p>Animation renders a clip one frame at a time. 2D moves a flat picture each frame. 3D flies a camera through the scene, with Depth Anything telling near from far, so 3D needs it from Models. Video Input repaints each frame of a video you drop on its box. Every frame after the first starts from the last one, and Frame skip % sets how much of it is kept. Higher is steadier and faster. 75 holds a scene while the camera moves, and 60 lets it keep reinventing itself. Video Input switches to 55, so the video gets repainted more. Frame skip keyframes in All settings can lower it around a prompt change, so the new prompt takes over sooner.</p>
     <p>For calmer, more painterly clips, try Step noise at about 0.3 under Sampling in All settings. It changes the first frame too.</p>
-    <p>Each move has a slider for a steady value, and keyframes for change over time: <code>0:(1.0), 60:(1.04), 120:(1.0)</code> eases in and out over 120 frames. Formulas of the frame t work too: <code>0:(1+0.02*sin(t/8))</code> sways. The curve button opens an editor where you can drag the keyframes.</p>
+    <p>Each move has a slider for a steady value, and keyframes for change over time: <code>0:(1.0), 60:(1.04), 120:(1.0)</code> eases in and out over 120 frames. Formulas of the frame t work too: <code>0:(1+0.02*sin(t/8))</code> sways. The curve button opens an editor: drag a point to change it, double-click empty space to add a keyframe, and double-click a point to remove it. Formulas typed in its text box show as hollow points that can't be dragged.</p>
     <p>The prompt box is the prompt at the first frame. Change the prompt at a frame adds another box with the frame it starts at, so a clip can travel from one idea to the next. Prompt fade in All settings blends one into the next.</p>
     <p>Hold colors keeps the light and color close to the first frame's, so long clips don't drift. Turbo repaints only every few frames and lets the camera move the frames between, which is much faster. Last frame as ghost lets Depth target and the ghost's light and dark hold each frame to the last, which is steadier. For Video Input, Blend last frame mixes the last finished frame into each new one, so the painting builds up over the clip, and it follows the video's own motion, so the paint moves with what moves. The first frame gets a first pass of its own, so the clip doesn't open on the plain video.</p>
     <p>Each clip is saved as PNG frames in a folder, an MP4 and an animated WebP, with a GIF if you choose. Stopping a clip still saves the video of the frames it has. The last frame shows in Images, and clicking it plays the clip.</p>
@@ -520,7 +499,7 @@
     <h3>Models</h3>
     <p>Setup downloads the main model. The others are optional and grayed out in the Model list until you download them from Models in All settings. All of them were tested at 512×512. The style models use about 2GB less VRAM than the main model and take a little over half the time.</p>
     <h3>Rendering on another PC</h3>
-    <p>To render on a PC with a GPU while you work on another, turn on Share this PC under Network in All settings on the PC with the GPU. It shows an address and a code. On the other PC, open the address in any browser, or type it into Render on another PC in Nano's own All settings, and type the code once. That PC then uses Nano as if it sat at the GPU PC, and renders, images and settings all live there. From the other PC, Browse and Add folder show the GPU PC's own drives, so handoff checkpoints, the partner's SD 1.5 file and upscaler folders are picked from what is on the GPU PC. Start images, videos and guide images are dropped onto the page and uploaded. Where images are saved, and opening Explorer, are set on the GPU PC itself.</p>
+    <p>To render on a PC with a GPU while you work on another, turn on Share this PC under Network in All settings on the PC with the GPU. It shows an address and a code. On the other PC, open the address in any browser, or type it into Render on another PC in Nano's own All settings, and type the code once. That PC then uses Nano as if it sat at the GPU PC, and renders, images and settings all live there. From the other PC, Browse and Add folder show the GPU PC's own drives, so handoff checkpoints, the partner's SD 1.5 file and upscaler folders are picked from what is on the GPU PC. Start images, videos and guide images are dropped onto the page and uploaded. Where images are saved, and opening Explorer, are set on the GPU PC itself. Windows may ask once whether Python can use private networks: choose Allow. A new code signs out every other PC.</p>
     <h3>Folders</h3>
     <p>All settings sets where images are saved and where to look for upscalers and checkpoints. You can download Real-ESRGAN x4plus from Models in All settings, or point Nano at a folder of your own.</p>
     <p><button type="button" id="showWelcome" class="link">Show the welcome screen again</button></p>
@@ -569,10 +548,9 @@
     <button type="button" id="curveDone" class="default">Done</button>
   </div>
   <div class="modal-body">
-    <canvas id="curveCanvas" width="780" height="320" aria-label="Keyframe curve"></canvas>
+    <canvas id="curveCanvas" width="780" height="320" aria-label="Keyframe curve" data-help="Drag a point to change it. Double-click empty space to add a keyframe, and double-click a point to remove it."></canvas>
     <input id="curveText" type="text" spellcheck="false" aria-label="Keyframes">
     <p id="curveError" class="error" role="alert" hidden></p>
-    <p class="hint">Drag a point to change it. Double-click empty space to add a keyframe, and double-click a point to remove it. Formulas of the frame t, such as 1+0.02*sin(t/8), can go in the text box. Their points show hollow and can't be dragged.</p>
   </div>
 </dialog>
 
@@ -584,11 +562,9 @@
     <button type="button" id="scheduleDone" class="default">Done</button>
   </div>
   <div class="modal-body">
-    <p id="scheduleAbout" class="hint"></p>
-    <canvas id="scheduleCanvas" width="780" height="300" aria-label="Schedule over the render"></canvas>
+    <canvas id="scheduleCanvas" width="780" height="300" aria-label="Schedule over the render" data-help="Drag a level up or down, or drag the line between two levels. Double-click a level to split it, and double-click a line to join its two sides."></canvas>
     <input id="scheduleText" type="text" spellcheck="false" aria-label="Schedule">
     <p id="scheduleError" class="error" role="alert" hidden></p>
-    <p class="hint">The render runs left to right. Drag a level up or down to change it, and drag the line between two levels to move the change. Double-click a level to split it there, and double-click a line to join its two sides. The text box takes the same schedule as text, such as [12]*400+[4]*600: 12 for the first 400 of 1000 parts, then 4.</p>
   </div>
 </dialog>
 

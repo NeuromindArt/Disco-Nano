@@ -164,6 +164,9 @@ input[type=file]::file-selector-button {
 }
 .tile-view { align-self: end; }
 .pick-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.pick-row select { flex: 1; min-width: 0; }
+.icon-button { flex: none; width: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.icon-button svg { width: 16px; height: 16px; }
 .segmented.names { width: 200px; }
 .context-menu {
   position: fixed; z-index: 50; min-width: 188px; max-width: 300px; padding: 4px;
@@ -180,8 +183,8 @@ input[type=file]::file-selector-button {
   position: fixed; z-index: 50; left: 50%; bottom: 40px; padding: 6px 12px; transform: translateX(-50%);
   color: var(--ink); background: var(--raised); border: 1px solid var(--line-control); border-radius: var(--radius-md);
 }
-.segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 2px; background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius-sm); }
-.segmented button { height: 24px; background: transparent; color: var(--ink-label); }
+.segmented { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 2px; background: var(--sunken); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.segmented button { height: 24px; min-width: 0; padding: 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: transparent; color: var(--ink-label); }
 .segmented button:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
 .segmented button[aria-pressed="true"] { background: var(--strong); color: var(--accent); }
 .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
@@ -233,6 +236,7 @@ body:not(.animating) .anim-only, body.animating .image-only { display: none !imp
 .card-body { display: flex; flex-direction: column; gap: 8px; padding: 2px 10px 12px; }
 .card-body > .hint, .card-body p { margin: 0; }
 .line { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 10px; align-items: center; min-height: 26px; }
+.line.stacked { grid-template-columns: minmax(0, 1fr); gap: 4px; }  /* for long names, such as checkpoint files */
 .line > .field-name, .slider-row > .field-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slider-row { display: grid; grid-template-columns: 116px minmax(0, 1fr) 58px; gap: 10px; align-items: center; min-height: 26px; }
 
@@ -501,7 +505,7 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
 /* Settings inside a card: the same rows as All settings, sized for the panel, help on hover. */
 .card-fields { display: flex; flex-direction: column; gap: 2px; }
 .card-fields .adv-field { grid-template-columns: 116px minmax(0, 1fr); gap: 10px; padding: 2px 0; align-items: center; }
-.card-fields .field-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-fields .field-name { line-height: 1.25; overflow-wrap: anywhere; }  /* long names wrap to a second line rather than being cut off */
 .hover-help .controls label.field-name[title], .hover-help .controls .field-name[title] { cursor: help; }
 .adv-field.changed .sched-sum, .card-fields .adv-field.changed select, .card-fields .adv-field.changed input[type="text"] { color: var(--accent); }
 .card-fields .adv-slider { grid-template-columns: minmax(0, 1fr) 58px; }
