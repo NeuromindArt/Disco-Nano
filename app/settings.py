@@ -82,8 +82,8 @@ FIELDS = [
 
     field("handoff_file", "", HANDOFF, "The full path of a Stable Diffusion 1.5 or SDXL checkpoint, a .safetensors file. It paints the start of every image or frame, and Disco finishes it. Empty is off."),
     field("handoff_share", 30, HANDOFF, "How much of the path from noise to picture the {handoff_file} paints before Disco takes over, in percent. 0 is Disco alone, and 100 leaves Disco only the finishing touch. About 30 keeps Disco's look on the checkpoint's layout. With a start image or in animation, it's a share of what would be repainted."),
-    field("handoff_denoise", 0, HANDOFF, "How much of the {handoff_file}'s picture Disco repaints, in percent, like Denoise for a start image. 0 carries on from exactly where the {handoff_file} stopped. With Handoff % at 60, 75 here has Disco repaint with 150 of 200 steps."),
-    field("handoff_finish", 0, HANDOFF, "After Disco, the {handoff_file} repaints this share of the finished image, in percent, to clean it up. 0 is off. About 20 to 35 keeps Disco's look. Works with Handoff % at 0, so the {handoff_file} only finishes. Still images only."),
+    field("handoff_denoise", 0, HANDOFF, "Denoise for Disco after the {handoff_file}: how much of its picture Disco repaints. 0 carries on from where the {handoff_file} stopped. Higher gives Disco more of the painting."),
+    field("handoff_finish", 0, HANDOFF, "Denoise for the {handoff_file} after Disco is done: it repaints this much of the finished image. 0 is off. 20 to 35 tidies details and keeps Disco's look. 100 replaces Disco's image. Still images only."),
     field("handoff_steps", 30, HANDOFF, "Steps for the {handoff_file}'s whole path. It takes only its share of them. Few-step models such as Lightning, Hyper or Turbo want 4 to 8."),
     field("handoff_guidance", 7.0, HANDOFF, "How closely the {handoff_file} follows the prompt. 5 to 8 suits most checkpoints, and 1 to 2 suits few-step models."),
     field("handoff_few_steps", False, HANDOFF, "Spaces the {handoff_file}'s steps the way Lightning, Hyper, Turbo and other few-step models expect."),
