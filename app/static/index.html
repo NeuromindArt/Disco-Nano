@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disco Diffusion Nano</title>
+<link rel="icon" href="icon.ico" sizes="any">
+<link rel="apple-touch-icon" href="icon-256.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="menubar">
+  <h1 class="brand">Disco Diffusion <span>Nano</span></h1>
+  <span id="remoteBadge" class="remote-badge" hidden></span>
+  <a id="backHome" class="link back-home" href="http://127.0.0.1:7861/" hidden title="Opens Disco Nano on the PC you're using, if it's running there">This PC's Nano</a>
+  <span class="spacer"></span>
+  <button type="button" id="advancedBtn" class="settings-btn" title="Every setting, searchable">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
+    All settings <span id="changedCount" class="value"></span>
+  </button>
+  <button type="button" id="helpBtn" class="icon-link" title="Help" aria-label="Help">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.6 2.6 0 0 1 5 1c0 1.8-2.5 2.2-2.5 3.8"/><path d="M12 17.2v.1"/></svg>
+  </button>
+  <a class="icon-link" href="https://neuromind.art" target="_blank" rel="noopener" title="neuromind.art" aria-label="Visit neuromind.art">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9S9.500 5.500 12 3z"/></svg>
+  </a>
+  <a class="icon-link" href="https://ko-fi.com/neuromindart" target="_blank" rel="noopener" title="Support on Ko-fi" aria-label="Support on Ko-fi">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M17 11h1.500a2.500 2.500 0 0 1 0 5H16.500"/><path d="M8 3v3M12 3v3"/></svg>
+  </a>
+</header>
+
+<div id="engineWarn" class="banner" hidden>
+  Another AI app is running. If it has a model loaded, it can use VRAM this render needs. Unload the model or close the app before rendering.
+</div>
+
+<main class="workspace">
+  <section class="dock controls" aria-label="Render settings">
+    <div class="panel-top">
+      <div class="segmented mode-toggle" role="group" aria-label="What to make">
+        <button type="button" data-make="image">Image</button>
+        <button type="button" data-make="animation">Animation</button>
+      </div>
+    </div>
+    <div class="panel-body">
+      <div class="field prompt-field">
+        <label class="field-name" for="prompt"><span data-words="{prompt}">Prompt</span><span class="anim-only"> at the first frame</span></label>
+        <textarea id="prompt" rows="5" placeholder="A beautiful painting of a lighthouse in a stormy sea, trending on artstation"></textarea>
+        <div id="promptChanges" class="prompt-changes anim-only"></div>
+        <button type="button" id="addPromptChange" class="default add-change anim-only">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          Change the prompt at a frame
+        </button>
+      </div>
+
+      <div class="start-block" id="startBlock">
+        <div class="field-name" data-words="{init_image}">Start image</div>
+        <div class="drop" id="initDrop" data-drop="init" tabindex="0" role="button" aria-label="Start image: drop an image or click to choose">
+          <div class="drop-empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="m21 16-5-5-9 9"/></svg>
+            <span>Drop an image, or click to choose. Optional.</span>
+          </div>
+          <img class="drop-image" alt="" hidden>
+          <span class="drop-name"></span>
+          <button type="button" class="drop-clear" title="Remove the start image" aria-label="Remove the start image" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <input type="file" id="initFile" accept="image/png,image/jpeg,image/webp" hidden>
+        <div id="initOptions" class="start-options">
+          <div class="line">
+            <span class="field-name">Sizing</span>
+            <div class="segmented" role="group" aria-label="Start image sizing">
+              <button type="button" data-init-fit="match" id="matchImage">Match</button>
+              <button type="button" data-init-fit="fit">Fit</button>
+              <button type="button" data-init-fit="fill">Fill</button>
+              <button type="button" data-init-fit="crop">Crop</button>
+            </div>
+          </div>
+          <p id="initFitHint" class="hint"></p>
+          <div class="slider-row" data-shown-names="plain"><label class="field-name" for="denoise">Denoise %</label><input type="range" data-for="denoise" min="5" max="100" step="5"><input id="denoise" class="readout" type="number" min="1" max="100" step="5"></div>
+          <div class="slider-row" data-shown-names="official" hidden><label class="field-name" for="skip_steps" data-words="{skip_steps}">skip_steps</label><input type="range" data-for="skip_steps" min="0" max="500" step="5"><input id="skip_steps" class="readout" type="number" min="0" step="5"></div>
+          <div class="slider-row"><label class="field-name" for="init_scale" data-words="{Strength|init_scale}" title="Start image strength">Strength</label><input type="range" data-for="init_scale" min="0" max="5000" step="100"><input id="init_scale" class="readout" type="number" min="0" step="100"></div>
+          <p class="hint" data-words="{Denoise sets how much of the image is repainted, and lower keeps more of it.|skip_steps sets how much of the image survives, and higher keeps more of it.} {init_scale} keeps pulling the render back toward the image at every step, and 0 turns that off."></p>
+        </div>
+      </div>
+
+      <section class="card anim-only" data-card="animation">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Animation</span><span class="card-sum" id="sum-animation"></span></button>
+        <div class="card-body">
+          <select id="animation_mode" hidden aria-hidden="true" tabindex="-1"></select>
+          <div class="segmented" role="group" aria-label="Kind of animation">
+            <button type="button" data-anim="2D">2D</button>
+            <button type="button" data-anim="3D">3D</button>
+            <button type="button" data-anim="Video Input">Video</button>
+          </div>
+          <p class="hint" id="animAbout"></p>
+          <div id="videoRow">
+            <div class="drop video" id="videoDrop" data-drop="video" tabindex="0" role="button" aria-label="Video: drop a video or click to choose">
+              <div class="drop-empty">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>
+                <span>Drop a video, or click to choose.</span>
+              </div>
+              <video class="drop-image" muted playsinline preload="metadata" hidden></video>
+              <span class="drop-name"></span>
+              <button type="button" class="drop-clear" title="Remove the video" aria-label="Remove the video" hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+              </button>
+            </div>
+            <input type="file" id="videoFile" accept="video/*,.mkv,.gif" hidden>
+            <input type="hidden" id="video_init_path">
+            <div class="slider-row"><label class="field-name" for="extract_nth_frame" data-words="{extract_nth_frame}">Every nth frame</label><input type="range" data-for="extract_nth_frame" min="1" max="10" step="1"><input id="extract_nth_frame" class="readout" type="number" min="1" max="10"></div>
+            <div class="slider-row"><label class="field-name" for="video_blend" data-words="{video_blend}">Blend last frame</label><input type="range" data-for="video_blend" min="0" max="0.9" step="0.05"><input id="video_blend" class="readout" type="number" min="0" max="0.9" step="0.05"></div>
+          </div>
+          <div class="slider-row"><label class="field-name" for="max_frames" data-words="{max_frames}">Frames</label><input type="range" data-for="max_frames" min="1" max="600" step="1"><input id="max_frames" class="readout" type="number" min="1" max="10000"></div>
+          <div class="slider-row"><label class="field-name" for="fps" data-words="{fps}">Frames per second</label><input type="range" data-for="fps" min="1" max="60" step="1"><input id="fps" class="readout" type="number" min="1" max="60"></div>
+          <div class="slider-row"><label class="field-name" for="in_between" data-words="{in_between}">In-between frames</label><input type="range" data-for="in_between" min="0" max="3" step="1"><input id="in_between" class="readout" type="number" min="0" max="3"></div>
+          <div class="slider-row"><label class="field-name" for="frames_skip_steps" data-words="{frames_skip_steps}">Frame skip %</label><input type="range" data-for="frames_skip_steps" min="30" max="90" step="5"><input id="frames_skip_steps" class="readout" type="number" min="0" max="95" step="5"></div>
+          <div id="cameraBlock">
+            <div class="group-label">Camera, per frame</div>
+            <div id="motionRows" class="motion"></div>
+          </div>
+          <div class="slider-row"><label class="field-name" for="color_hold" data-words="{color_hold}">Hold colors</label><input type="range" data-for="color_hold" min="0" max="1" step="0.1"><input id="color_hold" class="readout" type="number" min="0" max="1" step="0.1"></div>
+          <label class="check" id="turboCheck"><input type="checkbox" id="turbo_mode"> <span data-words="{turbo_mode} (repaints every few frames, much faster)">Turbo (repaints every few frames, much faster)</span></label>
+          <div class="slider-row" id="turboEvery"><label class="field-name" for="turbo_steps" data-words="{turbo_steps}">Turbo every</label><input type="range" data-for="turbo_steps" min="2" max="6" step="1"><input id="turbo_steps" class="readout" type="number" min="2" max="6"></div>
+          <label class="check"><input type="checkbox" id="frame_ghost"> <span data-words="{frame_ghost} (steadier)">Last frame as ghost (steadier)</span></label>
+        </div>
+      </section>
+
+      <section class="card" data-card="size">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Size</span><span class="card-sum" id="sum-size"></span></button>
+        <div class="card-body">
+          <div class="line">
+            <span class="field-name">Orientation</span>
+            <div class="segmented" role="group" aria-label="Orientation">
+              <button type="button" data-orientation="landscape">Horizontal</button>
+              <button type="button" data-orientation="portrait">Vertical</button>
+            </div>
+          </div>
+          <div class="line">
+            <span class="field-name">Width × height</span>
+            <div class="pair"><select id="width" aria-label="Width"></select><span class="times" aria-hidden="true">×</span><select id="height" aria-label="Height"></select></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" data-card="render">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Render</span><span class="card-sum" id="sum-render"></span></button>
+        <div class="card-body">
+          <label class="line"><span class="field-name">Look</span><select id="look"></select></label>
+          <p class="hint" id="lookAbout"></p>
+          <div class="slider-row"><label class="field-name" for="steps" data-words="{steps}">Steps</label><input type="range" data-for="steps" min="25" max="1000" step="25"><input id="steps" class="readout" type="number" min="25" max="1000" step="25"></div>
+          <div class="slider-row"><label class="field-name" for="clip_guidance_scale" data-words="{clip_guidance_scale}">Prompt strength</label><input type="range" data-for="clip_guidance_scale" min="1500" max="60000" step="500"><input id="clip_guidance_scale" class="readout" type="number" min="0" step="1000"></div>
+          <div class="slider-row seed-row"><label class="field-name" for="set_seed" data-words="{set_seed}">Seed</label><input type="range" data-for="set_seed" min="0" max="99999" step="1"><input id="set_seed" class="readout seed" type="text" inputmode="numeric" spellcheck="false" placeholder="Random"></div>
+          <div class="slider-row image-only"><label class="field-name" for="n_batches" data-words="{n_batches}">Images</label><input type="range" data-for="n_batches" min="1" max="20" step="1"><input id="n_batches" class="readout" type="number" min="1" max="100"></div>
+          <label class="line"><span class="field-name" data-words="{batch_name}">Folder name</span><input id="batch_name" maxlength="40"></label>
+        </div>
+      </section>
+
+      <section class="card" data-card="model">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Model</span><span class="card-sum" id="sum-model"></span></button>
+        <div class="card-body">
+          <div class="line">
+            <label class="field-name" for="diffusion_model" data-words="{diffusion_model}">Model</label>
+            <select id="diffusion_model"></select>
+          </div>
+          <p class="hint model-about"><span id="modelAbout"></span> <button type="button" id="getModels" class="link" hidden>Get more models</button></p>
+          <div class="group-label" data-words="{clip_models}">Prompt checkers</div>
+          <p class="hint">Each one compares the picture with your prompt. More of them add detail, VRAM and time.</p>
+          <div class="checks" id="clipChecks"></div>
+          <div class="group-label">Memory and speed</div>
+          <label class="check"><input type="checkbox" id="use_secondary_model"> <span data-words="{use_secondary_model} (faster, lower quality)">Secondary model (faster, lower quality)</span></label>
+          <label class="check"><input type="checkbox" id="exact_repeat"> Exact repeat (same seed, same image)</label>
+        </div>
+      </section>
+
+      <section class="card" data-card="handoff">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Handoff</span><span class="card-sum" id="sum-handoff"></span></button>
+        <div class="card-body">
+          <div class="line">
+            <label class="field-name" for="handoffPick" data-words="{handoff_file}">Handoff model</label>
+            <div class="pick-row"><select id="handoffPick"></select><button type="button" id="handoffBrowse" class="default local-only" title="Choose a checkpoint file on this PC">Browse</button></div>
+          </div>
+          <input type="hidden" id="handoff_file">
+          <div class="slider-row"><label class="field-name" for="handoff_share" data-words="{handoff_share}">Handoff %</label><input type="range" data-for="handoff_share" min="0" max="100" step="5"><input id="handoff_share" class="readout" type="number" min="0" max="100" step="5"></div>
+          <p class="hint">A Stable Diffusion 1.5 or SDXL checkpoint paints the start of each image or frame, and Disco finishes it. 0% is Disco alone, and about 30% keeps Disco's look on a sturdier layout. <span id="handoffWhere"></span></p>
+        </div>
+      </section>
+
+      <section class="card" data-card="tiles">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Tiles</span><span class="card-sum" id="sum-tiles"></span></button>
+        <div class="card-body">
+          <label class="line"><span class="field-name">Tiles</span><select id="tile_scale"></select></label>
+          <p class="hint">Builds a bigger image from tiles the size of the frame, so it needs no more VRAM.</p>
+          <div class="slider-row"><label class="field-name" for="tile_denoise">Tile denoise</label><input type="range" data-for="tile_denoise" min="0.1" max="1" step="0.05"><input id="tile_denoise" class="readout" type="number" min="0.1" max="1" step="0.05"></div>
+          <div id="tileMore" hidden>
+            <label class="line"><span class="field-name">Text start</span><select id="tile_start"></select></label>
+            <label class="check tile-view"><input type="checkbox" id="tile_whole_view"> Whole picture view</label>
+          </div>
+          <p id="tileNote" class="hint" hidden></p>
+        </div>
+      </section>
+
+      <section class="card" data-card="guides" id="guideSection">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Guide images</span><span class="card-sum" id="sum-guides"></span></button>
+        <div class="card-body">
+          <p class="hint">Images that steer the render without being painted over. Leave any of them empty.</p>
+          <div class="guides">
+            <div class="guide" id="ghostGuide">
+              <div class="field-name" data-words="{ghost_image}">Ghost image</div>
+              <div class="drop small" data-drop="ghost_image" tabindex="0" role="button" aria-label="Ghost image: drop an image or click to choose">
+                <div class="drop-empty"><span>Drop</span></div>
+                <img class="drop-image" alt="" hidden>
+                <button type="button" class="drop-clear" title="Remove" aria-label="Remove the ghost image" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+              </div>
+              <div class="hint">Layout</div>
+            </div>
+            <div class="guide" id="styleGuide">
+              <div class="field-name" data-words="{style_image}">Style image</div>
+              <div class="drop small" data-drop="style_image" tabindex="0" role="button" aria-label="Style image: drop an image or click to choose">
+                <div class="drop-empty"><span>Drop</span></div>
+                <img class="drop-image" alt="" hidden>
+                <button type="button" class="drop-clear" title="Remove" aria-label="Remove the style image" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+              </div>
+              <div class="hint">Texture and palette</div>
+            </div>
+            <div class="guide" id="promptGuide">
+              <div class="field-name" data-words="{image_prompts}">Image prompts</div>
+              <div class="drop small many" data-drop="image_prompts" tabindex="0" role="button" aria-label="Image prompts: drop images or a folder, or click to choose">
+                <div class="drop-empty"><span>Drop many</span></div>
+                <div class="drop-stack" hidden></div>
+                <span class="drop-count"></span>
+                <button type="button" class="drop-clear" title="Remove" aria-label="Remove the image prompts" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+              </div>
+              <div class="hint">What they share</div>
+            </div>
+          </div>
+          <input type="file" id="ghost_imageFile" accept="image/png,image/jpeg,image/webp" hidden>
+          <input type="file" id="style_imageFile" accept="image/png,image/jpeg,image/webp" hidden>
+          <input type="file" id="image_promptsFile" accept="image/png,image/jpeg,image/webp" multiple hidden>
+          <input type="hidden" id="image_prompts">
+          <div class="slider-row" id="imagePromptWeightRow" hidden><label class="field-name" for="image_prompt_weight" data-words="{image_prompt_weight}">Image prompt weight</label><input type="range" data-for="image_prompt_weight" min="-2" max="4" step="0.25"><input id="image_prompt_weight" class="readout" type="number" min="-10" max="10" step="0.25"></div>
+          <p class="hint">A ghost image guides the layout and a style image the texture and palette. Image prompts are a set of images whose shared subject, style or palette counts as one more prompt; ten to fifty that share one idea work best. Ghost and style strengths are under Experimental in All settings.</p>
+        </div>
+      </section>
+
+      <section class="card" data-card="lab" id="labSection">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Experiments</span><span class="card-sum" id="sum-lab"></span></button>
+        <div class="card-body">
+          <label class="check"><input type="checkbox" id="time_travel"> Time travel (cleaner subjects, about 35% slower)</label>
+          <div class="slider-row"><label class="field-name" for="prompt_graft">Prompt graft</label><input type="range" data-for="prompt_graft" min="0" max="10" step="0.5"><input id="prompt_graft" class="readout" type="number" min="0" max="20" step="1"></div>
+          <label class="line"><span class="field-name">Live ghost</span><select id="live_ghost"></select></label>
+          <div class="slider-row"><label class="field-name" for="depth_target">Depth target</label><input type="range" data-for="depth_target" min="0" max="3" step="0.1"><input id="depth_target" class="readout" type="number" min="0" max="3" step="0.1"></div>
+          <label class="check"><input type="checkbox" id="two_painters"> Two painters</label>
+          <label class="check"><input type="checkbox" id="borrow_attention"> Borrowed attention</label>
+          <label class="check"><input type="checkbox" id="detail_bands"> Broad shapes first</label>
+          <label class="check"><input type="checkbox" id="shaped_guidance"> <span data-words="Shaped {clip_guidance_scale}">Shaped Prompt strength</span></label>
+          <div class="slider-row"><label class="field-name" for="gradient_momentum">Push momentum</label><input type="range" data-for="gradient_momentum" min="0" max="0.95" step="0.05"><input id="gradient_momentum" class="readout" type="number" min="0" max="0.95" step="0.05"></div>
+          <div class="slider-row"><label class="field-name" for="evidence_map">Subject memory</label><input type="range" data-for="evidence_map" min="0" max="1" step="0.1"><input id="evidence_map" class="readout" type="number" min="0" max="1" step="0.1"></div>
+          <p class="hint">New ways of shaping the image, so results vary a lot from seed to seed. Help explains each one.</p>
+        </div>
+      </section>
+
+    </div>
+    <div class="panel-foot">
+      <p id="timeNote" class="time-note"></p>
+      <div class="actions">
+        <button type="button" id="renderBtn" class="primary">Render</button>
+        <button type="button" id="stopBtn" class="danger" hidden>Stop</button>
+      </div>
+      <p id="formError" class="error" role="alert" hidden></p>
+    </div>
+  </section>
+
+  <section class="stage" aria-label="Preview">
+    <div class="canvas">
+      <img id="stageImg" alt="" hidden>
+      <video id="stageVideo" controls loop muted playsinline hidden></video>
+      <div id="stageEmpty" class="empty">Your image will appear here as it renders.</div>
+    </div>
+    <div class="under-canvas">
+      <div id="progress" class="progress" hidden>
+        <div class="bar"><span id="barFill"></span></div>
+        <div class="progress-text">
+          <span id="progressMsg"></span>
+          <span id="progressNums" class="nums"></span>
+        </div>
+      </div>
+      <div id="resultBox" class="result" role="status" hidden></div>
+      <details id="logBox" class="log" hidden><summary>Log</summary><pre id="logText"></pre></details>
+      <div id="imageActions" class="image-actions" hidden>
+        <select id="upscaler" aria-label="Upscaler"></select>
+        <button type="button" id="upscaleBtn" class="default">Upscale</button>
+        <button type="button" id="reuseBtn" class="default">Reuse settings</button>
+        <button type="button" id="useInitBtn" class="default">Use as start image</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="dock gallery" aria-label="Finished images">
+    <div class="panel-tabs">
+      <span class="panel-tab">Images</span>
+      <div class="panel-tools">
+        <button type="button" id="newFolder" class="link">New folder</button>
+        <button type="button" id="openFolder" class="link">Open folder</button>
+        <button type="button" id="galleryToggle" class="icon-link" aria-controls="galleryBody">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="galleryBody" class="panel-body">
+      <div id="galleryGrid" class="folder-list"></div>
+      <p id="galleryEmpty" class="hint" hidden>Finished images are saved here.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="statusbar">
+  <div id="memPlan" class="meter vram">
+    <span>VRAM</span>
+    <div class="mem-track" id="vramPlan" role="img"></div>
+    <span id="vramText" class="value">–</span>
+  </div>
+  <span class="sep"></span>
+  <div id="ramMeter" class="meter ram">
+    <span>RAM</span>
+    <div class="mem-track" id="ramPlan" role="img"></div>
+    <span id="ramText" class="value">–</span>
+  </div>
+  <span class="sep"></span>
+  <div id="diskMeter" class="meter disk">
+    <span>Disk</span>
+    <div class="mem-track" id="diskPlan" role="img"></div>
+    <span id="diskText" class="value">–</span>
+  </div>
+  <span class="spacer"></span>
+  <span id="downloadState" class="value" hidden></span>
+  <span id="statusState"></span>
+</footer>
+
+<dialog id="advanced" class="modal" aria-label="All settings">
+  <div class="modal-head">
+    <h2>All settings</h2>
+    <input id="advSearch" type="search" placeholder="Search settings" aria-label="Search settings">
+    <button type="button" id="advReset" class="link">Reset all</button>
+    <button type="button" id="advClose" class="default">Done</button>
+  </div>
+  <div class="modal-body">
+    <section id="namesBox" class="folders" aria-label="Setting names">
+      <div class="folder-field">
+        <span class="adv-name">Setting names</span>
+        <div class="segmented names" role="group" aria-label="Setting names">
+          <button type="button" data-names="plain">Plain</button>
+          <button type="button" data-names="official">Official</button>
+        </div>
+        <div class="adv-help">Plain names are easier to follow. Official names match Disco Diffusion's own, for anyone who knows the notebook or its guides. Settings Nano added have one name. Renders are the same either way.</div>
+      </div>
+    </section>
+    <section id="lookBox" class="folders" aria-label="Accent color">
+      <div class="folder-field">
+        <span class="adv-name">Accent color</span>
+        <div class="swatches" id="accentSwatches" role="group" aria-label="Accent color"></div>
+        <div class="adv-help">Colors the Render button, changed values, the selected image and the progress bar. It's saved in this browser.</div>
+      </div>
+    </section>
+    <section id="networkBox" class="folders" aria-label="Network">
+      <div class="folder-field local-only">
+        <span class="adv-name">Share this PC</span>
+        <label class="check toggle"><input type="checkbox" id="shareToggle"> Let other PCs on this network render here</label>
+        <div id="shareInfo" class="share-info" hidden>
+          <div class="share-line"><span class="hint">Address</span><span id="shareAddress" class="value"></span></div>
+          <div class="share-line"><span class="hint">Code</span><span id="shareCode" class="value code"></span><button type="button" id="shareNewCode" class="link">New code</button></div>
+        </div>
+        <p id="shareError" class="error" role="alert" hidden></p>
+        <div class="adv-help">On the other PC, open the address in a browser and type the code once. Renders run on this PC's GPU, and images are saved here; the other PC sees them in Images and can save them. Windows may ask once whether Python can use private networks: choose Allow. A new code signs out every other PC.</div>
+      </div>
+      <div class="folder-field">
+        <label class="adv-name" for="remoteAddress">Render on another PC</label>
+        <form class="folder-row" id="remoteForm">
+          <input id="remoteAddress" type="text" spellcheck="false" placeholder="Its address, such as 192.168.1.20">
+          <button type="submit" class="default">Open</button>
+        </form>
+        <div class="adv-help">Turn on Share this PC on the PC with the GPU first. Its address and code are under Network in its All settings.</div>
+      </div>
+    </section>
+    <section id="foldersBox" class="folders" aria-label="Folders">
+      <div class="folder-field">
+        <label class="adv-name" for="outputDir">Save images to</label>
+        <div class="folder-row">
+          <input id="outputDir" type="text" spellcheck="false">
+          <button type="button" id="outputBrowse" class="default">Browse</button>
+        </div>
+        <div class="adv-help">New images go here, and the gallery shows this folder. Images already saved stay where they are.</div>
+      </div>
+      <div class="folder-field">
+        <label class="adv-name" for="upscaleDirs">Upscaler folders</label>
+        <div class="folder-row">
+          <textarea id="upscaleDirs" rows="2" spellcheck="false"></textarea>
+          <button type="button" id="upscaleBrowse" class="default">Add folder</button>
+        </div>
+        <div class="adv-help">One folder per line. Point this at any folder of ESRGAN, DAT or HAT models. Real-ESRGAN x4plus, under Models below, needs no folder.</div>
+      </div>
+      <div class="folder-field">
+        <label class="adv-name" for="checkpointDirs">Checkpoint folders</label>
+        <div class="folder-row">
+          <textarea id="checkpointDirs" rows="2" spellcheck="false"></textarea>
+          <button type="button" id="checkpointBrowse" class="default">Add folder</button>
+        </div>
+        <div class="adv-help">One folder per line. Stable Diffusion 1.5 and SDXL checkpoints here show in the Handoff list. They're read where they are, never copied.</div>
+      </div>
+      <p id="folderError" class="error" role="alert" hidden></p>
+    </section>
+    <details id="modelsBox" class="models-section">
+      <summary id="modelsSummary">Models</summary>
+      <div id="modelList"></div>
+      <p id="modelError" class="error" role="alert" hidden></p>
+    </details>
+    <div id="advBody"></div>
+  </div>
+</dialog>
+
+<dialog id="help" class="modal" aria-label="Help">
+  <div class="modal-head">
+    <h2>Help</h2>
+    <span class="spacer"></span>
+    <button type="button" id="helpClose" class="default">Done</button>
+  </div>
+  <div class="modal-body help">
+    <div class="about">
+      <img src="icon-256.png" alt="Disco Diffusion Nano" width="72" height="72">
+      <div>
+        <div class="about-name">Disco Diffusion <span>Nano</span></div>
+        <p>Disco Diffusion for 8GB GPUs, as a local app. Free and open source. <span id="aboutVersion"></span></p>
+        <p class="about-links">
+          <a href="https://github.com/NeuromindArt/Disco-Nano" target="_blank" rel="noopener">GitHub</a>
+          <a href="https://neuromind.art" target="_blank" rel="noopener">neuromind.art</a>
+          <a href="https://ko-fi.com/neuromindart" target="_blank" rel="noopener">Ko-fi</a>
+        </p>
+      </div>
+    </div>
+    <h3>Prompts</h3>
+    <p>Write one prompt per line, and all of them guide the image together. End a line with a weight to change how much it counts: <code>:2</code> counts double, and <code>:-1</code> steers away from it.</p>
+    <h3>Looks</h3>
+    <p>A look sets how the prompt shapes the picture, at any size. Changing one of its settings by hand shows Custom.</p>
+    <dl id="helpLooks"></dl>
+    <h3>Seeds and Exact repeat</h3>
+    <p>Seed 0 picks a new random seed for every render. Any other number starts from the same noise each time; slide it, or type any number up to 4294967295. A seed sets the starting noise, but the GPU adds tiny differences, so the same seed normally gives a similar start and a different image. Exact repeat removes those differences on this PC, at about 30% more time per step. Each image in a run has its own seed, so Reuse settings can make any of them again.</p>
+    <h3>Images</h3>
+    <p>Right-click the large image or any thumbnail to open it full size, copy it, save it, use it as a start image, reuse its settings, upscale it, or open its folder.</p>
+    <h3>Start images</h3>
+    <p>Drop an image on the box under the prompt, or click it to choose one. Sizing decides how the image meets the frame. Match sets the frame to the image's shape.</p>
+    <p data-words="{Denoise decides how much of the start image is repainted. About 50% keeps the layout and colors and repaints the details. Lower stays closer to the image.|skip_steps decides how much of the start image survives. About half of steps keeps the layout and colors and repaints the details. Higher stays closer to the image.}"></p>
+    <p data-words="{init_scale} pulls the render toward the start image at every step, using a comparison of how similar the two look. Higher follows the image more closely, and 0 turns it off. It uses a little more VRAM and only applies when there is a start image."></p>
+    <h3>Memory and CPU</h3>
+    <p>CPU threads in All settings limits how much of the CPU a render uses. More threads rarely make it faster, and the default of 4 keeps the PC responsive. Renders also run at below normal priority, so the desktop comes first.</p>
+    <p>The bars at the bottom read the same way. Gray on the left is what the rest of the PC uses. Color on the right of it is Disco: green on VRAM, blue on RAM, purple for its files on the disk. Before a render, the colored part is lighter and shows what the next render will take, so it grows as you add to it. While a render runs, it turns solid and shows what Disco really uses. Hover any part to see its size.</p>
+    <p>The striped end of VRAM is kept free so Windows can draw the screen. When a render won't fit in what is left, part of its working data moves to system RAM by itself, which is slower but works: that part leaves the green VRAM bar and shows green inside the RAM bar. Red means it's too big even then, so lower the size or use fewer prompt checkers. The secondary model is faster and lighter, at lower quality.</p>
+    <h3>Guide images</h3>
+    <p>Each box takes an image dropped on it, or click it to choose one. A ghost image guides the layout and a style image the texture and palette; their strengths are under Experimental in All settings.</p>
+    <p>Image prompts take many images at once: drop a set of images or a whole folder. They guide the render beside your text. Every prompt checker reads each image, and what the images have in common counts: a subject, a style, a palette, a mood. It's close to what an embedding does, but nothing is trained, so it takes seconds and works with any set. Ten to fifty images that share one idea work best. Image prompt weight sets how much they count beside a text line weighted 1, and below 0 steers away from them.</p>
+    <h3>Tiles</h3>
+    <p>Tiles builds a larger image from several renders at the frame size, so it needs no more VRAM than the frame does. Every tile takes each step in turn, and the overlaps are averaged before the next step, so neighbors settle on one image with no joins. Time grows with the number of tiles: 4 tiles take four times as long per step, 16 take sixteen times.</p>
+    <p data-words="With a start image, Tile denoise sets how much is repainted, and {skip_steps} isn't used. Your image can be any size, because it is resized to the final size first. With text only, Text start chooses how the picture begins. Split the noise paints at full size from the first step and uses {skip_steps}. Render first paints one image at the frame size and tiles it using Tile denoise."></p>
+    <p data-words="Whole picture view lets the {clip_lower} see each tile as part of the full image. Tiles use the ddim sampler, and symmetry doesn't apply."></p>
+    <h3>Animation</h3>
+    <p>Animation renders a clip one frame at a time. 2D moves a flat picture each frame. 3D flies a camera through the scene, with Depth Anything telling near from far, so 3D needs it from Models. Video Input repaints each frame of a video you drop on its box. Every frame after the first starts from the last one, and Frame skip % sets how much of it is kept. Higher is steadier and faster. 75 holds a scene while the camera moves, and 60 lets it keep reinventing itself. Video Input switches to 55, so the video gets repainted more. Frame skip keyframes in All settings can lower it around a prompt change, so the new prompt takes over sooner.</p>
+    <p>For calmer, more painterly clips, try Step noise at about 0.3 under Sampling in All settings. It changes the first frame too.</p>
+    <p>Each move has a slider for a steady value, and keyframes for change over time: <code>0:(1.0), 60:(1.04), 120:(1.0)</code> eases in and out over 120 frames. Formulas of the frame t work too: <code>0:(1+0.02*sin(t/8))</code> sways. The curve button opens an editor where you can drag the keyframes.</p>
+    <p>The prompt box is the prompt at the first frame. Change the prompt at a frame adds another box with the frame it starts at, so a clip can travel from one idea to the next. Prompt fade in All settings blends one into the next.</p>
+    <p>Hold colors keeps the light and color close to the first frame's, so long clips don't drift. Turbo repaints only every few frames and lets the camera move the frames between, which is much faster. Last frame as ghost lets Depth target and the ghost's light and dark hold each frame to the last, which is steadier. For Video Input, Blend last frame mixes the last finished frame into each new one, so the painting builds up over the clip, and it follows the video's own motion, so the paint moves with what moves. The first frame gets a first pass of its own, so the clip doesn't open on the plain video.</p>
+    <p>Each clip is saved as PNG frames in a folder, an MP4 and an animated WebP, with a GIF if you choose. Stopping a clip still saves the video of the frames it has. The last frame shows in Images, and clicking it plays the clip.</p>
+    <h3>Handoff</h3>
+    <p>Handoff lets a Stable Diffusion checkpoint you already have, SD 1.5 or SDXL, paint the start of every image or frame. It's not a start image: the checkpoint takes its share of the steps from noise, and Disco carries on from the exact point where it stopped, with its picture of the scene still blurry. The layout and subject come from the checkpoint, and the paint and detail from Disco.</p>
+    <p>Handoff % is the checkpoint's share of the path. 0% is Disco alone, about 30% keeps Disco's look, 50% keeps more of the checkpoint, and 100% leaves Disco only the finishing touch. With a start image or in animation, the checkpoint takes its share of what would be repainted, so every frame of a 2D, 3D or Video Input clip gets it.</p>
+    <p>The checkpoint waits in RAM and comes to the GPU only for its own steps. SD 1.5 fits beside Disco. SDXL is stored in 8 bits on cards under 12GB, which halves its memory, and takes about a minute to load. The first time, it downloads a few small configuration files. Handoff steps, prompt strength, the negative prompt and few-step models such as Lightning are under Handoff in All settings.</p>
+    <p>The Handoff list shows the checkpoints in your checkpoint folders. Browse picks a file anywhere on this PC and adds its folder, and Checkpoint folders in All settings holds the list.</p>
+    <h3>Experiments</h3>
+    <p>These change how the image forms. They're new, so results vary a lot from seed to seed, and they can't run with tiles, symmetry, plms or the secondary model. Whichever you choose first grays out the other, and hovering a grayed setting says why.</p>
+    <p>Time travel backs up and repeats some steps, so the painter can absorb the prompt's push. Subjects get cleaner, for about 35% more time.</p>
+    <p>Four experiments use a small text model, the partner, beside Disco. Get Tiny SD from Models in All settings, about 900MB.</p>
+    <p>Prompt graft adds the effect of your prompt straight into Disco's own decoder, which normally can't read text. Subjects often come out whole, and Disco's paint and color stay. About 3 is a good start. It adds about 0.6GB of VRAM and works only with the 512x512 model.</p>
+    <p>Live ghost lets the partner guide the picture's broad light and dark, and leaves color and detail to Disco. Sketch first paints a quick sketch before the render and takes it out of memory again, so it needs no extra VRAM during the render. Live keeps repainting during the render.</p>
+    <p>Depth target keeps near and far where the ghost has them. A small depth model reads the ghost once and then checks the render at every step, so it works with Live ghost or a Ghost image. About 1 is a good start, and it pairs well with Sketch first and Prompt graft. It adds about 0.1 to 0.25GB of VRAM and a few seconds. Get Depth Anything from Models in All settings, about 100MB.</p>
+    <p>Two painters shares every step between the two models. The partner owns the broad shapes, and Disco owns detail and finishes alone.</p>
+    <p>Borrowed attention gives Disco the partner's sense of which parts of the picture belong together. Subjects often improve and color often turns grayer. It works especially well with Time travel.</p>
+    <p>Push momentum goes wilder and more abstract as it rises. Broad shapes first, Subject memory and Shaped prompt strength give smaller changes.</p>
+    <h3>Models</h3>
+    <p>Setup downloads the main model. The others are optional and grayed out in the Model list until you download them from Models in All settings. All of them were tested at 512×512. The style models use about 2GB less VRAM than the main model and take a little over half the time.</p>
+    <h3>Rendering on another PC</h3>
+    <p>To render on a PC with a GPU while you work on another, turn on Share this PC under Network in All settings on the PC with the GPU. It shows an address and a code. On the other PC, open the address in any browser, or type it into Render on another PC in Nano's own All settings, and type the code once. That PC then uses Nano as if it sat at the GPU PC, and renders, images and settings all live there. Picking folders and opening Explorer only work on the GPU PC itself; from the other PC, drop files onto the page instead.</p>
+    <h3>Folders</h3>
+    <p>All settings sets where images are saved and where to look for upscalers and checkpoints. You can download Real-ESRGAN x4plus from Models in All settings, or point Nano at a folder of your own.</p>
+    <p><button type="button" id="showWelcome" class="link">Show the welcome screen again</button></p>
+    <h3>Every setting</h3>
+    <p>Setting names in All settings switches every name here between plain and official. Lowest and Highest are the ends of each setting's useful range. Going past them is likely to waste time or fail. Schedule settings give the value for one step, written over a 1000-step run: <code>[12]*400+[4]*600</code> means 12 for the first 400 and 4 for the last 600.</p>
+    <div id="helpSettings"></div>
+  </div>
+</dialog>
+
+<dialog id="welcome" class="modal" aria-label="Welcome">
+  <div class="modal-head">
+    <h2>Welcome to Disco Diffusion Nano</h2>
+  </div>
+  <div class="modal-body help">
+    <p>Choose where things go and what to download. You can change all of this later in All settings.</p>
+    <h3>Images</h3>
+    <div class="folder-row">
+      <input id="welcomeOutput" type="text" spellcheck="false" aria-label="Save images to">
+      <button type="button" id="welcomeOutputBrowse" class="default">Browse</button>
+    </div>
+    <div class="adv-help">Your images are saved here. Leave it as it is to use the default folder.</div>
+    <h3>Upscalers</h3>
+    <div id="welcomeUpscaler"></div>
+    <div class="folder-row">
+      <textarea id="welcomeUpscalers" rows="2" spellcheck="false" aria-label="Upscaler folders"></textarea>
+      <button type="button" id="welcomeUpscalersBrowse" class="default">Add folder</button>
+    </div>
+    <div class="adv-help">Already have upscalers? Add their folders here, one per line, or leave this empty.</div>
+    <h3>Models</h3>
+    <div id="welcomeModels"></div>
+  </div>
+  <div class="modal-foot">
+    <span id="welcomeTotal" class="value"></span>
+    <p id="welcomeError" class="error" role="alert" hidden></p>
+    <span class="spacer"></span>
+    <button type="button" id="welcomeStart" class="primary">Start</button>
+  </div>
+</dialog>
+
+<dialog id="curveDialog" class="modal curve" aria-label="Curve">
+  <div class="modal-head">
+    <h2 id="curveTitle">Curve</h2>
+    <span class="spacer"></span>
+    <label class="inline-field"><span class="field-name" data-words="{interp_spline}">Keyframe shape</span>
+      <select id="curveShape"><option>Linear</option><option>Cubic</option></select></label>
+    <button type="button" id="curveDone" class="default">Done</button>
+  </div>
+  <div class="modal-body">
+    <canvas id="curveCanvas" width="780" height="320" aria-label="Keyframe curve"></canvas>
+    <input id="curveText" type="text" spellcheck="false" aria-label="Keyframes">
+    <p id="curveError" class="error" role="alert" hidden></p>
+    <p class="hint">Drag a point to change it. Double-click empty space to add a keyframe, and double-click a point to remove it. Formulas of the frame t, such as 1+0.02*sin(t/8), can go in the text box. Their points show hollow and can't be dragged.</p>
+  </div>
+</dialog>
+
+<dialog id="scheduleDialog" class="modal curve" aria-label="Schedule">
+  <div class="modal-head">
+    <h2 id="scheduleTitle">Schedule</h2>
+    <span class="spacer"></span>
+    <button type="button" id="scheduleReset" class="link">Reset to default</button>
+    <button type="button" id="scheduleDone" class="default">Done</button>
+  </div>
+  <div class="modal-body">
+    <p id="scheduleAbout" class="hint"></p>
+    <canvas id="scheduleCanvas" width="780" height="300" aria-label="Schedule over the render"></canvas>
+    <input id="scheduleText" type="text" spellcheck="false" aria-label="Schedule">
+    <p id="scheduleError" class="error" role="alert" hidden></p>
+    <p class="hint">The render runs left to right. Drag a level up or down to change it, and drag the line between two levels to move the change. Double-click a level to split it there, and double-click a line to join its two sides. The text box takes the same schedule as text, such as [12]*400+[4]*600: 12 for the first 400 of 1000 parts, then 4.</p>
+  </div>
+</dialog>
+
+<div id="imageMenu" class="context-menu" role="menu" aria-label="Image actions" hidden></div>
+<div id="toast" class="toast" role="status" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+# Windows batch files need CRLF line endings, in clones and in release zips.
+*.bat text eol=crlf
+
+# Left out of release zips, which tools/make_release.py builds with git archive.
+docs/ export-ignore
+tools/ export-ignore
+.github/ export-ignore
+.gitattributes export-ignore
+.gitignore export-ignore

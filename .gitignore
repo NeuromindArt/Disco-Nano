@@ -1,0 +1,10 @@
+data/
+home.txt
+EXPERIMENTS.md
+bench/
+.claude/
+__pycache__/
+*.pyc
+.vscode/
+Thumbs.db
+dist/

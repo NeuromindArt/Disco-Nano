@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect to Disco Diffusion Nano</title>
+<link rel="icon" href="icon.ico" sizes="any">
+<link rel="stylesheet" href="style.css">
+<style>
+  body { align-items: center; justify-content: center; }
+  .connect { width: min(380px, calc(100vw - 32px)); padding: 24px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: var(--shadow-modal); }
+  .connect img { display: block; width: 56px; height: 56px; margin: 0 auto 12px; }
+  .connect h1 { margin: 0 0 8px; text-align: center; font-size: 14px; font-weight: 600; color: var(--ink-strong); }
+  .connect p { margin: 0 0 16px; color: var(--ink-body); text-align: center; }
+  .connect form { display: flex; gap: 8px; }
+  .connect input { font: 14px var(--font-mono) !important; letter-spacing: .15em; text-transform: uppercase; height: 32px !important; }
+  .connect .primary { flex: none; padding: 0 16px; }
+</style>
+</head>
+<body>
+<main class="connect">
+  <img src="icon-64.png" alt="">
+  <h1>Render on this PC</h1>
+  <p>Type the code from the PC that renders. It's in All settings, under Network, on that PC.</p>
+  <form id="form">
+    <input id="code" autocomplete="off" spellcheck="false" maxlength="12" placeholder="Code" aria-label="Code" autofocus>
+    <button class="primary" type="submit">Connect</button>
+  </form>
+  <p id="error" class="error" role="alert" hidden></p>
+</main>
+<script>
+"use strict";
+const code = document.getElementById("code");
+const error = document.getElementById("error");
+code.value = new URLSearchParams(location.search).get("code") || "";
+async function connect(e) {
+  e?.preventDefault();
+  error.hidden = true;
+  const res = await fetch("/api/connect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: code.value }) });
+  if (res.ok) { location.replace("/"); return; }
+  const body = await res.json().catch(() => ({}));
+  error.textContent = body.detail || "That didn't work. Try again.";
+  error.hidden = false;
+  code.select();
+}
+document.getElementById("form").addEventListener("submit", connect);
+if (code.value) connect();
+</script>
+</body>
+</html>

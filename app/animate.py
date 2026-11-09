@@ -1,0 +1,301 @@
+"""Animation: each frame starts from the last one, moved by the camera, and Disco repaints part of it.
+
+Written for Nano. The setting names follow Disco Diffusion's, so its guides still apply, but the code
+is new: the 3D camera reads depth with Depth Anything V2 Small instead of MiDaS and AdaBins.
+"""
+import math
+import os
+
+import torch
+import torch.nn.functional as F
+import torchvision.transforms.functional as TF
+from PIL import Image, ImageOps
+
+from keyframes import motion
+
+TRANSLATION_SCALE = 1 / 200  # Disco's 3D units, so its keyframe values move about as far here
+NEAR, FAR = 2.0, 20.0  # the depth range a scene is spread over, in the same units
+
+
+# Prompts over time ----------------------------------------------------------------------------------
+
+def mix(before, after, share):
+    """Prompt stats that count `before` by 1 - share and `after` by share, for a fade between sets."""
+    out = []
+    for a, b in zip(before, after):
+        out.append({"model": a["model"], "embeds": torch.cat([a["embeds"], b["embeds"]]),
+                    "weights": torch.cat([a["weights"] * (1 - share), b["weights"] * share])})
+    return out
+
+
+def stats_at(all_stats, frame, fade):
+    """The prompt stats for one frame. Each set fades in over `fade` frames from the set before it."""
+    current = max(i for i, (at, _) in enumerate(all_stats) if at <= frame)
+    at, stats = all_stats[current]
+    if current and fade and frame - at < fade:
+        return mix(all_stats[current - 1][1], stats, (frame - at + 1) / (fade + 1))
+    return stats
+
+
+# Camera ------------------------------------------------------------------------------------------
+
+def pixel_grid(height, width, device):
+    """Pixel centers, measured from the middle of the frame, in pixels."""
+    ys = torch.arange(height, device=device, dtype=torch.float32) + 0.5 - height / 2
+    xs = torch.arange(width, device=device, dtype=torch.float32) + 0.5 - width / 2
+    return torch.meshgrid(ys, xs, indexing="ij")
+
+
+def sample(image, gx, gy, cfg):
+    """Reads image at grid positions given in pixels from the middle, as one warp."""
+    height, width = image.shape[-2:]
+    grid = torch.stack([gx * 2 / width, gy * 2 / height], -1)[None]
+    mode = "bicubic" if cfg["sampling_mode"] == "bicubic" else "bilinear"
+    moved = F.grid_sample(image.float(), grid, mode=mode, padding_mode=cfg["padding_mode"], align_corners=False)
+    return moved.clamp(-1, 1)
+
+
+def warp_2d(image, cfg, zoom, angle, tx, ty):
+    """Zoom above 1 moves in, angle turns the picture counterclockwise, and translation moves the camera, in pixels."""
+    height, width = image.shape[-2:]
+    ys, xs = pixel_grid(height, width, image.device)
+    turn = math.radians(angle)
+    c, s = math.cos(turn), math.sin(turn)
+    gx = (c * xs - s * ys) / zoom + tx
+    gy = (s * xs + c * ys) / zoom + ty
+    return sample(image, gx, gy, cfg)
+
+
+def rotation(rx, ry, rz):
+    """A rotation matrix from angles in degrees around x, y and z."""
+    ax, ay, az = (math.radians(v) for v in (rx, ry, rz))
+    x = torch.tensor([[1, 0, 0], [0, math.cos(ax), -math.sin(ax)], [0, math.sin(ax), math.cos(ax)]])
+    y = torch.tensor([[math.cos(ay), 0, math.sin(ay)], [0, 1, 0], [-math.sin(ay), 0, math.cos(ay)]])
+    z = torch.tensor([[math.cos(az), -math.sin(az), 0], [math.sin(az), math.cos(az), 0], [0, 0, 1]])
+    return z @ y @ x
+
+
+def warp_3d(image, distance, cfg, move, turn):
+    """Moves a camera through the scene. Each new pixel looks up where its point was in the last frame.
+
+    The point's distance is read at the new pixel, which is close enough for the small steps of one frame.
+    move is (x, y, z) in Disco's units; z above 0 flies forward. turn is degrees around x, y and z.
+    """
+    height, width = image.shape[-2:]
+    ys, xs = pixel_grid(height, width, image.device)
+    focal = (height / 2) / math.tan(math.radians(cfg["fov"]) / 2)
+    z = distance
+    points = torch.stack([xs * z / focal, ys * z / focal, z], -1)
+    spin = rotation(*turn).to(image.device)
+    shift = torch.tensor(move, device=image.device, dtype=torch.float32) * TRANSLATION_SCALE
+    old = points @ spin.T + shift
+    depth = old[..., 2].clamp(min=1e-3)
+    gx, gy = focal * old[..., 0] / depth, focal * old[..., 1] / depth
+    behind = old[..., 2] <= 1e-3
+    gx, gy = gx.masked_fill(behind, 1e6), gy.masked_fill(behind, 1e6)  # off the frame, so padding fills it
+    return sample(image, gx, gy, cfg)
+
+
+class Camera:
+    """Moves the last frame for the next one."""
+
+    def __init__(self, cfg, frames, device, status, meter=None):
+        self.cfg = cfg
+        self.mode = cfg["animation_mode"]
+        self.path = motion(cfg, frames)
+        self.meter = None
+        if self.mode == "3D":
+            import depth  # the 3D camera needs to know how far each point is
+            self.meter = meter or depth.Depth(device, status)
+
+    def at(self, frame):
+        return {name: values[frame] for name, values in self.path.items()}
+
+    def distance(self, image):
+        """How far each pixel is, from Depth Anything's relative depth, spread between NEAR and FAR."""
+        near = self.meter.closeness(image.add(1).div(2))[0]
+        low, high = torch.quantile(near.flatten(), torch.tensor([0.02, 0.98], device=near.device))
+        share = ((near - low) / (high - low).clamp(min=1e-6)).clamp(0, 1)
+        return 1 / (share * (1 / NEAR - 1 / FAR) + 1 / FAR)
+
+    def move(self, image, frame, back=False):
+        """Moves the picture by one frame's camera step. back undoes the step, close enough for one frame."""
+        v = self.at(frame)
+        sign = -1 if back else 1
+        if self.mode == "2D":
+            return warp_2d(image, self.cfg, v["zoom"] ** sign, sign * v["angle"], sign * v["translation_x"],
+                           sign * v["translation_y"])
+        return warp_3d(image, self.distance(image), self.cfg,
+                       tuple(sign * v[k] for k in ("translation_x", "translation_y", "translation_z")),
+                       tuple(sign * v[k] for k in ("rotation_3d_x", "rotation_3d_y", "rotation_3d_z")))
+
+
+def sharpen(image, amount):
+    """An unsharp mask, which wins back the softness each resample adds over many frames."""
+    if not amount:
+        return image
+    blurred = TF.gaussian_blur(image, 5, 1.0)
+    return (image + amount * (image - blurred)).clamp(-1, 1)
+
+
+WHITE = (0.95047, 1.0, 1.08883)
+TO_XYZ = [[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]]
+
+
+def to_lab(image):
+    """-1 to 1 RGB into CIE Lab, where light and color can be matched apart."""
+    rgb = image.add(1).div(2).clamp(0, 1)
+    linear = torch.where(rgb <= 0.04045, rgb / 12.92, ((rgb + 0.055) / 1.055) ** 2.4)
+    xyz = torch.einsum("ij,bjhw->bihw", torch.tensor(TO_XYZ, device=image.device), linear)
+    xyz = xyz / torch.tensor(WHITE, device=image.device)[None, :, None, None]
+    f = torch.where(xyz > 0.008856, xyz.clamp(min=1e-8) ** (1 / 3), 7.787 * xyz + 16 / 116)
+    return torch.stack([116 * f[:, 1] - 16, 500 * (f[:, 0] - f[:, 1]), 200 * (f[:, 1] - f[:, 2])], 1)
+
+
+def from_lab(lab):
+    fy = (lab[:, 0] + 16) / 116
+    f = torch.stack([fy + lab[:, 1] / 500, fy, fy - lab[:, 2] / 200], 1)
+    xyz = torch.where(f > 0.206893, f ** 3, (f - 16 / 116) / 7.787)
+    xyz = xyz * torch.tensor(WHITE, device=lab.device)[None, :, None, None]
+    linear = torch.einsum("ij,bjhw->bihw", torch.linalg.inv(torch.tensor(TO_XYZ, device=lab.device)), xyz).clamp(0, 1)
+    rgb = torch.where(linear <= 0.0031308, linear * 12.92, 1.055 * linear.clamp(min=1e-8) ** (1 / 2.4) - 0.055)
+    return rgb.mul(2).sub(1).clamp(-1, 1)
+
+
+def match_histograms(source, reference):
+    """Gives each channel of source the reference's spread of values, keeping source's order of pixels."""
+    flat, ref = source.flatten(2), reference.flatten(2)
+    order = flat.argsort(-1)
+    rank = order.argsort(-1)  # where each pixel falls among its channel's values
+    wanted = ref.sort(-1).values
+    if wanted.shape[-1] != flat.shape[-1]:
+        wanted = F.interpolate(wanted, size=flat.shape[-1], mode="linear", align_corners=True)
+    return wanted.gather(-1, rank).view_as(source)
+
+
+def hold_colors(image, reference, strength):
+    """Matches the light and color of the reference frame, channel by channel in Lab, as Deforum's
+    color coherence does. This stops colors drifting or burning out over a long clip."""
+    if not strength or reference is None:
+        return image
+    lab = to_lab(image.float())
+    matched = match_histograms(lab, to_lab(reference.float()))
+    return from_lab(lab + strength * (matched - lab))
+
+
+def video_flow(before, after):
+    """Optical flow between two video frames: for each pixel of after, how far away it was in before."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        raise ValueError("Follow the video's motion needs OpenCV. Run setup again to add it.") from None
+    gray = [cv2.cvtColor(np.asarray(frame), cv2.COLOR_RGB2GRAY) for frame in (after, before)]
+    finder = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    return torch.from_numpy(finder.calc(gray[0], gray[1], None))
+
+
+def follow_flow(image, flow, cfg):
+    """Moves a frame along the video's own motion, so its paint travels with what moves."""
+    flow = flow.to(image.device)
+    ys, xs = pixel_grid(*image.shape[-2:], image.device)
+    return sample(image, xs + flow[..., 0], ys + flow[..., 1], cfg)
+
+
+# In-between frames -------------------------------------------------------------------------------
+
+def add_between(frames, count, folder, device, status):
+    """Writes count frames between each pair of painted ones into folder, and returns the whole list."""
+    import rife
+    smoother = rife.Smoother(device, status)
+    os.makedirs(folder, exist_ok=True)
+
+    def load(name):
+        return TF.to_tensor(Image.open(name).convert("RGB")).unsqueeze(0).mul(2).sub(1).to(device)
+
+    out, before = [], load(frames[0])
+    for n, name in enumerate(frames):
+        out.append(name)
+        if n + 1 == len(frames):
+            break
+        after = load(frames[n + 1])
+        for k, image in enumerate(smoother.between(before, after, count)):
+            path = os.path.join(folder, f"{n:05d}_{k + 1}.png")
+            TF.to_pil_image(image[0].add(1).div(2).clamp(0, 1).cpu()).save(path)
+            out.append(path)
+        before = after
+    return out
+
+
+# Video in and out --------------------------------------------------------------------------------
+
+def need_av(why):
+    try:
+        import av
+    except ImportError:
+        raise ValueError(f"{why} needs PyAV. Run setup again to add it.") from None
+    return av
+
+
+class VideoInput:
+    """Frames of a video file, every nth one, sized to the frame."""
+
+    def __init__(self, path, every, width, height, fit, size_image, limit):
+        if not path or not os.path.isfile(path):
+            raise ValueError("Video Input needs a video file. Choose one under Animation.")
+        av = need_av("Video Input")
+        self.frames = []
+        with av.open(path) as box:
+            stream = box.streams.video[0]
+            rate = stream.average_rate or stream.guessed_rate
+            self.fps = float(rate) / every if rate else None
+            for n, frame in enumerate(box.decode(stream)):
+                if n % every == 0:
+                    self.frames.append(size_image(frame.to_image().convert("RGB"), width, height, fit))
+                    if len(self.frames) >= limit:
+                        break
+        if not self.frames:
+            raise ValueError("No frames could be read from that video.")
+
+
+def save_video(frames, fps, path):
+    """Writes PNG frames into an H.264 MP4 that plays almost anywhere."""
+    av = need_av("MP4")
+    with Image.open(frames[0]) as first:
+        width, height = first.size
+    even = (width // 2 * 2, height // 2 * 2)  # H.264 in yuv420p needs even sides, and an odd Tile overlap gives odd ones
+    with av.open(path, "w") as box:
+        stream = box.add_stream("libx264", rate=round(fps))
+        stream.width, stream.height = even
+        stream.pix_fmt = "yuv420p"
+        stream.options = {"crf": "16", "preset": "slow"}
+        for name in frames:
+            frame = av.VideoFrame.from_image(Image.open(name).convert("RGB").crop((0, 0, *even)))
+            for packet in stream.encode(frame):
+                box.mux(packet)
+        for packet in stream.encode():
+            box.mux(packet)
+
+
+def save_animation(frames, fps, path, longest=None):
+    """Writes an animated WebP or GIF, chosen by the file's extension."""
+    with Image.open(frames[0]) as first:
+        width, height = first.size
+    # Every frame is held in RAM while encoding. A long clip at a large size is made smaller to fit in about 1.5GB;
+    # the MP4 keeps the full size.
+    budget = 1.5 * 2**30 / (len(frames) * width * height * 3)
+    if budget < 1:
+        side = int(max(width, height) * budget ** 0.5)
+        longest = min(longest, side) if longest else side
+    pictures = []
+    for name in frames:
+        picture = Image.open(name).convert("RGB")
+        if longest:
+            picture = ImageOps.contain(picture, (longest, longest), Image.LANCZOS)
+        pictures.append(picture)
+    duration = round(1000 / fps)
+    if path.lower().endswith(".gif"):
+        pictures = [p.quantize(256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG) for p in pictures]
+        pictures[0].save(path, save_all=True, append_images=pictures[1:], duration=duration, loop=0, disposal=1)
+    else:
+        pictures[0].save(path, save_all=True, append_images=pictures[1:], duration=duration, loop=0, quality=88, method=4)

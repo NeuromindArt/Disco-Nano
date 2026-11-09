@@ -1,0 +1,26 @@
+# Installed by setup.bat into a Python 3.12 environment. Keep it apart from other AI tools.
+# Pinned to the versions Nano was tested with, so a new install matches.
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.7.1+cu128
+torchvision==0.22.1+cu128
+
+# The renderer
+numpy==1.26.4
+lpips==0.1.4
+ftfy==6.3.1
+regex==2026.9.29
+tqdm==4.70.1
+pillow==13.0.0
+requests==2.34.2
+safetensors==0.8.0
+diffusers==0.42.1       # the partner model and Handoff
+transformers==5.22.2
+setuptools==80.10.2     # OpenAI CLIP imports pkg_resources
+
+# The app
+fastapi==0.162.0
+uvicorn==0.54.0
+spandrel==0.4.2         # upscalers
+av==19.0.2              # animation: reads and writes video
+opencv-python-headless==4.11.0.86  # animation: follows a video's motion
+einops==0.8.2
