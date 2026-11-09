@@ -391,9 +391,10 @@ straight line.
 
 - **With a start image**, **Tile denoise** sets how much is repainted, in place of Denoise. The
   image can be any size, because it is resized to the final size first.
-- **With text only**, **Text start** chooses how the picture begins. **Split the noise** paints at
-  full size from the first step and uses Denoise. **Render first** paints one image at the frame
-  size and then tiles it using Tile denoise, which tends to give larger shapes.
+- **With text only**, **Text start** chooses how the picture begins. **Render first**, the default,
+  paints one image at the frame size and then the tiles repaint it using Tile denoise. It keeps one
+  scene with large shapes, and 0.5 is a good start. **Split the noise** paints at full size from the
+  first step and uses Denoise. It is busier, and each tile can paint its own copy of the subject.
 - **Whole picture view** lets CLIP see each tile as part of the full image.
 - **Tile overlap**, under More settings in the Tiles card, is how many pixels neighbors share. The
   default is 96.

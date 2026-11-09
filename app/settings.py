@@ -72,9 +72,9 @@ FIELDS = [
     field("tile_scale", "Off", TILES, "Builds a larger image from several renders at the frame size. Time grows with the number of tiles.",
           options=["Off", "2x, 4 tiles", "3x, 9 tiles", "4x, 16 tiles"]),
     field("tile_denoise", 0.5, TILES, "How much each tile may change. Low keeps the picture, high paints something new."),
-    field("tile_start", "Split the noise", TILES,
-          "With no start image. Split the noise paints at full size from the first step. Render first paints one image at the frame size, then tiles it using Tile denoise, which tends to give larger shapes.",
-          options=["Split the noise", "Render first"]),
+    field("tile_start", "Render first", TILES,
+          "With no start image. Render first paints one image at the frame size, then tiles repaint it using Tile denoise, which keeps one scene with large shapes. Split the noise paints at full size from the first step, which is busier and can repeat the subject in each tile.",
+          options=["Render first", "Split the noise"]),
     field("tile_whole_view", True, TILES, "CLIP also sees each tile inside a small copy of the whole picture, which helps with one scene instead of one per tile."),
     field("tile_overlap", 96, TILES, "Pixels shared by neighboring tiles. More hides joins better and gives a slightly smaller image."),
 
