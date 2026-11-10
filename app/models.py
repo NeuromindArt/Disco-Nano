@@ -20,6 +20,15 @@ PARTNER_FILES = {
 }
 DEPTH = "depth-anything-small"
 RIFE = "rife-4.7"
+# Robust checkers (FARE, Schlarmann et al., MIT), pinned to the revisions Nano was tested with.
+ROBUST = {
+    "fare4-b16": ("chs20/FARE4-ViT-B-16-laion2B-s34B-b88K", "1e941d54ce261e19ee072f1c3d5af8670aa19c02",
+                  "0d432910d3e70ea6fe043662a9fa99472ae87dffef8b1ddd6f5383f96d6dff27", 0.6),
+    "fare2-l14": ("chs20/fare2-clip", "6bc37e8efa55395e2f2a413e7b140dc2808032cb",
+                  "9fb1f8759c89905809da8ce761a4b90e1c22beaaea7c68f3917647eeb0a230a7", 1.71),
+    "fare4-l14": ("chs20/fare4-clip", "8dff9a8a4534c89f6f4b51163569a92d864c4dbb",
+                  "eb4b067ab2e2d2b2849a1d477d91baf46c8ceb5faf561e5dd02ab7bf608b5156", 1.71),
+}
 DEPTH_URL = "https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf/resolve/5426e4f0f36572d16453bbda7a8389317b1bef99/"
 
 FILES = {
@@ -100,8 +109,15 @@ FILES = {
         "folder": "rife",
     },
 }
+# The Robust checker setting's choices, and open_clip's name for each network.
+ROBUST_CHOICES = {"FARE4 B/16": ("fare4-b16", "ViT-B-16"), "FARE2 L/14": ("fare2-l14", "ViT-L-14-quickgelu"),
+                  "FARE4 L/14": ("fare4-l14", "ViT-L-14-quickgelu")}
 
-DIFFUSION = [name for name in FILES if name not in ("secondary", PARTNER, DEPTH, UPSCALER, RIFE)]
+FILES.update({name: {"size_gb": size, "sha256": sha256, "folder": f"robust/{name}",
+                     "urls": [f"https://huggingface.co/{repo}/resolve/{revision}/open_clip_pytorch_model.bin"]}
+              for name, (repo, revision, sha256, size) in ROBUST.items()})
+
+DIFFUSION = [name for name in FILES if name not in ("secondary", PARTNER, DEPTH, UPSCALER, RIFE, *ROBUST)]
 
 # Small helpers that download when first needed and aren't listed in the app.
 HELPERS = {
@@ -122,6 +138,9 @@ LABELS = {
     PARTNER: "Tiny SD",
     DEPTH: "Depth Anything V2 Small",
     RIFE: "RIFE 4.7",
+    "fare4-b16": "Robust checker FARE4 B/16",
+    "fare2-l14": "Robust checker FARE2 L/14",
+    "fare4-l14": "Robust checker FARE4 L/14",
     "256x256_diffusion_uncond": "Classic 256",
     "pixelartdiffusion_expanded": "Pixel art, expanded",
     "pixel_art_diffusion_hard_256": "Pixel art, hard",
@@ -138,6 +157,9 @@ ABOUT = {
     MAIN: "The standard model and the best all-rounder.",
     PARTNER: "Tiny SD, the small text model behind Prompt graft, Live ghost, Two painters and Borrowed attention. It never paints the final image.",
     DEPTH: "Depth Anything V2 Small, which judges how near each part of the picture looks. Depth target needs it.",
+    "fare4-b16": "A robust checker for the Experiments card. Whole scenes and steady subjects, at almost no extra cost. By Schlarmann et al.",
+    "fare2-l14": "A larger robust checker. Slower, with bolder scenes. By Schlarmann et al.",
+    "fare4-l14": "The most robust of the large checkers. Slower, and pulls hardest toward shapes. By Schlarmann et al.",
     RIFE: "RIFE 4.7 by Zhewei Huang, which paints smooth in-between frames for animations. Without it, optical flow is used.",
     "256x256_diffusion_uncond": "An older general model. Slower and heavier than the main model at 512×512.",
     "pixelartdiffusion_expanded": "Pixel art with strong color.",

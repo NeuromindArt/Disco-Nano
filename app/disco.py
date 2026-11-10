@@ -26,6 +26,7 @@ from torch import nn
 from torch.nn import functional as F
 
 import animate
+import critic
 import depth
 import graft
 import keyframes
@@ -365,7 +366,7 @@ def load_secondary(hooks):
     return kept(("secondary",), build).to(device)
 
 
-def load_clip_models(cfg):
+def load_clip_models(cfg, status=print):
     weights = paths.local_settings().get("vit_l14_weights", [])
     loaded = []
     for key, name in CLIP_NAMES.items():
@@ -375,6 +376,9 @@ def load_clip_models(cfg):
                 return model.eval().requires_grad_(False)
 
             loaded.append(kept(("clip", key), build).to(device))
+    robust = cfg.get("robust_critic", "Off")
+    if robust != "Off":
+        loaded.append(kept(("clip", robust), lambda: critic.load_robust(robust, "cpu", status)).to(device))
     if not loaded:
         raise ValueError("Choose at least one CLIP model (prompt checker).")
     return loaded
@@ -437,27 +441,33 @@ def image_prompt_embed(model, files):
     return F.normalize(total, dim=-1)
 
 
-def encode_prompts(clip_models, prompts, cfg, image_embeds=None):
+def encode_prompts(clip_models, prompts, cfg, image_embeds=None, roles=None):
+    """roles, when prompts are routed by cut scale, says whether each line is subject or style."""
     stats = []
     for index, model in enumerate(clip_models):
-        embeds, weights = [], []
+        embeds, weights, kinds = [], [], []
         if image_embeds:
             embeds.append(image_embeds[index])
             weights.append(float(cfg["image_prompt_weight"]))
-        for prompt in prompts:
+            kinds.append(critic.BOTH)
+        for number, prompt in enumerate(prompts):
             text, weight = parse_prompt(prompt)
             embed = model.encode_text(clip.tokenize(text, truncate=True).to(device)).float()
+            kind = roles[number] if roles else critic.BOTH
             if cfg["fuzzy_prompt"]:
                 for _ in range(25):
                     embeds.append((embed + torch.randn(embed.shape, device=device) * cfg["rand_mag"]).clamp(0, 1))
                     weights.append(weight)
+                    kinds.append(kind)
             else:
                 embeds.append(embed)
                 weights.append(weight)
+                kinds.append(kind)
         weights = torch.tensor(weights, device=device)
         if weights.sum().abs() < 1e-3:
             raise ValueError("The prompt weights must not add up to 0.")
-        stats.append({"model": model, "embeds": torch.cat(embeds), "weights": weights / weights.sum().abs()})
+        stats.append({"model": model, "embeds": torch.cat(embeds), "weights": weights / weights.sum().abs(),
+                      **({"roles": torch.tensor(kinds)} if roles else {})})
     return stats
 
 
@@ -524,7 +534,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     clash = rules.conflicts(cfg)
     if clash:
         raise ValueError(clash[0])
-    trying = lab.wanted(cfg)
+    trying = lab.wanted(cfg) or critic.wanted(cfg)
     animating = cfg["animation_mode"] != "None"
     mirrored = cfg["use_horizontal_symmetry"] or cfg["use_vertical_symmetry"]
     if trying and (grid > 1 or secondary or mirrored or cfg["diffusion_sampling_mode"] != "ddim"):
@@ -552,15 +562,22 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     ic_pow = schedule(cfg["cut_ic_pow"])
     icgray_p = schedule(cfg["cut_icgray_p"])
 
-    clip_models = load_clip_models(cfg)
+    clip_models = load_clip_models(cfg, hooks.status)
     model, diffusion = load_unet(cfg, hooks)
     secondary_model = load_secondary(hooks) if secondary else None
     pictures = prompt_images(cfg["image_prompts"]) if float(cfg["image_prompt_weight"]) else []
     if pictures:
         hooks.status(f"Reading {len(pictures)} prompt images")
     image_embeds = [image_prompt_embed(m, pictures) for m in clip_models] if pictures else None
-    all_stats = [(at, encode_prompts(clip_models, lines, cfg, image_embeds)) for at, lines in sets]
+    judge = critic.Critic(cfg, schedule, seed) if critic.wanted(cfg) else None
+    if judge and judge.route != "Off":
+        routed = [(at, *critic.split_lines(lines, cfg["route_split"], parse_prompt)) for at, lines in sets]
+        all_stats = [(at, encode_prompts(clip_models, lines, cfg, image_embeds, roles)) for at, lines, roles in routed]
+    else:
+        all_stats = [(at, encode_prompts(clip_models, lines, cfg, image_embeds)) for at, lines in sets]
     stats = all_stats[0][1]
+    if judge:
+        judge.prepare_subjects(stats, critic.subject_text(cfg, sets[0][1], parse_prompt), clip.tokenize, device)
     memory.free_text_encoders(clip_models)
 
     start_image = cfg.get("init_image") or None
@@ -582,6 +599,8 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         text = ", ".join(parse_prompt(p)[0] for p in sets[0][1] if parse_prompt(p)[1] > 0)
         experiment.partner = partner.Partner(cfg["partner_model"], cfg["partner_file"], text, side_y, side_x,
                                              cfg["partner_follow"], device, hooks.status)
+        scales = critic.GRIDS.get(cfg["borrow_grids"], critic.GRIDS["All"])
+        experiment.partner.lengths = {(side_y // s) * (side_x // s) for s in scales}
         partner.install(experiment.partner)
         _after_render.append(partner.uninstall)
     if cfg["prompt_graft"]:
@@ -622,6 +641,9 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             at = 1000 - (int(t.item()) + 1)
             guidance = cfg["clip_guidance_scale"] * experiment.guidance[at] if experiment else cfg["clip_guidance_scale"]
             for stat in stats:
+                share = judge.model_weight(stat["model"], at) if judge else 1.0
+                if not share:
+                    continue  # a checker with no say at this step costs no time
                 for _ in range(cfg["cutn_batches"]):
                     cuts = MakeCutoutsDango(stat["model"].visual.input_resolution, int(overview[at]), int(innercut[at]),
                                             ic_pow[at], icgray_p[at], cfg["skip_augs"], cfg["exact_repeat"],
@@ -630,21 +652,31 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                     batch = normalize(cuts(x_in.add(1).div(2), whole))
                     total = int(overview[at]) + int(innercut[at])
                     chunk = memory.clip_chunk(stat["model"]) * n
+                    rows = judge.prompt_weights(stat, total, int(overview[at]), at) if judge else None
+                    weights = stat["weights"] if rows is None else rows[:, None, :]  # per cut when prompts are routed
+                    layout = judge is not None and judge.layout_on(at)
                     if chunk >= batch.shape[0]:
                         image_embeds = stat["model"].encode_image(batch).float()
                         dists = spherical_dist_loss(image_embeds.unsqueeze(1), stat["embeds"].unsqueeze(0))
                         dists = dists.view([total, n, -1])
-                        losses = dists.mul(stat["weights"]).sum(2).mean(0)
-                        x_in_grad += torch.autograd.grad(losses.sum() * guidance, x_in)[0] / cfg["cutn_batches"]
+                        if layout:
+                            x_in_grad += share * judge.layout_grad(stat, batch, dists, int(overview[at]), n, x_in, chunk, guidance,
+                                                                   at, rows) / cfg["cutn_batches"]
+                        losses = dists.mul(weights).sum(2).mean(0)
+                        x_in_grad += torch.autograd.grad(losses.sum() * guidance * share, x_in)[0] / cfg["cutn_batches"]
                     else:  # a few cuts at a time through a big CLIP, then one pass back through the cutting
                         leaf, cut_grad, parts = batch.detach().requires_grad_(), 0, []
                         for i in range(0, leaf.shape[0], chunk):
                             image_embeds = stat["model"].encode_image(leaf[i:i + chunk]).float()
                             part = spherical_dist_loss(image_embeds.unsqueeze(1), stat["embeds"].unsqueeze(0)).view([-1, n, len(stat["weights"])])
-                            loss = part.mul(stat["weights"]).sum(2).sum(0).sum() / total
-                            cut_grad = cut_grad + torch.autograd.grad(loss * guidance, leaf)[0]
+                            w = weights if rows is None else weights[i // n:i // n + part.shape[0]]
+                            loss = part.mul(w).sum(2).sum(0).sum() / total
+                            cut_grad = cut_grad + torch.autograd.grad(loss * guidance * share, leaf)[0]
                             parts.append(part.detach())
                         dists = torch.cat(parts)
+                        if layout:
+                            x_in_grad += share * judge.layout_grad(stat, batch, dists, int(overview[at]), n, x_in, chunk, guidance,
+                                                                   at, rows) / cfg["cutn_batches"]
                         x_in_grad += torch.autograd.grad(batch, x_in, cut_grad)[0] / cfg["cutn_batches"]
                     if cuts.evidence:
                         cuts.evidence.add(cuts.boxes, dists.mul(stat["weights"]).sum(2)[int(overview[at]):, 0])
@@ -652,6 +684,8 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                 x_in_grad = experiment.shape_push(x_in_grad, at)
                 if experiment.ghost:
                     x_in_grad = experiment.ghost.push(x_in, x_in_grad, at)
+            if judge:
+                x_in_grad = judge.subject_push(x_in, x_in_grad, at, normalize)
             sat_losses = torch.abs(x_in - x_in.clamp(min=-1, max=1)).mean()
             # Disco Diffusion measures range on pred, which x_in is made from, so its gradient with respect to x_in
             # is always zero and Color range does nothing. Measured on x_in, it pulls colors back into range.
@@ -801,6 +835,20 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                 if experiment.band_path == "Blend":  # the noise estimate changes with the mix, so the step stays small
                     sigma = cfg["eta"] * math.sqrt((1 - alpha_prev) / (1 - alpha)) * math.sqrt(1 - alpha / alpha_prev)
                     x = x - math.sqrt(max(1 - alpha_prev - sigma ** 2, 0)) * math.sqrt(alpha / (1 - alpha)) * moved
+            if judge and cfg["correct_steps"] and judge.correct_curve[at] and i > 0:
+                # Langevin steps at the new noise level, so the picture settles there before the next step. With
+                # Two painters they aim at both models' combined prediction, so the path samples both at once.
+                progress["t"] = i - 1
+                t_next = torch.tensor([i - 1], device=device)
+                for _ in range(int(cfg["correct_steps"])):
+                    with torch.no_grad():
+                        mine = diffusion.ddim_sample(one_pass, x, t_next, clip_denoised=cfg["clip_denoised"],
+                                                     cond_fn=cond_fn if cfg["correct_clip"] else None, model_kwargs={}, eta=0)["pred_xstart"]
+                        if helper and band:
+                            theirs = helper.denoise(mine, float(alpha_prev))
+                            mine = mine + experiment.share(theirs, mine, band)
+                        x = judge.corrector(x, mine, float(alpha_prev), float(cfg["correct_snr"]))
+                image = mine.detach()
             if j % cfg["display_rate"] == 0 or not i:
                 hooks.preview(to_image(image))
         if helper and needed and helper.z0 is not None and cfg["partner_keep_sketch"]:

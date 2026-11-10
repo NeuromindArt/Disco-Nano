@@ -629,7 +629,7 @@ def schema():
 @app.get("/api/models")
 def model_list():
     def kind(name):
-        if name in (models.PARTNER, models.DEPTH, models.RIFE):
+        if name in (models.PARTNER, models.DEPTH, models.RIFE, *models.ROBUST):
             return "partner"
         return "upscaler" if name == models.UPSCALER else "helper" if name == "secondary" else "diffusion"
     return {"models": [{"name": n, "label": models.LABELS.get(n, n), "kind": kind(n), "about": models.ABOUT[n],

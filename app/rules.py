@@ -9,14 +9,17 @@ from settings import DEFAULTS, LABELS
 
 # Experiments change the generation loop in ways tiles, symmetry, plms and the secondary model can't follow.
 EXPERIMENTS = ["time_travel", "prompt_graft", "live_ghost", "depth_target", "two_painters", "borrow_attention", "partner_model",
-               "detail_bands", "shaped_guidance", "gradient_momentum", "evidence_map", "ghost_image", "style_image", "frame_ghost"]
+               "detail_bands", "shaped_guidance", "gradient_momentum", "evidence_map", "ghost_image", "style_image", "frame_ghost",
+               "route_prompts", "layout_critic", "robust_critic", "one_subject", "correct_steps"]
 LOOP_CHANGES = ["tile_scale", "use_secondary_model", "use_horizontal_symmetry", "use_vertical_symmetry", "diffusion_sampling_mode"]
 PARTNER_USERS = ["prompt_graft", "live_ghost", "two_painters", "borrow_attention"]
 RESNETS = ["RN50", "RN101", "RN50x4", "RN50x16", "RN50x64"]
 VITS = ["ViTB32", "ViTB16", "ViTL14"]
 CHECKERS = RESNETS + VITS  # never reported as conflicts: they are blocked only to stop the last one going
 # Strengths of something else. Grayed out with it, but never a conflict of their own.
-PARAMETERS = {"style_strength", "ghost_structure", "ghost_crops", "handoff_keep", "n_batches", "partner_model"}
+PARAMETERS = {"style_strength", "ghost_structure", "ghost_crops", "handoff_keep", "n_batches", "partner_model", "subject_words"}
+# Settings whose off value is a word.
+OFF_WORDS = {"live_ghost", "route_prompts", "robust_critic"}
 
 
 def _on(cfg, name):
@@ -26,7 +29,7 @@ def _on(cfg, name):
         return value not in (None, "", "Off")
     if name == "diffusion_sampling_mode":
         return value == "plms"
-    if name == "live_ghost":
+    if name in OFF_WORDS:
         return value not in (None, "", "Off")
     if name == "partner_model":
         return False  # a choice, not a switch: it is only in the way when the partner is used
@@ -81,6 +84,9 @@ def blocked(cfg, downloaded=_have):
         block(["prompt_graft"], "Works only with the 512x512 model.")
     if _on(cfg, "prompt_graft"):
         block(["partner_model"], "Prompt graft needs Tiny SD.")
+    robust = models.ROBUST_CHOICES.get(cfg["robust_critic"])
+    if robust and not downloaded(robust[0]):
+        block(["robust_critic"], f"Get {models.LABELS[robust[0]]} from Models in All settings first.")
     if not downloaded(models.DEPTH):
         block(["depth_target"], "Get Depth Anything from Models in All settings first.")
     elif not (_on(cfg, "live_ghost") or _on(cfg, "ghost_image") or (animating and cfg["frame_ghost"])):
@@ -90,7 +96,9 @@ def blocked(cfg, downloaded=_have):
     if not resnets:
         block(["style_image", "style_strength"], "Needs a ResNet checker, such as RN50.")
     if not vits:
-        block(["ghost_structure", "ghost_crops"], "Needs a ViT checker.")
+        block(["ghost_structure", "ghost_crops", "one_subject"], "Needs a ViT checker.")
+    elif _on(cfg, "one_subject") and len(vits) == 1:
+        block(vits, "One subject needs a ViT checker.")
     if _on(cfg, "style_image") and len(resnets) == 1:
         block(resnets, "Style image needs a ResNet checker.")
     if _on(cfg, "ghost_image") and (cfg["ghost_structure"] or cfg["ghost_crops"]):

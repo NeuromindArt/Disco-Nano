@@ -237,6 +237,18 @@ class Partner:
         """What the partner has been painting, for comparison."""
         return self.decoder(self.z0).float().clamp(0, 1).mul(2).sub(1)
 
+    @torch.no_grad()
+    def denoise(self, image, alpha_bar):
+        """The partner's own clean picture for image, noised to Disco's level alpha_bar, in Disco's -1 to 1 pixels.
+        Its fixed noise keeps the answer steady from one call to the next."""
+        t = self.nearest(alpha_bar)
+        alpha = self.alphas[t]
+        z = self.encoder(image.add(1).div(2).clamp(0, 1).half())
+        noisy = alpha.sqrt() * z + (1 - alpha).sqrt() * self.noise
+        eps = self.predict(noisy, t, keep_maps=False)
+        z0 = (noisy - (1 - alpha).sqrt() * eps) / alpha.sqrt()
+        return self.decoder(z0).float().clamp(0, 1).mul(2).sub(1)
+
 
 _stock_attention = None
 
@@ -256,7 +268,8 @@ def install(partner):
         weight = torch.einsum("bct,bcs->bts", q * scale, k * scale)
         kind = weight.dtype
         weight = torch.softmax(weight.float(), dim=-1)
-        borrowed = partner.maps.get(length) if partner.strength else None
+        lengths = getattr(partner, "lengths", None)  # only these grids borrow, when it's set
+        borrowed = partner.maps.get(length) if partner.strength and (lengths is None or length in lengths) else None
         if borrowed is not None:
             weight = torch.lerp(weight, borrowed.float(), partner.strength)
         a = torch.einsum("bts,bcs->bct", weight.type(kind), v)

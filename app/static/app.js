@@ -7,7 +7,7 @@ const CLIPS = [["ViTB32", "ViT-B/32"], ["ViTB16", "ViT-B/16"], ["ViTL14", "ViT-L
 // Controls in the main panel. All settings shows the rest.
 const QUICK = ["steps", "skip_steps", "clip_guidance_scale", "n_batches", "set_seed", "diffusion_model",
   "use_secondary_model", "exact_repeat", "init_scale", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view",
-  "time_travel", "prompt_graft", "live_ghost", "depth_target", "two_painters", "borrow_attention", "detail_bands", "shaped_guidance", "gradient_momentum", "evidence_map", ...CLIPS.map((c) => c[0]),
+  "time_travel", "prompt_graft", "live_ghost", "depth_target", "two_painters", "borrow_attention", "detail_bands", "shaped_guidance", "gradient_momentum", "evidence_map", "layout_critic", "robust_critic", "one_subject", "correct_steps", "route_prompts", ...CLIPS.map((c) => c[0]),
   "animation_mode", "max_frames", "fps", "in_between", "frames_skip_steps", "video_init_path", "extract_nth_frame", "video_blend",
   "color_hold", "turbo_mode", "turbo_steps", "frame_ghost", "handoff_file", "handoff_share", "handoff_denoise", "handoff_finish", "image_prompts", "image_prompt_weight"];
 // Camera moves in the Animation section: the modes each one works in, and its slider's range.
@@ -35,7 +35,9 @@ const CARD_FIELDS = {
     "video_init_seed_continuity", "video_flow", "save_mp4", "save_webp", "save_gif"],
   guides: ["ghost_lowfreq", "ghost_structure", "ghost_crops", "ghost_curve", "style_strength"],
   lab: ["time_travel_curve", "graft_curve", "borrow_curve", "detail_curve", "guidance_curve", "painters_curve", "painters_strength",
-    "painters_color", "painters_path", "partner_model", "partner_file", "sketch_steps", "partner_every", "partner_follow", "partner_keep_sketch"],
+    "painters_color", "painters_path", "partner_model", "partner_file", "sketch_steps", "partner_every", "partner_follow", "partner_keep_sketch",
+    "borrow_grids", "layout_cuts", "layout_margin", "layout_curve", "robust_mode", "robust_curve", "subject_words", "one_subject_curve",
+    "correct_curve", "correct_snr", "correct_clip", "route_split", "route_curve"],
 };
 
 const EXACT_REPEAT_COST = 1.28;  // measured: 0.84 to 1.08 seconds per step at 512×512
@@ -637,8 +639,8 @@ function openCard(name, open = true) {
 function showSummaries() {
   const model = catalog?.find((m) => m.name === state.diffusion_model);
   const on = ["time_travel", "two_painters", "borrow_attention", "detail_bands", "shaped_guidance"].filter((n) => state[n]).length
-    + ["prompt_graft", "depth_target", "gradient_momentum", "evidence_map"].filter((n) => Number(state[n])).length
-    + (state.live_ghost && state.live_ghost !== "Off");
+    + ["prompt_graft", "depth_target", "gradient_momentum", "evidence_map", "layout_critic", "one_subject", "correct_steps"].filter((n) => Number(state[n])).length
+    + ["live_ghost", "robust_critic", "route_prompts"].filter((n) => state[n] && state[n] !== "Off").length;
   const kind = { "2D": "2D", "3D": "3D", "Video Input": "Video" }[state.animation_mode];
   const sums = {
     size: `${state.width} × ${state.height}`,
@@ -1006,6 +1008,18 @@ function updateFit() {
   showTime();
 }
 
+/* What the critic experiments add to each step, measured at 512×512 against 67 seconds of steps. */
+function criticCost() {
+  const share = (text) => (parseSchedule(text) || []).reduce((s, l) => s + (l.v > 0 ? l.n : 0), 0) / 1000;
+  let cost = 1;
+  if (Number(state.layout_critic)) cost *= state.layout_cuts === "All" ? 1.15 : 1.12;
+  if (String(state.robust_critic).includes("L/14")) cost *= 1.7;
+  else if (state.robust_critic && state.robust_critic !== "Off") cost *= 1.07;
+  if (Number(state.one_subject)) cost *= 1.04;
+  if (Number(state.correct_steps)) cost *= 1 + Number(state.correct_steps) * share(state.correct_curve) * (state.correct_clip ? 1.25 : 0.6);
+  return cost;
+}
+
 /* How long it should take, from the measured speeds. Only for the main model, which they were measured on. */
 function showTime() {
   const note = $("timeNote");
@@ -1013,7 +1027,7 @@ function showTime() {
   const mpx = (state.width * state.height) / 1e6;
   const { perStep } = fitFor(mpx, !!plan?.offload);
   const LOADING_SECONDS = 45;
-  const seconds = stepsRun() * afterHandoff() * perStep * (state.exact_repeat ? EXACT_REPEAT_COST : 1) * (state.time_travel ? TIME_TRAVEL_COST : 1)
+  const seconds = stepsRun() * afterHandoff() * perStep * (state.exact_repeat ? EXACT_REPEAT_COST : 1) * (state.time_travel ? TIME_TRAVEL_COST : 1) * criticCost()
     + LOADING_SECONDS + (usesPartner() ? BORROW_SECONDS : 0) + (handingOff() ? HANDOFF_SECONDS : 0);
   if (animating()) {
     const later = Math.max(state.steps - Math.round((state.steps * state.frames_skip_steps) / 100), 1);
@@ -1289,7 +1303,8 @@ const SCHEDULES = {
   cut_ic_pow: { top: 100, step: 0.5, low: 0.5, log: true }, cut_icgray_p: { top: 1, step: 0.05 },
   time_travel_curve: { top: 4, step: 1 }, guidance_curve: { top: 3, step: 0.05 }, detail_curve: { top: 1, step: 0.05 },
   painters_curve: { top: 128, step: 4 }, graft_curve: { top: 1, step: 0.05 }, borrow_curve: { top: 1, step: 0.05 },
-  ghost_curve: { top: 1, step: 0.05 },
+  ghost_curve: { top: 1, step: 0.05 }, route_curve: { top: 1, step: 0.05 }, layout_curve: { top: 1, step: 0.05 },
+  robust_curve: { top: 1, step: 0.05 }, one_subject_curve: { top: 1, step: 0.05 }, correct_curve: { top: 1, step: 1 },
 };
 const SCHEDULE_PART = /^\[(-?\d+(?:\.\d+)?)\]\*(\d+)$/;
 let sched = null;
@@ -2855,7 +2870,7 @@ async function init() {
   buildCardFields();
   showSchedulePreviews();
   applyNames();
-  for (const name of ["tile_scale", "tile_start", "live_ghost", "animation_mode"]) byName[name].options.forEach((o) => $(name).append(option(o)));
+  for (const name of ["tile_scale", "tile_start", "live_ghost", "animation_mode", "robust_critic", "route_prompts"]) byName[name].options.forEach((o) => $(name).append(option(o)));
   await loadModels();
   showGalleryPanel();
   // Saved settings with no orientation start in landscape.

@@ -48,7 +48,8 @@ RTX 3070 8GB.
 - Send any finished render back in as a start image
 - Right-click any image to open, copy, save, upscale or reuse it
 - Exact repeat, so the same seed and settings give the same image
-- Experiments that change how the image forms, including Time travel and Borrowed attention
+- Experiments that change how the image forms, including Time travel, Borrowed attention, a coherence
+  critic, robust checkers, One subject and corrector steps
 - Save images to any folder, with disk space shown beside VRAM
 - Upscaling with Real-ESRGAN x4plus or your own ESRGAN, DAT or HAT models
 - Every schedule drawn as a graph you can drag, in the card it belongs to
