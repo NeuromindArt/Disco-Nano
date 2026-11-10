@@ -63,7 +63,8 @@ RTX 3070 8GB.
 Every render below uses the same prompt, *A beautiful painting of a lighthouse in a stormy sea*, the
 same seed, 768×512 and 200 steps, and changes only the option beside it. The guide images are
 abstract paintings and paint photos from [Pexels](https://www.pexels.com), not lighthouses, and are
-shown under their option. Each render took 4 to 5.5 minutes on an RTX 3070 8GB.
+shown under their option. Each render took 4 to 6 minutes on an RTX 3070 8GB. They use Prompt
+strength 20000 and Step limit 0.09, the earlier defaults; Nano now starts a little softer.
 
 ### Starting points and guides
 
@@ -131,7 +132,7 @@ shown under their option. Each render took 4 to 5.5 minutes on an RTX 3070 8GB.
     <td width="60%"><img src="docs/options/painters.jpg" width="100%" alt="Two painters"></td>
   </tr>
   <tr>
-    <td width="40%" valign="top"><b>Borrowed attention</b><br>Gives Disco Tiny SD's sense of which parts of the picture belong together.</td>
+    <td width="40%" valign="top"><b>Borrowed attention</b><br>Gives Disco Tiny SD's sense of which parts of the picture belong together. It borrows only at Disco's coarse layers by default, which keeps Disco's color.</td>
     <td width="60%"><img src="docs/options/borrow.jpg" width="100%" alt="Borrowed attention"></td>
   </tr>
   <tr>
@@ -145,6 +146,26 @@ shown under their option. Each render took 4 to 5.5 minutes on an RTX 3070 8GB.
   <tr>
     <td width="40%" valign="top"><b>Push momentum 0.7</b><br>Carries part of each step's push into the next. Higher values are wilder and more abstract.</td>
     <td width="60%"><img src="docs/options/momentum.jpg" width="100%" alt="Push momentum 0.7"></td>
+  </tr>
+  <tr>
+    <td width="40%" valign="top"><b>Coherence critic 0.6</b><br>Each view is also scored with its pieces shuffled, and the picture is pushed so the shuffled view scores worse. The prompt then only counts when it comes from how the parts fit together, which gives whole subjects.</td>
+    <td width="60%"><img src="docs/options/layout.jpg" width="100%" alt="Coherence critic 0.6"></td>
+  </tr>
+  <tr>
+    <td width="40%" valign="top"><b>Robust checker: FARE4 B/16</b><br>A checker trained to resist tiny changes leads the first third, so its push draws real shapes instead of streaks. Then the usual checkers take over for the paint.</td>
+    <td width="60%"><img src="docs/options/robust.jpg" width="100%" alt="Robust checker: FARE4 B/16"></td>
+  </tr>
+  <tr>
+    <td width="40%" valign="top"><b>One subject 1</b><br>Finds where the subject is in the picture and keeps it in one place, so it isn't repeated. The subject words here are <i>a lighthouse</i>.</td>
+    <td width="60%"><img src="docs/options/one_subject.jpg" width="100%" alt="One subject 1"></td>
+  </tr>
+  <tr>
+    <td width="40%" valign="top"><b>Corrector steps 1</b><br>An extra small step after each step early in the render, which settles the picture before it moves on. No extra VRAM, for about 45% more time.</td>
+    <td width="60%"><img src="docs/options/correct.jpg" width="100%" alt="Corrector steps 1"></td>
+  </tr>
+  <tr>
+    <td width="40%" valign="top"><b>Prompt routing: Split</b><br>For the first half, the subject, the prompt's first phrase, is scored on whole-image views and the style on close-ups. The subject forms once, and the paint covers everything.</td>
+    <td width="60%"><img src="docs/options/route.jpg" width="100%" alt="Prompt routing: Split"></td>
   </tr>
 </table>
 
