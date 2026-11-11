@@ -104,9 +104,9 @@ def blocked(cfg, downloaded=_have):
 
     partner_named = cfg["partner_model"]
     if partner_named == "Tiny SD" and not downloaded(models.PARTNER):
-        block(PARTNER_USERS, "Get Tiny SD from Models in All settings first.")
+        block(PARTNER_USERS, "Get Tiny SD from Models in Settings first.")
     if partner_named == "SD 1.5 file" and not os.path.isfile(str(cfg["partner_file"] or "")):
-        block(PARTNER_USERS, "Set SD 1.5 file under Experimental in All settings first.")
+        block(PARTNER_USERS, "Set SD 1.5 file under Experimental in Settings first.")
     if partner_named != "Tiny SD":
         block(["prompt_graft"], "Needs Tiny SD as the partner model.")
     if cfg["diffusion_model"] != models.MAIN:
@@ -115,9 +115,9 @@ def blocked(cfg, downloaded=_have):
         block(["partner_model"], "Prompt graft needs Tiny SD.")
     robust = models.ROBUST_CHOICES.get(cfg["robust_critic"])
     if robust and not downloaded(robust[0]):
-        block(["robust_critic"], f"Get {models.LABELS[robust[0]]} from Models in All settings first.")
+        block(["robust_critic"], f"Get {models.LABELS[robust[0]]} from Models in Settings first.")
     if not downloaded(models.DEPTH):
-        block(["depth_target", "depth_control", "face_shape"], "Get Depth Anything from Models in All settings first.")
+        block(["depth_target", "depth_control", "face_shape"], "Get Depth Anything from Models in Settings first.")
     elif not (_on(cfg, "live_ghost") or _on(cfg, "ghost_image") or (animating and cfg["frame_ghost"])):
         block(["depth_target"], "Needs Live ghost, a Ghost image or Last frame as ghost.")
     resnets = [n for n in RESNETS if cfg[n]]
@@ -138,11 +138,11 @@ def blocked(cfg, downloaded=_have):
     if len(resnets) + len(vits) == 1:
         block(resnets + vits, "At least one checker is needed.")
     if not downloaded("secondary"):
-        block(["use_secondary_model"], "Get the secondary model from Models in All settings first.")
+        block(["use_secondary_model"], "Get the secondary model from Models in Settings first.")
     if animating:
         block(["handoff_keep", "n_batches", "handoff_finish"], "Not for animation.")
     if cfg["animation_mode"] == "3D" and not downloaded(models.DEPTH):
-        block(["animation_mode"], "3D needs Depth Anything. Get it from Models in All settings.")
+        block(["animation_mode"], "3D needs Depth Anything. Get it from Models in Settings.")
     return out
 
 

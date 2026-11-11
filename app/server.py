@@ -537,7 +537,7 @@ def new_job_dir(prefix):
 
 
 # ---- rendering for other PCs on the network ----
-# Off until turned on in All settings. Then Nano also listens on this PC's network addresses, and a browser
+# Off until turned on in Settings. Then Nano also listens on this PC's network addresses, and a browser
 # on another PC opens http://<address>:7861. It enters the code shown here once, and a cookie remembers it.
 LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
 KEY_COOKIE = "nano_key"
@@ -650,7 +650,7 @@ async def connect(request: Request):
     if code != share_code():
         _wrong[who] = _wrong.get(who, 0) + 1
         time.sleep(0.5)
-        raise HTTPException(403, "That code doesn't match. It's in All settings under Network on the PC that renders.")
+        raise HTTPException(403, "That code doesn't match. It's in Settings under Network on the PC that renders.")
     _wrong.pop(who, None)
     response = JSONResponse({"ok": True})
     response.set_cookie(KEY_COOKIE, code, max_age=60 * 60 * 24 * 365, httponly=True, samesite="strict")
@@ -793,7 +793,7 @@ async def render(request: Request):
                 raise HTTPException(400, "Handoff takes Stable Diffusion 1.5 and SDXL checkpoints, and this is another kind of model.")
         for name in needed:
             if name in models.FILES and not os.path.exists(models.path_of(name)):
-                raise HTTPException(400, f"{name} isn't downloaded yet. Get it from Models in All settings.")
+                raise HTTPException(400, f"{name} isn't downloaded yet. Get it from Models in Settings.")
         if body.get("resume_clip"):
             if settings.get("animation_mode", "None") == "None":
                 raise HTTPException(400, "Set Animation to carry on a clip.")
@@ -1266,7 +1266,7 @@ def update_from_searching():
 @app.get("/api/find-checkpoint-folders")
 def find_checkpoint_folders():
     """Checkpoint folders of ComfyUI and the Stable Diffusion web UIs on this PC that aren't in the list yet. It runs
-    only when asked: by the welcome screen, and by Find in other apps in All settings. The page adds what it wants."""
+    only when asked: by the welcome screen, and by Find in other apps in Settings. The page adds what it wants."""
     with _search_lock:
         found = find_other_apps()
     known = {os.path.normcase(os.path.normpath(d)) for d in CHECKPOINT_DIRS}
@@ -1574,7 +1574,7 @@ def open_when_ready():
     if LOCAL.get("share_on_network"):
         start_sharing()
         for address in _network["addresses"]:
-            print(f"Other PCs on the network can render here at http://{address}:{PORT} with the code in All settings.", flush=True)
+            print(f"Other PCs on the network can render here at http://{address}:{PORT} with the code in Settings.", flush=True)
     if not os.environ.get("NANO_NO_BROWSER"):
         webbrowser.open(URL)
 

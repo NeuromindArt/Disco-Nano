@@ -216,7 +216,7 @@ You can also clone this repository instead of downloading a release, and update 
 
 ### Folders
 
-**All settings** sets where images are saved and which folders hold your upscalers and Stable
+**Settings** sets where images are saved and which folders hold your upscalers and Stable
 Diffusion checkpoints. A welcome screen asks about all three the first time you open the app.
 Point Nano at any folder of ESRGAN, DAT or HAT models, or download Real-ESRGAN x4plus from the app.
 Nano also looks in `models/upscale_models` and `models/checkpoints` in the data folder. The welcome
@@ -229,11 +229,11 @@ the folders in the list.
 Like other local image generators, Nano can render on the PC with the GPU while you use it from
 another one.
 
-1. On the PC with the GPU, open **All settings**, and under **Network** turn on **Share this PC**.
+1. On the PC with the GPU, open **Settings**, and under **Network** turn on **Share this PC**.
    It shows an address, such as `http://192.168.1.20:7861`, and a code. Windows may ask once whether
    Python can use private networks. Choose Allow.
 2. On the other PC, open that address in any browser, or type it into **Render on another PC** in
-   Nano's own All settings. Type the code once, and the browser remembers it.
+   Nano's own Settings. Type the code once, and the browser remembers it.
 
 The other PC then uses Nano as if it sat at the GPU PC: renders run on that GPU, and images and
 settings are saved there. The menu bar says which PC you are rendering on. Start images, videos and
@@ -260,7 +260,7 @@ trigger a warning when they are running.
 ## Models
 
 Setup downloads the main 512×512 model and the secondary model. The others in the Model list are
-grayed out until you download them from the welcome screen or from Models in All settings. Each is
+grayed out until you download them from the welcome screen or from Models in Settings. Each is
 0.4GB to 2GB, and all were tested at 512×512 on an RTX 3070 8GB. The seven style models are the
 lightest, at about 3.7GB of VRAM and half the time of the main model.
 
@@ -352,7 +352,7 @@ start image, and the examples are under [What each option does](#starting-points
   its own colors and paint. **Ghost light and dark** sets how much of its broad light and dark carries
   over, 0.3 by default. **Ghost shapes** copies its shapes rather than its look, and **Ghost areas** asks
   each area to match the same area of the ghost as the prompt checkers see it. **Ghost curve** sets when
-  it counts, the first 70% of the render by default. They are under Experimental in All settings.
+  it counts, the first 70% of the render by default. They are under Experimental in Settings.
 - **Style image** lends its texture and palette, at **Style strength**, 1 by default.
 - **Image prompts** take a whole set of images, described below.
 
@@ -563,7 +563,7 @@ Tiles.
 
 ## Experiments
 
-The **Experimental** section in All settings holds ideas that change how the image forms. They're new,
+The **Experimental** section in Settings holds ideas that change how the image forms. They're new,
 so results vary a lot from seed to seed. They can't run with Tiles, symmetry, plms or the secondary
 model: whichever you choose first grays out the other, and hovering says why. Each one is shown on the
 same lighthouse under [What each option does](#experiments).
@@ -601,7 +601,7 @@ apart. These five change the checkers, need no partner, and can be combined.
 - **Coherence critic** shows the checkers each view twice, once with its pieces shuffled, and pushes the
   picture so the shuffled one scores worse. The prompt only counts when it comes from how the parts fit
   together, so subjects hold together and the paint stays. About 0.6 is a good start, for about 10% more
-  time and 0.8 to 1.2GB of VRAM, less with **Coherence views** set to Whole-image.
+  time and about 0.9GB of VRAM, or 0.65GB with **Coherence views** set to Whole-image.
 - **Robust checker** adds a checker trained to resist tiny changes, so its push draws real shapes instead
   of streaks. It leads the first third of the render, while the layout forms, then hands over to the usual
   checkers. Expect whole scenes and steadier subjects, with more muted color. FARE4 B/16 costs almost
@@ -691,7 +691,7 @@ one, and **Frame skip %** decides how much of it is kept.
 
 - **2D** zooms, turns and pans a flat picture.
 - **3D** flies a camera through the scene. Depth Anything V2 Small tells near from far, so 3D needs
-  it from Models in All settings, about 100MB.
+  it from Models in Settings, about 100MB.
 - **Video Input** repaints a video you drop on its box, frame by frame. **Blend last frame** mixes
   the last finished frame into each new one, moved along the video's own motion, so the paint
   travels with what moves.
@@ -728,7 +728,7 @@ settings blends one into the next.
 - **Last frame as ghost** lets the Experiments' ghost guidance hold each frame to the last one.
 - **In-between frames** adds up to 3 frames between each pair of painted ones, for smoother motion
   at no extra render time. The clip keeps its length, because the frame rate is raised to match.
-  RIFE 4.7 paints them if you get it from Models in All settings, about 21MB. Without it, optical
+  RIFE 4.7 paints them if you get it from Models in Settings, about 21MB. Without it, optical
   flow does, which can ghost on fast motion.
 - **Seamless loop** makes a clip that loops with no jump where it starts again.
   - **Paint back to the start** paints the last few frames more and more like the first, so the last
@@ -767,11 +767,11 @@ The last frame shows in Images with a play mark, and clicking it plays the clip.
   image onto a folder to move it there, with its settings, upscales and clip files. **New folder**
   makes one, and folders you make in Explorer show up too. **Folder name** under Render sets where
   new renders go.
-- **Keep models loaded**, in All settings and on by default, keeps the last render's models waiting in
+- **Keep models loaded**, in Settings and on by default, keeps the last render's models waiting in
   RAM, so the next render starts in a few seconds instead of about 20, or about 2 minutes with an SDXL
   handoff model. Changing a model loads only that one. Exact repeat and frames over about half a
   megapixel need a fresh render process, so switching those starts one. Closing the app frees it all.
-- **Save progress video**, in All settings, saves an MP4 of the picture forming beside each still
+- **Save progress video**, in Settings, saves an MP4 of the picture forming beside each still
   image, one frame per preview. **Preview every** is 1 step by default, so the preview and the video
   show every step.
 

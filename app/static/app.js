@@ -4,7 +4,7 @@ const STORE = "dd-ui-v1";
 const SIZES = [256, 320, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024, 1088, 1152, 1216, 1280];
 const CLIPS = [["ViTB32", "ViT-B/32"], ["ViTB16", "ViT-B/16"], ["ViTL14", "ViT-L/14"], ["RN50", "RN50"]];
 
-// Controls in the main panel. All settings shows the rest.
+// Controls in the main panel. Settings shows the rest.
 const QUICK = ["steps", "skip_steps", "clip_guidance_scale", "n_batches", "set_seed", "diffusion_model",
   "use_secondary_model", "exact_repeat", "init_scale", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view",
   "time_travel", "prompt_graft", "live_ghost", "depth_target", "two_painters", "borrow_attention", "detail_bands", "shaped_guidance", "gradient_momentum", "evidence_map", "layout_critic", "robust_critic", "one_subject", "correct_steps", "route_prompts", ...CLIPS.map((c) => c[0]),
@@ -81,6 +81,8 @@ const EXACT_REPEAT_COST = 1.28;  // measured: 0.84 to 1.08 seconds per step at 5
 const TIME_TRAVEL_COST = 1.35;  // measured at 512×512 with the default curve
 const BORROW_SECONDS = 20;  // measured with Tiny SD at 512×512, loading included
 const HANDOFF_SECONDS = 20;  // loading an SD 1.5 checkpoint and its own steps, at 512×512
+const HANDOFF_FRAME_SECONDS = 1.8;  // measured: each later clip frame's SD 1.5 steps and swap, at 512×512
+const ROUND_SECONDS = 0.25;  // measured: each View round past the first, per step, with the three default checkers
 /* A look sets how the prompt shapes the picture, apart from its size. Settings it leaves out go back to
    their defaults. Each was compared with the others on the same prompts and seeds. */
 const LOOKS = {
@@ -267,7 +269,7 @@ function settingOf(label) {
   return byName[id] ? id : null;
 }
 
-/* Resting the pointer on a setting's name shows its help, unless that is turned off in All settings. */
+/* Resting the pointer on a setting's name shows its help, unless that is turned off in Settings. */
 function showHoverHelp() {
   const on = state.hover_help !== false;
   if ($("hoverHelp")) $("hoverHelp").checked = on;
@@ -1329,17 +1331,22 @@ function showTime() {
   const note = $("timeNote");
   if (state.diffusion_model !== "512x512_diffusion_uncond_finetune_008100") { note.textContent = ""; return; }
   const mpx = (state.width * state.height) / 1e6;
-  const { perStep } = fitFor(mpx, !!plan?.offload);
+  // Each View round past the first runs the checkers again on new cutouts, which are the same size at any frame size.
+  const rounds = Math.max((Number(lookValue("cutn_batches")) || 1) - 1, 0) * ROUND_SECONDS;
+  const perStep = fitFor(mpx, !!plan?.offload).perStep + rounds;
   const LOADING_SECONDS = 45;
   // Small first paints the start of what is left after a handoff at its own size and speed.
   const small = smallFrame();
-  const smallPer = small ? fitFor((small.width * small.height) / 1e6, !!plan?.offload).perStep : perStep;
+  const smallPer = small ? fitFor((small.width * small.height) / 1e6, !!plan?.offload).perStep + rounds : perStep;
   const costs = (state.exact_repeat ? EXACT_REPEAT_COST : 1) * (state.time_travel ? TIME_TRAVEL_COST : 1) * criticCost();
   const seconds = firstSeconds(perStep, smallPer) * costs
     + LOADING_SECONDS + (usesPartner() ? BORROW_SECONDS : 0) + (handingOff() ? HANDOFF_SECONDS : 0);
   if (animating()) {
     const steps = Math.max(Number(state.steps) || 1, 1);
-    const perFrame = paintSeconds(afterHandoffSkip(frameSkip(steps)), perStep, smallPer) * costs;
+    // A handoff paints the start of every frame. The checkpoint paints at least 512×512 and at most 768×768.
+    const handArea = Math.min(Math.max(state.width * state.height, 512 * 512), 768 * 768) / (512 * 512);
+    const hand = handingOff() && Number(state.handoff_share) > 0 ? HANDOFF_FRAME_SECONDS * handArea : 0;
+    const perFrame = paintSeconds(afterHandoffSkip(frameSkip(steps)), perStep, smallPer) * costs + hand;
     note.textContent = `About ${fmtTime(perFrame)} a frame, ${fmtTime(seconds + perFrame * (paintedFrames() - 1))} in all`;
   } else {
     note.textContent = `About ${fmtTime(seconds)} an image`;
@@ -1538,7 +1545,7 @@ function showBlocked() {
 }
 
 // ---- all settings ----
-/* All settings holds how the app behaves. Settings that shape the picture are in the cards. */
+/* The Settings window holds every setting, and how the app behaves. The ones that shape the picture are also in the cards. */
 const APP_FIELDS = ["keep_models_loaded", "cpu_threads", "display_rate", "save_progress_video"];
 
 function buildAdvanced() {
@@ -1702,7 +1709,7 @@ function schedulePicture(name, text) {
   return { svg: `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><path class="sched-fill" d="${line}L${W} ${H}L0 ${H}Z"/><path class="sched-line" d="${line}"/>${marks}</svg>`, sum };
 }
 
-/* Every schedule's graph, in the cards and in All settings, redrawn from the saved settings. */
+/* Every schedule's graph, in the cards and in Settings, redrawn from the saved settings. */
 function showSchedulePreviews() {
   document.querySelectorAll(".sched-preview[data-field]").forEach((button) => {
     const name = button.dataset.field;
@@ -1929,7 +1936,7 @@ function schedTyped() {
   drawSchedule();
 }
 
-/* Every changed setting in All settings has a reset button. */
+/* Every changed setting in Settings has a reset button. */
 function showResets() {
   document.querySelectorAll(".adv-field").forEach((wrap) => {
     const name = wrap.querySelector("[data-field]")?.dataset.field;
@@ -1949,7 +1956,7 @@ function resetField(name) {
   }
 }
 
-/* Slider ends for All settings, where the useful range in Help doesn't suit a slider. */
+/* Slider ends for Settings, where the useful range in Help doesn't suit a slider. */
 const SLIDER_ENDS = { cpu_threads: [0, 16], display_rate: [1, 100] };
 
 /* [low, high, step] for a number setting's slider, or null when it has no sensible range. */
@@ -2062,7 +2069,7 @@ function advField(f, compact = false) {
   reset.hidden = !(f.name in state.advanced);
   reset.addEventListener("click", () => resetField(f.name));
   cell.append(reset);
-  wrap.append(cell);  // what it does shows on hover over its name, in the cards and in All settings
+  wrap.append(cell);  // what it does shows on hover over its name, in the cards and in Settings
   return wrap;
 }
 
@@ -2094,7 +2101,7 @@ function advChanged(f, input, wrap) {
   updateFit();
 }
 
-// Counts only All settings' own settings. Changes in the cards show in each card's title row.
+// Counts only Settings' own settings. Changes in the cards show in each card's title row.
 const changedLabel = () => {
   const n = APP_FIELDS.filter((name) => name in state.advanced).length;
   return n ? `(${n} changed)` : "";
@@ -2756,7 +2763,7 @@ function showCheckpoints() {
   select.replaceChildren(...options);
   select.value = current;
   $("handoffWhere").textContent = checkpointList.length ? ""
-    : isLocal() ? "Browse to a checkpoint, or add checkpoint folders in All settings." : "Browse to a checkpoint on the PC that renders, or add checkpoint folders in All settings.";
+    : isLocal() ? "Browse to a checkpoint, or add checkpoint folders in Settings." : "Browse to a checkpoint on the PC that renders, or add checkpoint folders in Settings.";
 }
 
 function pickCheckpoint(path) {

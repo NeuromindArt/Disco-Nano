@@ -36,6 +36,13 @@ OFFLOAD_RAM_BASE_GB, OFFLOAD_RAM_PER_MPX = 7.1, 8.0
 PARTNER = ("Tiny SD, the partner", 0.62, 1.2)  # label, VRAM, RAM
 DEPTH = ("Depth Anything", 0.1, 0.6)
 LPIPS = ("Start image strength", 0.05, 1.2)
+# Measured at 512x512 and 768x512 with the same result, so they don't grow with the frame.
+LAYOUT = {"All": ("Layout critic", 0.89, 0), "Whole-image": ("Layout critic, whole-image views", 0.65, 0)}
+ROBUST = {"FARE4 B/16": ("Robust checker", 0.16, 0.6), "FARE2 L/14": ("Robust checker", 0.57, 1.7),
+          "FARE4 L/14": ("Robust checker", 0.57, 1.7)}
+# The controls' finders run once on the control picture, before the steps, so they add nothing to the peak.
+FINDERS = {"pose_control": 0.24, "person_control": 0.19}  # RAM, as their files
+FACES_RAM_GB = 0.11
 HANDOFF_RAM_GB = {"sd15": 4.3, "sdxl": 19.5}  # loading SDXL reads it in 32 bits before storing it in 8
 HANDOFF_VRAM_GB = {"sd15": 0.0, "sdxl": 0.16}
 
@@ -57,10 +64,21 @@ def plan(settings, gpu, ram):
     extras, ram_extras = [], []
     if setting_list.uses_partner(cfg):
         extras.append(PARTNER)
-    if rules._on(cfg, "depth_target") or cfg["animation_mode"] == "3D":
+    if rules._on(cfg, "depth_target") or cfg["animation_mode"] == "3D" or float(cfg.get("depth_control") or 0) \
+            or float(cfg.get("face_shape") or 0):
         extras.append(DEPTH)
-    if cfg.get("init_image") and cfg["init_scale"]:
+    clip = cfg["animation_mode"] != "None"
+    if (cfg.get("init_image") and cfg["init_scale"]) or (clip and float(cfg.get("frames_scale") or 0)):
         extras.append(LPIPS)
+    if float(cfg.get("layout_critic") or 0):
+        extras.append(LAYOUT.get(cfg.get("layout_cuts"), LAYOUT["All"]))
+    if cfg.get("robust_critic") in ROBUST:
+        extras.append(ROBUST[cfg["robust_critic"]])
+    finders = sum(gb for name, gb in FINDERS.items() if float(cfg.get(name) or 0))
+    if any(float(cfg.get(n) or 0) for n in ("face_control", "face_shape", "face_detail")):
+        finders += FACES_RAM_GB
+    if finders:
+        extras.append(("Control finders", 0, finders))
     hand = str(cfg.get("handoff_file") or "")
     if any(setting_list.handoff_parts(cfg)):
         kind = "sdxl" if checkpoint_kind(hand) == "sdxl" else "sd15"

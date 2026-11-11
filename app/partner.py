@@ -125,7 +125,7 @@ class Partner:
             text_encoder = transformers.CLIPTextModel.from_pretrained(folder, subfolder="text_encoder", torch_dtype=torch.float16)
         else:
             if not os.path.isfile(file):
-                raise ValueError("Set the SD 1.5 file under Experimental in All settings.")
+                raise ValueError("Set the SD 1.5 file under Experimental in Settings.")
             self.unet, text_encoder = self.load_file(file, folder, diffusers, transformers)
         tokenizer = transformers.CLIPTokenizer.from_pretrained(folder, subfolder="tokenizer")
         self.unet.requires_grad_(False).eval().to(device)
