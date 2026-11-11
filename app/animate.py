@@ -103,6 +103,8 @@ class Camera:
         self.cfg = cfg
         self.mode = cfg["animation_mode"]
         self.path = motion(cfg, frames)
+        self.frames = frames
+        self.pingpong = cfg.get("loop_mode") == "Ping-pong"
         self.meter = None
         if self.mode == "3D":
             import depth  # the 3D camera needs to know how far each point is
@@ -118,10 +120,24 @@ class Camera:
         share = ((near - low) / (high - low).clamp(min=1e-6)).clamp(0, 1)
         return 1 / (share * (1 / NEAR - 1 / FAR) + 1 / FAR)
 
+    def step(self, frame):
+        """The keyframe step that frame takes, and whether it goes back along it. Ping-pong spends the first half
+        of the clip going out and the second coming back the same way, step by step, so the frame after the last
+        is the first again. An odd clip holds still for one frame at the turn, and the step is None."""
+        half = self.frames // 2
+        if not self.pingpong or frame <= half:
+            return frame, False
+        if frame <= self.frames - half:
+            return None, False
+        return self.frames + 1 - frame, True
+
     def move(self, image, frame, back=False):
         """Moves the picture by one frame's camera step. back undoes the step, close enough for one frame."""
-        v = self.at(frame)
-        sign = -1 if back else 1
+        step, reverse = self.step(frame)
+        if step is None:
+            return image
+        v = self.at(step)
+        sign = -1 if back != reverse else 1
         if self.mode == "2D":
             return warp_2d(image, self.cfg, v["zoom"] ** sign, sign * v["angle"], sign * v["translation_x"],
                            sign * v["translation_y"])
@@ -204,8 +220,9 @@ def follow_flow(image, flow, cfg):
 
 # In-between frames -------------------------------------------------------------------------------
 
-def add_between(frames, count, folder, device, status):
-    """Writes count frames between each pair of painted ones into folder, and returns the whole list."""
+def add_between(frames, count, folder, device, status, wrap=False):
+    """Writes count frames between each pair of painted ones into folder, and returns the whole list. With wrap,
+    the last frame gets in-betweens into the first too, for a clip that loops."""
     import rife
     smoother = rife.Smoother(device, status)
     os.makedirs(folder, exist_ok=True)
@@ -216,9 +233,9 @@ def add_between(frames, count, folder, device, status):
     out, before = [], load(frames[0])
     for n, name in enumerate(frames):
         out.append(name)
-        if n + 1 == len(frames):
+        if n + 1 == len(frames) and not wrap:
             break
-        after = load(frames[n + 1])
+        after = load(frames[(n + 1) % len(frames)])
         for k, image in enumerate(smoother.between(before, after, count)):
             path = os.path.join(folder, f"{n:05d}_{k + 1}.png")
             TF.to_pil_image(image[0].add(1).div(2).clamp(0, 1).cpu()).save(path)
@@ -240,7 +257,11 @@ def need_av(why):
 class VideoInput:
     """Frames of a video file, every nth one, sized to the frame."""
 
-    def __init__(self, path, every, width, height, fit, size_image, limit):
+    def __init__(self, path, every, width, height, fit, size_image, limit, pingpong=False):
+        """With pingpong, the frames run forward and then back, without repeating the two ends, so the clip comes
+        back to its first frame. limit counts both ways."""
+        if pingpong:
+            limit = (limit + 2) // 2
         if not path or not os.path.isfile(path):
             raise ValueError("Video Input needs a video file. Choose one under Animation.")
         av = need_av("Video Input")
@@ -256,6 +277,8 @@ class VideoInput:
                         break
         if not self.frames:
             raise ValueError("No frames could be read from that video.")
+        if pingpong and len(self.frames) > 2:
+            self.frames += self.frames[-2:0:-1]
 
 
 def save_video(frames, fps, path):

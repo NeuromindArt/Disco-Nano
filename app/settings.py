@@ -16,6 +16,7 @@ CLIP_MODELS = "More CLIP models"
 SYMMETRY = "Symmetry"
 TILES = "Tiles"
 LAB = "Experimental"
+CONTROLS = "Controls"
 HANDOFF = "Handoff"
 ANIMATION = "Animation"
 
@@ -53,6 +54,8 @@ FIELDS = [
     field("cut_innercut", "[4]*400+[12]*600", CUTS, "Close-up {cuts_lower} over the 1000-step schedule."),
     field("cut_ic_pow", "[1]*400+[2]*200+[4]*200+[10]*200", CUTS, "Higher makes close-ups smaller. The default starts with close-ups of every size, which lays out the scene, and tightens them toward the end for detail."),
     field("cut_icgray_p", "[0.2]*400+[0]*600", CUTS, "Share of close-ups made grayscale."),
+    field("views_fit", "Start images", CUTS, "When a picture starts partway, squeezes the {cuts_lower} schedules into the steps that are painted, so its {views_shapes} counts only those steps and it still lays out shapes before its detail. Start images fits a still's start image. Start images and clip frames also fits each frame of a clip, which repaints the video or the last frame more freely. Off keeps the schedules as drawn, so a picture that starts past 40% of the schedule gets only the detail part.", options=["Start images", "Start images and clip frames", "Off"]),
+    field("views_shapes", 40, CUTS, "The share of the steps, in percent, that the first 40% of the {cuts_lower} schedules is spread over: the part that lays out the scene. When {views_fit} fits the picture, it's a share of the painted steps. 40 keeps the schedules as drawn. Lower gives more steps to detail, and higher more to big shapes."),
 
     field("diffusion_sampling_mode", "ddim", SAMPLING, "ddim is the standard. plms can work with fewer steps.", options=["ddim", "plms"]),
     field("eta", 0.8, SAMPLING, "Noise added each step with ddim. 0 is smoother and 1 is grainier."),
@@ -88,7 +91,12 @@ FIELDS = [
     field("handoff_guidance", 7.0, HANDOFF, "How closely the {handoff_file} follows the prompt. 5 to 8 suits most checkpoints, and 1 to 2 suits few-step models."),
     field("handoff_few_steps", False, HANDOFF, "Spaces the {handoff_file}'s steps the way Lightning, Hyper, Turbo and other few-step models expect."),
     field("handoff_negative", "blurry, lowres, watermark, text", HANDOFF, "What the {handoff_file} steers away from. Prompt lines with a negative weight are added to it."),
-    field("handoff_keep", False, HANDOFF, "Also saves the {handoff_file}'s picture at the handoff beside each image. Not for animation."),
+    field("small_first", 0, HANDOFF, "Small first: Disco paints this share of each image smaller, in the frame's shape, and hands its still blurry picture to itself at full size. Disco's model learned at about 512 pixels, so a large frame can grow the subject more than once. The small start lays out one scene, and the full size adds the detail. 0 is off. About 25 suits 1280x768. No checkpoint needed."),
+    field("small_denoise", 0, HANDOFF, "Denoise for the full size after {small_first}: how much of the small picture it repaints. 0 carries on from where the small start stopped, and so does anything below 100 minus {small_first}. Higher gives the full size more of the layout: 85 with {small_first} at 25 starts it at step 31 of 200."),
+    field("small_hold", 0.0, HANDOFF, "After {small_first}, holds the full-size render's broad shapes and colors to the small picture while the full size adds detail, so a second subject can't grow in the empty areas. Fine detail is left free. About 0.5 is a good start. 0 is off."),
+    field("small_hold_curve", "[1]*500+[0]*500", HANDOFF, "How much {small_hold} applies, over the 1000-step schedule. The default holds until halfway, then lets go for the detail."),
+    field("small_side", 768, HANDOFF,"The longer side of the {small_first} start, in pixels. The shorter side follows the frame's shape. It does nothing on frames no larger than this."),
+    field("handoff_keep", False, HANDOFF,"Also saves the {handoff_file}'s picture at the handoff beside each image. Not for animation."),
 
     field("animation_mode", "None", ANIMATION, "2D moves a flat picture. 3D flies a camera through the scene, using Depth Anything to tell near from far. Video Input repaints every frame of a video.",
           options=["None", "2D", "3D", "Video Input"]),
@@ -119,6 +127,9 @@ FIELDS = [
     field("extract_nth_frame", 2, ANIMATION, "Video Input uses every nth frame of the video. 1 uses all of them."),
     field("video_init_seed_continuity", True, ANIMATION, "Video Input. Every frame starts from the same noise, which flickers less."),
     field("in_between", 0, ANIMATION, "Adds this many frames between each pair of painted frames, so motion is smoother. The clip keeps its length, because {fps} is multiplied to match. RIFE paints them if you get it from Models in All settings. Otherwise optical flow does, which can ghost on fast motion. 0 is off."),
+    field("loop_mode", "Off", ANIMATION, "Makes the clip loop with no jump where it starts again. Paint back to the start paints the last {loop_frames} frames more and more like the first, for motion that already comes back to where it began, such as a camera moving on a sin formula. Ping-pong plays the video, or the camera's moves, forward and then back, so the motion ends where it began, and the way back is painted fresh. With {in_between}, the last frame gets in-betweens into the first too.",
+          options=["Off", "Paint back to the start", "Ping-pong"]),
+    field("loop_frames", 6, ANIMATION, "With {loop_mode}, how many of the last frames are painted back toward the start, more each frame. More is smoother and spends more of the clip coming back."),
     field("video_blend", 0.4, ANIMATION, "Video Input. Mixes the last finished frame into each new one, so the painting builds up over the clip instead of starting again from the video every frame. With {video_flow} on, the paint moves with the video. 0 is off."),
     field("video_flow", True, ANIMATION, "Video Input. Moves the last finished frame along with the video's own motion before {video_blend} mixes it in, so paint travels with what moves instead of trailing."),
     field("turbo_mode", False, ANIMATION, "2D and 3D. Only every few frames is repainted, and the camera moves the frames between. Much faster."),
@@ -142,6 +153,20 @@ FIELDS = [
     field("detail_curve", "[0.2]*500+[1]*500", LAB, "How much fine detail the prompt's push keeps, over the 1000-step schedule. 0 keeps only broad shapes."),
     field("live_ghost", "Off", LAB, "The partner model supplies the ghost. Sketch first paints it before the render. Live keeps repainting it during the render.",
           options=["Off", "Sketch first", "Live"]),
+    field("control_image", "", CONTROLS, "For a still, the picture whose outlines, depth, pose and people the render follows, or drop one on Control image under Controls. Empty uses the start image. A clip doesn't use it: it follows each frame of its video, or the frame each repaint starts from."),
+    field("edge_control", 0.0, CONTROLS, "Holds the control picture's outlines. It only asks for an outline where the control has one, so plain areas stay free for the prompt to paint. About 0.5 is a good start. 0 is off."),
+    field("depth_control", 0.0, CONTROLS, "Holds the control picture's near and far, so the same things stand in front. About 0.5 is a good start. Needs Depth Anything from Models in All settings. 0 is off."),
+    field("pose_control", 0.0, CONTROLS, "Finds the people in the control picture and holds a body in each one's pose, whatever it is painted as. About 0.5 is a good start. Downloads Keypoint R-CNN, 0.24GB, the first time. 0 is off."),
+    field("person_control", 0.0, CONTROLS, "Cuts out the people in the control picture and holds their silhouettes, clothes and broad colors, while everything around them is painted freely. Fine detail inside them stays free too, so the prompt can still paint over them. About 0.5 is a good start. Downloads Mask R-CNN, 0.19GB, the first time. 0 is off."),
+    field("face_control", 0.0, CONTROLS, "Finds the faces in the control picture and holds each one's features: where the eyes, nose and mouth are, and their light and dark, so the face and its expression stay while its skin, color and brushwork are painted freely. About 0.5 is a good start. Downloads RetinaFace, 0.11GB, the first time. 0 is off."),
+    field("face_shape", 0.0, CONTROLS, "Holds each face's outline and its near and far from the control picture, measured close up, so the face keeps its own shape and a turned head keeps more of its turn, most of all with a Control image. Where the eyes look is too fine to hold. It pushes beside the prompt, as Edge and Depth control do, so the features are still painted freely, though the skin comes out a little smoother. Use it with {face_control} or on its own. About 0.5 is a good start; at 1 it can leave bright patches. Needs Depth Anything from Models in All settings, and downloads RetinaFace, 0.11GB, the first time. 0 is off."),
+    field("face_detail", 0, CONTROLS, "Close-ups each face gets at every step, beside the usual ones, so faces are painted with more care. Faces come from the control picture, or with none, from the render itself once one starts to show, so this works with text alone. About 2 is a good start, at about 5% more time. 0 is off."),
+    field("edge_curve", "[1]*800+[0]*200", CONTROLS, "How much {edge_control} counts, over the 1000-step schedule. Outlines still matter while the detail forms, so it holds late."),
+    field("depth_curve", "[1]*600+[0]*400", CONTROLS, "How much {depth_control} counts, over the 1000-step schedule. Near and far are settled early, so it lets go sooner."),
+    field("pose_curve", "[1]*700+[0]*300", CONTROLS, "How much {pose_control} counts, over the 1000-step schedule."),
+    field("face_curve", "[1]*500+[0]*500", CONTROLS, "How much {face_control} counts, over the 1000-step schedule. It lets go halfway: held later, it fights the features as they are painted and leaves burned patches."),
+    field("face_shape_curve", "[1]*700+[0]*300", CONTROLS, "How much {face_shape} counts, over the 1000-step schedule. Which way a head is turned is settled with the shapes, so it lets go before the finest detail."),
+    field("person_curve", "[1]*700+[0]*300", CONTROLS, "How much {person_control} counts, over the 1000-step schedule. Held late, the person looks pasted in rather than painted."),
     field("depth_target", 0.0, LAB, "Steers the render toward the depth of the ghost, so near and far stay in place. About 1 is a good start. It needs {live_ghost} or {ghost_image}. Get Depth Anything from Models in All settings. 0 is off."),
     field("two_painters", False, LAB, "The partner model and Disco paint one picture at every step. The partner owns the broad shapes, and the size it owns shrinks over the render."),
     field("painters_curve", "[64]*300+[32]*300+[16]*200+[0]*200", LAB, "The smallest shape, in pixels, that the partner owns, over the 1000-step schedule. 0 leaves everything to Disco."),
@@ -194,6 +219,8 @@ LABELS = {
     "tile_overlap": "Tile overlap", "exact_repeat": "Exact repeat", "cpu_threads": "CPU threads", "diffusion_model": "Model",
     "use_secondary_model": "Secondary model", "init_scale": "Start image strength",
     "image_prompts": "Image prompts", "image_prompt_weight": "Image prompt weight",
+    "small_first": "Small first %", "small_denoise": "Full-size denoise %", "small_side": "Small first size",
+    "small_hold": "Hold the small layout", "small_hold_curve": "Hold curve",
     "ViTB32": "Broad checker", "ViTB16": "Fine checker", "ViTL14": "Finest checker", "RN50": "ResNet checker",
     "RN101": "Deeper ResNet checker", "RN50x4": "Large ResNet checker", "RN50x16": "Very large ResNet checker",
     "RN50x64": "Huge ResNet checker",
@@ -201,6 +228,7 @@ LABELS = {
     "clamp_max": "Step limit", "fuzzy_prompt": "Loose prompt", "rand_mag": "Looseness",
     "cutn_batches": "View rounds", "skip_augs": "Plain views", "cut_overview": "Whole-image views",
     "cut_innercut": "Close-up views", "cut_ic_pow": "Close-up tightness", "cut_icgray_p": "Gray close-ups",
+    "views_fit": "Fit views to the painted steps", "views_shapes": "Shapes share %",
     "diffusion_sampling_mode": "Sampler", "eta": "Step noise", "randomize_class": "Random class",
     "clip_denoised": "Keep colors in range", "display_rate": "Preview every", "save_progress_video": "Save progress video", "keep_models_loaded": "Keep models loaded",
     "use_horizontal_symmetry": "Mirror left and right", "use_vertical_symmetry": "Mirror top and bottom",
@@ -208,6 +236,9 @@ LABELS = {
     "time_travel": "Time travel", "partner_model": "Partner model", "detail_bands": "Broad shapes first",
     "shaped_guidance": "Shaped prompt strength", "gradient_momentum": "Push momentum", "evidence_map": "Subject memory",
     "time_travel_curve": "Time travel curve", "guidance_curve": "Prompt strength curve", "detail_curve": "Broad shapes curve",
+    "control_image": "Control image", "edge_control": "Edge control", "depth_control": "Depth control", "pose_control": "Pose control", "person_control": "Person control",
+    "face_control": "Face control", "face_detail": "Face detail", "face_curve": "Face curve", "face_shape": "Face shape", "face_shape_curve": "Face shape curve",
+    "edge_curve": "Edge curve", "depth_curve": "Depth curve", "pose_curve": "Pose curve", "person_curve": "Person curve",
     "live_ghost": "Live ghost", "depth_target": "Depth target", "two_painters": "Two painters", "painters_curve": "Two painters curve",
     "painters_strength": "Two painters strength", "painters_color": "Two painters color", "painters_path": "Two painters path",
     "prompt_graft": "Prompt graft", "graft_curve": "Prompt graft curve", "sketch_steps": "Sketch steps", "borrow_attention": "Borrowed attention",
@@ -229,14 +260,14 @@ LABELS = {
     "zoom": "Zoom", "angle": "Turn", "translation_x": "Move right", "translation_y": "Move down", "translation_z": "Move forward",
     "rotation_3d_x": "Tilt", "rotation_3d_y": "Pan", "rotation_3d_z": "Roll", "interp_spline": "Keyframe shape", "fov": "Field of view",
     "padding_mode": "Edge fill", "sampling_mode": "Resampling", "video_init_path": "Video file", "extract_nth_frame": "Every nth frame",
-    "video_init_seed_continuity": "Same noise each frame", "video_blend": "Blend last frame", "in_between": "In-between frames", "video_flow": "Follow the video's motion", "turbo_mode": "Turbo",
+    "video_init_seed_continuity": "Same noise each frame", "video_blend": "Blend last frame", "loop_mode": "Seamless loop", "loop_frames": "Loop back over", "in_between": "In-between frames", "video_flow": "Follow the video's motion", "turbo_mode": "Turbo",
     "turbo_steps": "Turbo every", "save_mp4": "Save MP4", "save_webp": "Save WebP", "save_gif": "Save GIF",
 }
 
 # Nano's own settings, which have no official name.
-NANO_ONLY = {"exact_repeat", "cpu_threads", "save_progress_video", "keep_models_loaded", "image_prompts", "image_prompt_weight", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view", "tile_overlap",
-             "color_hold", "frame_sharpen", "frame_skip_keys", "frame_ghost", "prompt_fade", "in_between", "video_blend", "video_flow", "save_mp4", "save_webp", "save_gif",
-             *(f["name"] for f in FIELDS if f["section"] in (LAB, HANDOFF))}
+NANO_ONLY = {"views_fit", "views_shapes", "exact_repeat", "cpu_threads", "save_progress_video", "keep_models_loaded", "image_prompts", "image_prompt_weight", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view", "tile_overlap",
+             "color_hold", "frame_sharpen", "frame_skip_keys", "frame_ghost", "prompt_fade", "in_between", "loop_mode", "loop_frames", "video_blend", "video_flow", "save_mp4", "save_webp", "save_gif",
+             *(f["name"] for f in FIELDS if f["section"] in (LAB, HANDOFF, CONTROLS))}
 
 # Words that aren't settings, as plain and official.
 WORDS = {
@@ -264,6 +295,10 @@ RANGES = {
     "cpu_threads": (0, 64),
     "init_scale": (0, 10000),
     "image_prompt_weight": (-2, 4),
+    "small_first": (0, 60),
+    "small_denoise": (0, 100),
+    "small_hold": (0, 1),
+    "small_side": (384, 1024),
     "tv_scale": (0, 100000),
     "range_scale": (0, 100000),
     "sat_scale": (0, 100000),
@@ -274,6 +309,7 @@ RANGES = {
     "cut_innercut": (0, 32),
     "cut_ic_pow": (0.5, 100),
     "cut_icgray_p": (0, 1),
+    "views_shapes": (0, 100),
     "eta": (0, 1),
     "display_rate": (1, "{steps}"),
     "transformation_percent": (0, 1),
@@ -290,6 +326,13 @@ RANGES = {
     "ghost_crops": (0, 3),
     "ghost_lowfreq": (0, 1),
     "depth_target": (0, 3),
+    "edge_control": (0, 2),
+    "face_shape": (0, 2),
+    "depth_control": (0, 2),
+    "pose_control": (0, 2),
+    "person_control": (0, 1),
+    "face_control": (0, 1),
+    "face_detail": (0, 8),
     "style_strength": (0, 3),
     "layout_critic": (0, 2),
     "layout_margin": (0, 0.3),
@@ -312,6 +355,7 @@ RANGES = {
     "extract_nth_frame": (1, 10),
     "video_blend": (0, 0.7),
     "in_between": (0, 3),
+    "loop_frames": (1, 30),
     "turbo_steps": (2, 6),
 }
 
@@ -328,6 +372,31 @@ TERMS = {**WORDS, **{f["name"]: (f["label"], f["label"] if f["name"] in NANO_ONL
 def uses_partner(settings):
     return bool(settings.get("borrow_attention") or settings.get("two_painters") or settings.get("prompt_graft")
                 or settings.get("live_ghost", "Off") != "Off")
+
+
+def small_frame(width, height, longest):
+    """The size Small first paints at: the frame's shape in multiples of 64, its longer side at most `longest`.
+    Of the sizes with at least 60% of the area that allows, the largest whose shape is within 2% of the frame's,
+    or else the closest shape, so the picture is barely stretched when it is enlarged. 1280x768 gives 640x384.
+    None when the frame is no larger than `longest`."""
+    long, short = max(width, height), min(width, height)
+    if long <= longest:
+        return None
+    ratio, found = long / short, []
+    top = 64 * max(longest // 64, 1)
+    for side in range(top, 63, -64):
+        other = max(round(side / ratio / 64), 1) * 64
+        if side * other >= 0.6 * top * top / ratio or not found:
+            found.append((abs(side / other / ratio - 1), -side, other))
+    close = [f for f in found if f[0] <= 0.02]
+    _, side, other = close[0] if close else min(found)
+    side = -side
+    return (side, other) if width >= height else (other, side)
+
+
+def small_first_on(settings):
+    """Small first is Disco's handoff to itself, so it is set aside while a checkpoint's handoff is chosen."""
+    return float(settings.get("small_first", DEFAULTS["small_first"]) or 0) > 0 and not str(settings.get("handoff_file") or "")
 
 
 def handoff_parts(settings):

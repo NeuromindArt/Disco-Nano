@@ -34,6 +34,13 @@ RTX 3070 8GB.
 - Render on another PC: share the PC with the GPU and use Nano from any browser on your network
 - One switch between plain names, such as Denoise %, and Disco Diffusion's official names
 - Handoff: a Stable Diffusion 1.5 or SDXL checkpoint you already have lays out the scene, and Disco paints it
+- Small first: Disco lays out large frames at a small size, then paints the detail at full size, so the
+  subject isn't repeated across the frame
+- Controls: hold a picture's outlines, depth, pose, people or faces while Disco paints,
+  ControlNet's idea done with guidance, for stills and clips. Face detail paints faces with more care,
+  even from text alone
+- Regional prompts: draw boxes on the frame, each with a prompt of its own, before a render or by
+  pausing one on its preview
 - Image prompts: a set of images guides the render alongside the text, like an embedding with no training
 - VRAM, RAM and disk bars that show what Disco uses next to the rest of the PC. Offloading to RAM
   turns on by itself when a render needs it
@@ -43,7 +50,7 @@ RTX 3070 8GB.
   changed setting resets to its default with one click
 - Tiles: images far larger than the frame, with no joins, from a start image or text alone
 - Animation: 2D and 3D camera moves or a repainted video, with keyframes, a curve editor and prompt
-  changes at any frame. Saves MP4, WebP and GIF
+  changes at any frame, and seamless loops. Saves MP4, WebP and GIF
 - Start from any image, with Match, Fit, Fill and Crop sizing
 - Send any finished render back in as a start image
 - Right-click any image to open, copy, save, upscale or reuse it
@@ -70,7 +77,7 @@ strength 20000 and Step limit 0.09, the earlier defaults; Nano now starts a litt
 
 <table>
   <tr>
-    <td width="40%" valign="top"><b>Default settings</b><br>The Balanced look, with nothing changed.</td>
+    <td width="40%" valign="top"><b>Default settings</b><br>The Shapes, then detail look, with nothing changed.</td>
     <td width="60%"><img src="docs/options/default.jpg" width="100%" alt="Default settings"></td>
   </tr>
   <tr>
@@ -99,12 +106,12 @@ strength 20000 and Step limit 0.09, the earlier defaults; Nano now starts a litt
 
 <table>
   <tr>
-    <td width="40%" valign="top"><b>Look: Fine detail</b><br>The prompt checkers study close detail through the whole render, which gives the crispest subjects and busier scenes.</td>
-    <td width="60%"><img src="docs/options/fine_detail.jpg" width="100%" alt="Look: Fine detail"></td>
+    <td width="40%" valign="top"><b>Look: Mostly detail</b><br>10% of the steps lay out shapes and 90% paint detail, which gives crisp textures and busier scenes.</td>
+    <td width="60%"><img src="docs/options/fine_detail.jpg" width="100%" alt="Look: Mostly detail"></td>
   </tr>
   <tr>
-    <td width="40%" valign="top"><b>Look: Big shapes</b><br>The checkers always look at the whole picture, which gives bold, simple shapes.</td>
-    <td width="60%"><img src="docs/options/shapes.jpg" width="100%" alt="Look: Big shapes"></td>
+    <td width="40%" valign="top"><b>Look: Mostly shapes</b><br>80% of the steps lay out shapes and 20% paint detail, which gives bold, simple shapes.</td>
+    <td width="60%"><img src="docs/options/shapes.jpg" width="100%" alt="Look: Mostly shapes"></td>
   </tr>
   <tr>
     <td width="40%" valign="top"><b>Look: Classic 2022</b><br>The settings of 2022 Disco renders: a gentler prompt, no smoothing and the secondary model. Dreamy and loose.</td>
@@ -333,7 +340,24 @@ on, Denoise shows as **skip_steps**, the number of steps skipped at the start.
 Strength pulls the render back toward the image at every step, by how alike the two look. 0 turns it
 off.
 
-## Image prompts
+## Guide images
+
+The **Guide images** card holds pictures that steer a render without being painted in, unlike a start
+image. Drop an image on a box, or click the box to choose one. Each works with text alone or beside a
+start image, and the examples are under [What each option does](#starting-points-and-guides).
+
+- **Ghost image** lends its layout of light and dark. Its pixels are never mixed in, so the render keeps
+  its own colors and paint. **Ghost light and dark** sets how much of its broad light and dark carries
+  over, 0.3 by default. **Ghost shapes** copies its shapes rather than its look, and **Ghost areas** asks
+  each area to match the same area of the ghost as the prompt checkers see it. **Ghost curve** sets when
+  it counts, the first 70% of the render by default. They are under Experimental in All settings.
+- **Style image** lends its texture and palette, at **Style strength**, 1 by default.
+- **Image prompts** take a whole set of images, described below.
+
+A Control image, which holds outlines, depth, people or faces, is dropped in the Controls card instead
+(see [Controls](#controls)).
+
+### Image prompts
 
 Drop a set of images, or a whole folder, on **Image prompts** under **Guide images**, and they guide
 the render alongside your text. Each prompt checker reads every image, and Nano averages what it
@@ -352,12 +376,13 @@ the steps, which often gave a pleasant texture in place of the subject.
 
 A **Look** sets how the prompt shapes the picture, at any size:
 
-- **Balanced**, the default. The prompt checkers lay out the whole scene first, then look closer
-  toward the end to add detail. Strong single subjects. This is the close-up ramp: **Close-up
-  tightness** starts low, so close-ups are wide, and rises toward the end.
-- **Fine detail**. The checkers look closely from start to end. The crispest subjects, faces and
-  textures, with busier scenes.
-- **Big shapes**. The checkers look at the whole picture throughout. Bold, simple scenes and dioramas.
+- **Shapes, then detail**, the default. 40% of the steps lay out the scene's shapes, with the prompt
+  checkers looking at the whole picture and wide close-ups, and 60% paint detail with closer and closer
+  close-ups. Strong single subjects.
+- **Mostly detail**. 10% of the steps lay out shapes and 90% paint detail. Crisp textures and busy
+  scenes, and a start image keeps more of its own shapes.
+- **Mostly shapes**. 80% of the steps lay out shapes and 20% paint detail. Bold, simple scenes with
+  softer detail.
 - **Classic 2022**. Settings from 2022 Disco renders: a gentler prompt, no smoothing, five rounds of
   cutouts and the secondary model. Dreamy and loose, and about twice as long.
 
@@ -368,6 +393,31 @@ whole-image views and close-ups the checkers judge, how tight the close-ups are,
 gray. Each schedule shows as a graph from the start of the render to the end. Click one to drag its
 levels, for example to start the ramp later or end it tighter. The **Guidance** card holds smoothing,
 the saturation and step limits, and the sampler. Changed values show in the accent color.
+
+### Shapes and detail
+
+The view schedules run over 1000 points, from noise to the finished picture, and the default look,
+Shapes, then detail, splits them in two. For the first 400 the checkers judge mostly whole-image views and wide close-ups,
+which lays out the scene. From 400 on they judge mostly close-ups, tighter and tighter, which paints
+detail. With 200 steps from noise, 80 steps lay out shapes and 120 paint detail.
+
+A start image changes that. Denoise 50% skips the first half of the steps, so Disco starts at point 500
+and every step it paints is a detail step. The image supplies the shapes and Disco paints over them,
+which suits a restyle. Video Input and the frames of a 2D or 3D clip do the same with Frame skip %.
+
+- **Fit views to the painted steps**, in the Views card, spreads the schedules over only the steps a
+  picture paints, so the Look's split counts only those. It's on for start images by default: at Denoise
+  50% the painted steps start with their own pass of shapes, so the prompt can turn what is in the image
+  into what it describes, then paint the detail. **Start images and clip frames** fits every frame of a
+  clip too, and **Off** keeps the schedules as drawn.
+- **Shapes share %** sets how many of the steps that shapes pass gets. 40, the default, keeps the
+  schedules as drawn. 20 gives a fifth of the steps to shapes and the rest to detail: with Fit views on
+  and 50 painted steps, 10 steps of shapes and 40 of detail. Without a start image it works on the whole
+  render.
+
+The bar at the top of the Views card counts this for the settings you have: which steps are skipped,
+which lay out shapes and which paint detail. Each schedule's graph marks where shapes end, and shades
+what a start image or Frame skip skips.
 
 ## Handoff
 
@@ -392,7 +442,7 @@ Disco carries on from the exact point where it stopped, while the scene is still
 - With a start image, or on any frame of a 2D, 3D or Video Input clip, the checkpoint starts where
   Disco would have started and takes its share of what is left. Every painted frame gets it.
 - Handoff steps, its prompt strength, its negative prompt, and spacing for few-step models such as
-  Lightning are under More settings in the Handoff card. Prompt lines with a negative weight become part of
+  Lightning are in the Handoff model section, which opens once a checkpoint is chosen. Prompt lines with a negative weight become part of
   its negative prompt.
 
 The checkpoint waits in RAM and comes to the GPU only for its own steps. On cards under 12GB, SDXL's
@@ -408,6 +458,177 @@ The same prompt and seed at 768×512 and 200 steps, with SD 1.5 (revAnimated) as
 on an RTX 3070 8GB. Each step the checkpoint takes is one Disco doesn't, so Handoff also saves
 time. All three peaked at 5.2GB, and so did SDXL at 30%, which took 146 seconds at 60 steps
 including loading the file.
+
+### Small first
+
+At large sizes such as 1280×768, Disco often paints the subject more than once, in different parts of
+the frame, where 768×512 gives one. Disco's model learned at about 512 pixels, and the prompt checkers
+judge small views of the picture, so on a large frame each area tends to grow a subject of its own.
+The layout is decided in the first steps, while the picture is mostly noise.
+
+**Small first** is a handoff from Disco to itself, in the Handoff card. It needs no checkpoint. Disco
+paints the start of each image at a smaller size in the frame's shape, stops while the picture is still
+blurry, enlarges it, and carries on at full size from the same point on its path. The small start lays
+out one scene and the full size paints the detail.
+
+- **Small first %** is the small share of the steps. 0 is off. About 25% suits 1280×768: with 200
+  steps, steps 1 to 50 are painted at 640×384 and steps 51 to 200 at 1280×768.
+- **Full-size denoise %** works like Disco denoise %. At 0 the full size carries on from exactly where
+  the small start stopped. Higher repaints more of it, which gives the full size more say over the
+  layout: 85 with Small first at 25 starts the full size at step 31 of 200.
+- **Hold the small layout**, in the Small first section, keeps the full size's broad shapes and colors
+  close to the small picture while the detail is added, so a second subject can't grow in the empty
+  areas. Fine detail is left free. About 0.5 is a good start, and its curve holds until halfway by default.
+- **Small first size**, in the Small first section once it's on, is the small start's longer side, 768
+  by default. The shorter side follows the frame's shape in multiples of 64, with as little stretch
+  as possible. Frames no larger than this aren't changed.
+
+The small steps are quicker, so a render also takes a little less time. Small first works on still
+images and on the first frame of a clip, and after a checkpoint's handoff if it reaches further than the
+checkpoint did. It isn't for Tiles, which have their own small start in Render first, or for the
+experiments that are sized to the frame: the partner model's, the ghost and style images, and Depth target.
+
+## Regional prompts
+
+The **Regional prompts** card puts boxes on the frame, each with a prompt of its own: a lighthouse on
+the left, a boat on the right. Turn it on, press **Edit regions**, drag on the frame to draw a box, type
+its prompt, then press Done. Drag a box to move it, drag its corner to resize it, and press × to remove
+it. The card lists the boxes, and they go with every render while it's on. Turning it off keeps them for
+later.
+
+Press **Pause and edit regions** while a render runs and it pauses after the current step, with the
+editor laid over the preview. Draw or change the boxes on what has been painted so far, then press
+Continue, and the render carries on with them from that step. You can do this as often as you like.
+Cancel and continue carries on with the boxes it had.
+
+Disco's prompt checkers look at the picture through close-ups. A close-up inside a box is judged mostly
+by the box's prompt, in proportion to how much of the close-up the box covers, and the main prompt keeps
+the rest, so the style stays the same across the picture. Whole-picture views are judged by every
+prompt, each region's by how much of the frame its box covers. **Strength** is how much a box's prompt
+takes over inside it: 0.75 by default, and 1 leaves the main prompt out of a close-up inside a box.
+Boxes are kept as shares of the frame, so they fit any size and work with Small first. Regional prompts
+work with stills and clips, but not with Tiles.
+
+## Controls
+
+ControlNet lets Stable Diffusion follow a picture's outlines, depth or pose. Disco's model has nowhere to
+plug a ControlNet in, so **Controls** gets the same effect through guidance: at every step, the render's
+current estimate is compared with a control picture, and nudged closer beside the prompt's push.
+
+For a still, the control picture is the **Control image** you drop in the Controls card, or the start
+image when there is none. A clip needs no control picture: a Video Input clip follows each frame of the
+video as it is before any painting. That
+matters: a clip's frames start from the video mixed with the last painted frame, so following the clean
+video frame keeps the subject where it really is instead of where the painting drifted to. A 2D or 3D clip
+follows the frame each repaint starts from.
+
+- **Edge control** holds the control picture's outlines. It only asks for an outline where the control has
+  one, never less, so plain areas stay free for the prompt.
+- **Depth control** holds its near and far, so the same things stand in front. It needs Depth Anything
+  from Models.
+- **Pose control** finds each person's skeleton with Keypoint R-CNN, builds a body around it, and holds
+  that body's outline. It keeps the stance without copying how the person looks.
+- **Person control** cuts out each person with Mask R-CNN and holds their real silhouette, clothes and
+  broad colors, while everything around them is painted freely. Fine detail inside them stays free too,
+  so the prompt still paints over them. It is the strongest for keeping someone in a clip.
+- **Face control** finds each face with RetinaFace and holds its features while the layout forms: where
+  the eyes, nose and mouth are, and their light and dark. Then it lets go, and the paint finishes them,
+  so its skin, color and brushwork are painted freely. A head turned to the side can still be painted
+  facing forward; Face shape holds more of a turn.
+- **Face shape** holds each face's outline and its near and far, measured on a close-up of the face:
+  the jaw, the side of the nose, and which cheek is nearer. The face keeps its own shape rather than a
+  generic one, and a turned head keeps more of its turn, most of all with a Control image; from a start
+  image the prompt still tends to turn it toward you. Where the eyes look is too fine to hold. It pushes
+  beside the prompt, as Edge and Depth control do, rather than holding the features, so the face is
+  still painted freely, though the skin comes out a little smoother. About 0.5 is a good start; at 1 it
+  can leave bright patches. It needs Depth Anything from Models.
+- **Face detail** gives every face a few close-ups of its own at each step, beside the usual ones.
+  Disco's checkers judge the picture through random close-ups, and a face rarely gets many, which is
+  a big reason faces come out mangled. With a control picture, the faces come from it. With none, they
+  are found in the render itself once one starts to show, so Face detail works with text alone. About 2
+  is a good start, at about 5% more time.
+
+About 0.5 is a good start for the others, and Person control already holds well at 0.3. Each control has its
+own curve, in its section once it's on, which sets when it counts. Depth lets go at 60% of the schedule,
+since near and far are settled early; Pose, Person and Face shape at 70%, once the figure is settled, because a person
+held into the detail looks pasted in; Face at 50%, because a face held while its features are painted
+gets burned patches where the two disagree; and Edge at 80%, since outlines are still being painted then.
+The pose, person and face models download by themselves the first time, 0.24GB, 0.19GB and 0.11GB, and
+are also listed in Models. Controls work with stills, clips, Small first and the experiments, but not with
+Tiles.
+
+## Experiments
+
+The **Experimental** section in All settings holds ideas that change how the image forms. They're new,
+so results vary a lot from seed to seed. They can't run with Tiles, symmetry, plms or the secondary
+model: whichever you choose first grays out the other, and hovering says why. Each one is shown on the
+same lighthouse under [What each option does](#experiments).
+
+**Time travel** backs up and repeats some steps, so the picture has time to take in the prompt's push.
+Subjects come out cleaner, for about 35% more time.
+
+### With a partner model
+
+Four experiments use a small text-reading model, the partner, beside Disco. It never paints the final
+image. Get Tiny SD from Models, about 900MB.
+
+- **Prompt graft** feeds the prompt straight into Disco's own decoder, which normally can't read text.
+  Subjects often come out whole, and Disco's paint and color stay. About 3 is a good start. It adds about
+  0.6GB of VRAM and works only with the 512x512 model.
+- **Live ghost** has the partner supply the ghost, its broad light and dark, leaving color and detail to
+  Disco. **Sketch first** paints a quick sketch before the render and frees it again, so it needs no extra
+  VRAM. **Live** keeps repainting it during the render.
+- **Depth target** keeps near and far where the ghost has them, from Live ghost or a Ghost image. A small
+  depth model reads the ghost once and checks the render at every step. About 1 is a good start, and it
+  pairs well with Sketch first and Prompt graft. It needs Depth Anything from Models, about 100MB.
+- **Two painters** shares every step between the two models: the partner owns the broad shapes, and
+  Disco the detail, finishing alone.
+- **Borrowed attention** gives Disco the partner's sense of which parts of the picture belong together.
+  **Borrowed layers** sets where: Coarse, the default, borrows only the broad layout and keeps Disco's
+  color, All borrows everywhere for a stronger, grayer result, and Coarsest changes the least. It works
+  especially well with Time travel.
+
+### Fixing the checkers
+
+The prompt checkers, the CLIP models that compare the picture with the prompt, are as happy with bits of
+a subject scattered over the canvas as with one whole subject. That is a big reason Disco subjects fall
+apart. These five change the checkers, need no partner, and can be combined.
+
+- **Coherence critic** shows the checkers each view twice, once with its pieces shuffled, and pushes the
+  picture so the shuffled one scores worse. The prompt only counts when it comes from how the parts fit
+  together, so subjects hold together and the paint stays. About 0.6 is a good start, for about 10% more
+  time and 0.8 to 1.2GB of VRAM, less with **Coherence views** set to Whole-image.
+- **Robust checker** adds a checker trained to resist tiny changes, so its push draws real shapes instead
+  of streaks. It leads the first third of the render, while the layout forms, then hands over to the usual
+  checkers. Expect whole scenes and steadier subjects, with more muted color. FARE4 B/16 costs almost
+  nothing, and the L/14 ones are about 70% slower and bolder. Get them from Models. **Robust checker
+  mode** set to Together keeps the usual checkers at full strength throughout.
+- **One subject** finds where each subject sits and pushes it into one place, so it isn't repeated, and
+  keeps separate subjects apart. Name them in **Subjects**, separated by semicolons, such as
+  *a woman; a white horse*. Left empty, it uses the first phrase of the prompt. About 1 suits one subject
+  and 2 suits two; higher can lose a face. It needs a ViT checker.
+- **Corrector steps** add a small extra step after each step early in the render, which lets the picture
+  settle before it moves on. One gives cleaner faces and steadier layouts for about 45% more time, with
+  no extra VRAM.
+- **Prompt routing** scores the subject, the first phrase of each prompt line up to the first comma, on
+  whole-image views, and the rest, its style, on close-ups. The subject forms once and the paint covers
+  everything. Its curve applies it for the first half of the render, and it costs nothing.
+
+### Smaller changes
+
+**Push momentum** carries part of each step's push into the next, and goes wilder and more abstract as it
+rises. **Broad shapes first** keeps the prompt's push to broad shapes early and adds fine detail later.
+**Subject memory** remembers where the subject is forming and eases the push elsewhere. **Shaped prompt
+strength** changes Prompt strength over the render along its own curve.
+
+### Ideas not built yet
+
+- **Hand shape**: Face shape's close-up outline and depth, for hands, so a photo's or video's fingers
+  are painted where they are. The controls measure the whole frame at about 256 pixels, where a finger
+  is a pixel or two wide. It needs a real hand to follow; from text alone nothing in Disco counts fingers.
+- **Disco on a Stable Diffusion model**: a small SD model as the painter, with an empty prompt, and
+  Disco's checkers, cutouts and schedules guiding it through a tiny decoder. Likely a cleaner cousin
+  of the Disco look rather than the same thing.
 
 ## Tiles
 
@@ -430,7 +651,7 @@ straight line.
   scene with large shapes, and 0.5 is a good start. **Split the noise** paints at full size from the
   first step and uses Denoise. It is busier, and each tile can paint its own copy of the subject.
 - **Whole picture view** lets CLIP see each tile as part of the full image.
-- **Tile overlap**, under More settings in the Tiles card, is how many pixels neighbors share. The
+- **Tile overlap**, in the Tiles section once tiles are on, is how many pixels neighbors share. The
   default is 96.
 
 Tiles always use the ddim sampler, and symmetry doesn't apply.
@@ -452,13 +673,14 @@ steps per tile, which is 100 steps at Tile denoise 0.5.
   <tr>
     <td width="33%" valign="top"><img src="docs/zoom_2d.webp" width="100%" alt="A 2D clip that zooms and turns"><br><b>2D</b><br><sub>48 frames, zooming and turning. About 20 minutes.</sub></td>
     <td width="33%" valign="top"><img src="docs/flight_3d.webp" width="100%" alt="A 3D clip that flies along the coast"><br><b>3D</b><br><sub>48 frames, flying along the coast. About 20 minutes.</sub></td>
-    <td width="33%" valign="top"><img src="docs/video_input.webp" width="100%" alt="A foggy road video repainted as a road to the lighthouses"><br><b>Video Input</b><br><sub>40 frames of a foggy road video from <a href="https://www.pexels.com">Pexels</a>. 52 minutes.</sub></td>
+    <td width="33%" valign="top"><img src="docs/video_input.webp" width="100%" alt="A fire dancer video repainted as a dancer made of fire before a lighthouse in a stormy sea"><br><b>Video Input</b><br><sub>40 frames of a fire dancer video from <a href="https://www.pexels.com">Pexels</a>. 77 minutes.</sub></td>
   </tr>
 </table>
 
-All three are 640×384 at 200 steps on an RTX 3070 8GB, shown smaller here. The 2D and 3D clips use
-Turbo every 2nd frame and 2 in-between frames. The video clip uses every 4th frame of the video,
-Frame skip 55%, Blend last frame 0.4 and one in-between frame, and peaked at 4.3GB.
+All three were rendered on an RTX 3070 8GB and are shown smaller here. The 2D and 3D clips are 640×384
+at 200 steps, with Turbo every 2nd frame and 2 in-between frames. The video clip is 576×320 at 250
+steps, and uses every 4th frame of the video, Frame skip 40%, no Blend last frame and one in-between
+frame, and peaked at 4.1GB.
 
 **Animation** renders a clip one frame at a time. Each frame after the first starts from the last
 one, and **Frame skip %** decides how much of it is kept.
@@ -471,8 +693,20 @@ one, and **Frame skip %** decides how much of it is kept.
   travels with what moves.
 
 **Frame skip %** defaults to 75 for camera moves, which holds a scene while it moves, and to 55 for
-Video Input, so the video gets repainted more. **Frame skip keyframes**, under More settings in the Animation card, can lower it
-around a prompt change. For calmer, more painterly clips, try **Step noise** at about 0.3.
+Video Input, so the video gets repainted more. **Clip style**, under the video, sets Frame skip %,
+Blend last frame and the views together:
+
+- **Paint over** keeps each frame's shapes from the video and paints over them, at Frame skip 40% with
+  no blend, so its painted steps all paint detail. Abstract and painterly, and every frame is new, so it
+  flickers as Disco does.
+- **Reimagine** fits the views to each frame too, so each frame's painted steps get the Look's own
+  split of shapes and detail (see [Shapes and detail](#shapes-and-detail)), and the prompt can turn
+  what is in the video into what it describes. With Mostly shapes it paints big, simple forms. Looser,
+  and further from the video.
+- **Build up** keeps more of each frame and blends in some of the last one, so the painting builds up
+  over the clip and changes less from frame to frame.
+
+**Frame skip keyframes**, under the arrow beside Frame skip %, can lower it around a prompt change. For calmer, more painterly clips, try **Step noise** at about 0.3.
 
 Each move has a slider for a steady value and a keyframe box for change over time, in Disco
 Diffusion's form: `0:(1.0), 60:(1.04), 120:(1.0)`. Formulas of the frame `t` work too, such as
@@ -492,6 +726,17 @@ settings blends one into the next.
   at no extra render time. The clip keeps its length, because the frame rate is raised to match.
   RIFE 4.7 paints them if you get it from Models in All settings, about 21MB. Without it, optical
   flow does, which can ghost on fast motion.
+- **Seamless loop** makes a clip that loops with no jump where it starts again.
+  - **Paint back to the start** paints the last few frames more and more like the first, so the last
+    frame leads into the first. It suits motion that already comes back to where it began, such as a
+    camera moving on a `sin` formula. **Loop back over**, under its arrow, sets how many frames, 6 by
+    default.
+  - **Ping-pong** plays the video, or the camera's moves, forward and then back, so the motion ends
+    where it began, and paints back to the start as well. The way back is painted fresh, not played in
+    reverse: with Same noise each frame, the noise drifts slowly around a loop, so each frame's noise is
+    close to the last one's and comes back to the first frame's at the end. For a video, Frames counts
+    both ways, so 40 frames reads 21 from the video.
+  - With In-between frames, the last frame gets in-betweens into the first too.
 - A stopped clip still saves the video of the frames it has. Right-click a clip and choose
   **Continue the clip** to carry on from its last frame, or raise Frames first to lengthen it.
 

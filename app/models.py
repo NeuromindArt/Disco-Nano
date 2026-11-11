@@ -20,6 +20,9 @@ PARTNER_FILES = {
 }
 DEPTH = "depth-anything-small"
 RIFE = "rife-4.7"
+POSE = "keypointrcnn"
+PERSON = "maskrcnn"
+FACES = "retinaface"
 # Robust checkers (FARE, Schlarmann et al., MIT), pinned to the revisions Nano was tested with.
 ROBUST = {
     "fare4-b16": ("chs20/FARE4-ViT-B-16-laion2B-s34B-b88K", "1e941d54ce261e19ee072f1c3d5af8670aa19c02",
@@ -102,6 +105,24 @@ FILES = {
         "folder": DEPTH,
         "needs": [f"{DEPTH}/config.json"],
     },
+    POSE: {
+        "size_gb": 0.24,
+        "sha256": "fc266e953d2b302cdcbb9ae66f71f6b0d4649928bf02dc573961e361e4918926",
+        "urls": ["https://download.pytorch.org/models/keypointrcnn_resnet50_fpn_coco-fc266e95.pth"],
+        "folder": "pose",
+    },
+    PERSON: {
+        "size_gb": 0.19,
+        "sha256": "73cbd0190fcbe3ba339921fbce2c3a0b6bb9126c9a133c85e43a2a8e060a109e",
+        "urls": ["https://download.pytorch.org/models/maskrcnn_resnet50_fpn_v2_coco-73cbd019.pth"],
+        "folder": "person",
+    },
+    FACES: {
+        "size_gb": 0.11,
+        "sha256": "6d1de9c2944f2ccddca5f5e010ea5ae64a39845a86311af6fdf30841b0a5a16d",
+        "urls": ["https://github.com/xinntao/facexlib/releases/download/v0.1.0/detection_Resnet50_Final.pth"],
+        "folder": "faces",
+    },
     RIFE: {
         "size_gb": 0.021,
         "sha256": "fcf3492b10f17fb035156ea4177ed87b1f517eae54fe4500e878f5d186043d5e",
@@ -117,7 +138,7 @@ FILES.update({name: {"size_gb": size, "sha256": sha256, "folder": f"robust/{name
                      "urls": [f"https://huggingface.co/{repo}/resolve/{revision}/open_clip_pytorch_model.bin"]}
               for name, (repo, revision, sha256, size) in ROBUST.items()})
 
-DIFFUSION = [name for name in FILES if name not in ("secondary", PARTNER, DEPTH, UPSCALER, RIFE, *ROBUST)]
+DIFFUSION = [name for name in FILES if name not in ("secondary", PARTNER, DEPTH, POSE, PERSON, FACES, UPSCALER, RIFE, *ROBUST)]
 
 # Small helpers that download when first needed and aren't listed in the app.
 HELPERS = {
@@ -138,6 +159,9 @@ LABELS = {
     PARTNER: "Tiny SD",
     DEPTH: "Depth Anything V2 Small",
     RIFE: "RIFE 4.7",
+    POSE: "Keypoint R-CNN",
+    PERSON: "Mask R-CNN",
+    FACES: "RetinaFace",
     "fare4-b16": "Robust checker FARE4 B/16",
     "fare2-l14": "Robust checker FARE2 L/14",
     "fare4-l14": "Robust checker FARE4 L/14",
@@ -160,6 +184,9 @@ ABOUT = {
     "fare4-b16": "A robust checker for the Experiments card. Whole scenes and steady subjects, at almost no extra cost. By Schlarmann et al.",
     "fare2-l14": "A larger robust checker. Slower, with bolder scenes. By Schlarmann et al.",
     "fare4-l14": "The most robust of the large checkers. Slower, and pulls hardest toward shapes. By Schlarmann et al.",
+    FACES: "RetinaFace ResNet-50 by Deng et al., which finds faces for Face control and Face detail. Downloads by itself the first time either is used.",
+    PERSON: "Mask R-CNN from torchvision, which cuts out people's silhouettes for Person control. Downloads by itself the first time Person control is used.",
+    POSE: "Keypoint R-CNN from torchvision, which finds people's joints for Pose control. Downloads by itself the first time Pose control is used.",
     RIFE: "RIFE 4.7 by Zhewei Huang, which paints smooth in-between frames for animations. Without it, optical flow is used.",
     "256x256_diffusion_uncond": "An older general model. Slower and heavier than the main model at 512×512.",
     "pixelartdiffusion_expanded": "Pixel art with strong color.",

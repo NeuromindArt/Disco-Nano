@@ -2,7 +2,8 @@
 
 Usage: python renderer.py --job <job_dir>      (job_dir/job.json holds the settings)
        python renderer.py --serve               (stays open; renders each job folder written to stdin)
-A file named `stop` in the job folder ends the run at the next step.
+A file named `stop` in the job folder ends the run at the next step. A file named `pause` holds it after the next
+step until the file goes; regions.json, written before it goes, holds the regions to carry on with.
 """
 import argparse
 import json
@@ -23,9 +24,12 @@ def emit(kind, **data):
 class Hooks:
     """How disco.render reports back."""
 
-    def __init__(self, job_dir, progress=False):
+    def __init__(self, job_dir, progress=False, regions=None):
         self.job_dir = job_dir
         self.stop_file = os.path.join(job_dir, "stop")
+        self.pause_file = os.path.join(job_dir, "pause")
+        # Regional prompts: boxes with prompts of their own. A pause can change them, which counts up the revision.
+        self.regions, self.regions_rev, self.regions_read = regions, 0, None
         self.started = False
         # With Save progress video, every preview is also kept as a frame until its image is saved.
         self.progress = os.path.join(job_dir, "progress") if progress else None
@@ -44,6 +48,36 @@ class Hooks:
         emit("step", step=j, total=total, batch=batch, n_batches=n_batches)
         if os.path.exists(self.stop_file):
             raise KeyboardInterrupt
+        if os.path.exists(self.pause_file):
+            self.hold()
+        self.read_regions()
+
+    def pausing(self):
+        return os.path.exists(self.pause_file)
+
+    def hold(self):
+        """Waits while the pause file is there, so regions can be drawn on the preview."""
+        emit("paused")
+        while os.path.exists(self.pause_file):
+            if os.path.exists(self.stop_file):
+                raise KeyboardInterrupt
+            time.sleep(0.2)
+        emit("resumed")
+
+    def read_regions(self):
+        """Takes up regions.json when the page has written a new one, which it does as a pause ends."""
+        path = os.path.join(self.job_dir, "regions.json")
+        try:
+            changed = os.path.getmtime(path)
+            if changed == self.regions_read:
+                return
+            self.regions_read = changed
+            with open(path, encoding="utf-8") as f:
+                regions = json.load(f)
+        except (OSError, ValueError):
+            return  # none yet, or one being written: carry on with the regions it had
+        if regions != self.regions:
+            self.regions, self.regions_rev = regions, self.regions_rev + 1
 
     def preview(self, image):
         image = image.convert("RGB")
@@ -109,7 +143,7 @@ def run_job(job_dir):
         job = json.load(f)
     options, settings = job.get("options", {}), job["settings"]
     still = settings.get("animation_mode", "None") == "None"  # a clip is its own video
-    hooks = Hooks(job_dir, progress=still and bool(settings.get("save_progress_video")))
+    hooks = Hooks(job_dir, progress=still and bool(settings.get("save_progress_video")), regions=settings.get("regions"))
     outcome, detail = "done", {}
     cpu_start = time.process_time()
     try:

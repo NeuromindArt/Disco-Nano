@@ -46,7 +46,7 @@
         <label class="field-name" for="prompt"><span data-words="{prompt}">Prompt</span><span class="anim-only"> at the first frame</span></label>
         <textarea id="prompt" rows="5" placeholder="A beautiful painting of a lighthouse in a stormy sea, trending on artstation"></textarea>
         <div id="promptChanges" class="prompt-changes anim-only"></div>
-        <button type="button" id="addPromptChange" class="default add-change anim-only">
+        <button type="button" id="addPromptChange" class="default add-change anim-only" data-sub="prompt_changes" data-sub-label="Prompt changes">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           Change the prompt at a frame
         </button>
@@ -103,22 +103,23 @@
             </div>
             <input type="file" id="videoFile" accept="video/*,.mkv,.gif" hidden>
             <input type="hidden" id="video_init_path">
-            <div class="slider-row"><label class="field-name" for="extract_nth_frame" data-words="{extract_nth_frame}">Every nth frame</label><input type="range" data-for="extract_nth_frame" min="1" max="10" step="1"><input id="extract_nth_frame" class="readout" type="number" min="1" max="10"></div>
-            <div class="slider-row"><label class="field-name" for="video_blend" data-words="{video_blend}">Blend last frame</label><input type="range" data-for="video_blend" min="0" max="0.9" step="0.05"><input id="video_blend" class="readout" type="number" min="0" max="0.9" step="0.05"></div>
+            <label class="line"><span class="field-name">Clip style</span><select id="clip_style"></select></label>
+            <div class="slider-row" data-sub="extract_nth_frame"><label class="field-name" for="extract_nth_frame" data-words="{extract_nth_frame}">Every nth frame</label><input type="range" data-for="extract_nth_frame" min="1" max="10" step="1"><input id="extract_nth_frame" class="readout" type="number" min="1" max="10"></div>
+            <div class="slider-row" data-sub="video_blend"><label class="field-name" for="video_blend" data-words="{video_blend}">Blend last frame</label><input type="range" data-for="video_blend" min="0" max="0.9" step="0.05"><input id="video_blend" class="readout" type="number" min="0" max="0.9" step="0.05"></div>
           </div>
           <div class="slider-row"><label class="field-name" for="max_frames" data-words="{max_frames}">Frames</label><input type="range" data-for="max_frames" min="1" max="600" step="1"><input id="max_frames" class="readout" type="number" min="1" max="10000"></div>
-          <div class="slider-row"><label class="field-name" for="fps" data-words="{fps}">Frames per second</label><input type="range" data-for="fps" min="1" max="60" step="1"><input id="fps" class="readout" type="number" min="1" max="60"></div>
+          <div class="slider-row" data-sub="fps"><label class="field-name" for="fps" data-words="{fps}">Frames per second</label><input type="range" data-for="fps" min="1" max="60" step="1"><input id="fps" class="readout" type="number" min="1" max="60"></div>
           <div class="slider-row"><label class="field-name" for="in_between" data-words="{in_between}">In-between frames</label><input type="range" data-for="in_between" min="0" max="3" step="1"><input id="in_between" class="readout" type="number" min="0" max="3"></div>
-          <div class="slider-row"><label class="field-name" for="frames_skip_steps" data-words="{frames_skip_steps}">Frame skip %</label><input type="range" data-for="frames_skip_steps" min="30" max="90" step="5"><input id="frames_skip_steps" class="readout" type="number" min="0" max="95" step="5"></div>
+          <label class="line" data-sub="loop_mode"><span class="field-name" data-words="{loop_mode}">Seamless loop</span><select id="loop_mode"></select></label>
+          <div class="slider-row" data-sub="frames_skip_steps"><label class="field-name" for="frames_skip_steps" data-words="{frames_skip_steps}">Frame skip %</label><input type="range" data-for="frames_skip_steps" min="30" max="90" step="5"><input id="frames_skip_steps" class="readout" type="number" min="0" max="95" step="5"></div>
           <div id="cameraBlock">
-            <div class="group-label">Camera, per frame</div>
+            <div class="group-label" data-sub="camera" data-sub-label="Camera">Camera, per frame</div>
             <div id="motionRows" class="motion"></div>
           </div>
           <div class="slider-row"><label class="field-name" for="color_hold" data-words="{color_hold}">Hold colors</label><input type="range" data-for="color_hold" min="0" max="1" step="0.1"><input id="color_hold" class="readout" type="number" min="0" max="1" step="0.1"></div>
           <label class="check" id="turboCheck"><input type="checkbox" id="turbo_mode"> <span data-words="{turbo_mode} (repaints every few frames, much faster)">Turbo (repaints every few frames, much faster)</span></label>
           <div class="slider-row" id="turboEvery"><label class="field-name" for="turbo_steps" data-words="{turbo_steps}">Turbo every</label><input type="range" data-for="turbo_steps" min="2" max="6" step="1"><input id="turbo_steps" class="readout" type="number" min="2" max="6"></div>
           <label class="check"><input type="checkbox" id="frame_ghost"> <span data-words="{frame_ghost} (steadier)">Last frame as ghost (steadier)</span></label>
-          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="animation"></div></details>
         </div>
       </section>
 
@@ -166,13 +167,14 @@
           <div class="group-label">Memory and speed</div>
           <label class="check"><input type="checkbox" id="use_secondary_model"> <span data-words="{use_secondary_model}">Secondary model</span></label>
           <label class="check"><input type="checkbox" id="exact_repeat"> Exact repeat</label>
-          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="model"></div></details>
+          <div class="group-label" data-sub="checkers" data-words="{More CLIP models}">More prompt checkers</div>
         </div>
       </section>
 
       <section class="card" data-card="cutouts">
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title" data-words="{Cutouts}">Cutouts</span><span class="card-sum" id="sum-cutouts"></span></button>
         <div class="card-body">
+          <div class="views-split" id="viewsSplit"></div>
           <div class="card-fields" data-fields="cutouts"></div>
         </div>
       </section>
@@ -184,34 +186,49 @@
         </div>
       </section>
 
+      <section class="card" data-card="regions">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Regional prompts</span><span class="card-sum" id="sum-regions"></span></button>
+        <div class="card-body">
+          <label class="check toggle" data-help="Boxes on the frame, each with a prompt of its own. Off keeps the boxes but leaves them out of renders."><input type="checkbox" id="regionsOn" class="switch" role="switch"> Regional prompts</label>
+          <div id="regionsMore" class="regions-more" hidden>
+            <div class="slider-row"><label class="field-name" for="regionStrength" data-help="How much a box's prompt takes over inside it. The main prompt keeps the rest, so the style stays the same across the picture. 1 leaves the main prompt out of close-ups inside a box.">Strength</label><input type="range" data-for="regionStrength" min="0" max="1" step="0.05"><input id="regionStrength" class="readout" type="number" min="0" max="1" step="0.05"></div>
+            <ul id="regionList" class="region-list"></ul>
+            <button type="button" id="regionsBtn" class="default regions-btn" data-help="Opens the box editor on the canvas. During a render, it pauses the render after the current step so you can draw on the preview, then Continue carries on with the new boxes.">Edit regions</button>
+          </div>
+          <p class="hint" id="regionsWhy" hidden></p>
+        </div>
+      </section>
+
       <section class="card" data-card="handoff">
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Handoff</span><span class="card-sum" id="sum-handoff"></span></button>
         <div class="card-body">
-          <div class="line stacked">
+          <div class="line stacked" data-sub="checkpoint" data-sub-label="Handoff model">
             <label class="field-name" for="handoffPick" data-words="{handoff_file}">Handoff model</label>
             <div class="pick-row"><select id="handoffPick"></select><button type="button" id="handoffBrowse" class="default icon-button" title="Browse for a checkpoint file on the PC that renders" aria-label="Browse for a checkpoint file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button></div>
           </div>
           <input type="hidden" id="handoff_file">
-          <div class="group-label handoff-part">Handoff: checkpoint, then Disco</div>
-          <div class="slider-row"><label class="field-name" for="handoff_share" data-words="{handoff_share}">Handoff %</label><input type="range" data-for="handoff_share" min="0" max="100" step="5"><input id="handoff_share" class="readout" type="number" min="0" max="100" step="5"></div>
-          <div class="slider-row"><label class="field-name" for="handoff_denoise" data-words="{handoff_denoise}">Disco denoise %</label><input type="range" data-for="handoff_denoise" min="0" max="100" step="5"><input id="handoff_denoise" class="readout" type="number" min="0" max="100" step="5"></div>
-          <div class="group-label handoff-part">Reverse handoff: Disco, then checkpoint</div>
-          <div class="slider-row"><label class="field-name" for="handoff_finish" data-words="{handoff_finish}">Reverse handoff %</label><input type="range" data-for="handoff_finish" min="0" max="100" step="5"><input id="handoff_finish" class="readout" type="number" min="0" max="100" step="5"></div>
+          <div class="group-label handoff-part" data-in="checkpoint">Handoff: checkpoint, then Disco</div>
+          <div class="slider-row" data-in="checkpoint"><label class="field-name" for="handoff_share" data-words="{handoff_share}">Handoff %</label><input type="range" data-for="handoff_share" min="0" max="100" step="5"><input id="handoff_share" class="readout" type="number" min="0" max="100" step="5"></div>
+          <div class="slider-row" data-in="checkpoint"><label class="field-name" for="handoff_denoise" data-words="{handoff_denoise}">Disco denoise %</label><input type="range" data-for="handoff_denoise" min="0" max="100" step="5"><input id="handoff_denoise" class="readout" type="number" min="0" max="100" step="5"></div>
+          <div class="group-label handoff-part" data-in="checkpoint">Reverse handoff: Disco, then checkpoint</div>
+          <div class="slider-row" data-in="checkpoint"><label class="field-name" for="handoff_finish" data-words="{handoff_finish}">Reverse handoff %</label><input type="range" data-for="handoff_finish" min="0" max="100" step="5"><input id="handoff_finish" class="readout" type="number" min="0" max="100" step="5"></div>
           <p class="hint"><span id="handoffWhere"></span></p>
-          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="handoff"></div></details>
+          <div class="group-label" id="smallLabel">Small first: Disco small, then Disco full size</div>
+          <div class="slider-row" data-sub="small_first"><label class="field-name" for="small_first" data-words="{small_first}">Small first %</label><input type="range" data-for="small_first" min="0" max="60" step="5"><input id="small_first" class="readout" type="number" min="0" max="95" step="5"></div>
+          <div class="slider-row" data-in="small_first"><label class="field-name" for="small_denoise" data-words="{small_denoise}">Full-size denoise %</label><input type="range" data-for="small_denoise" min="0" max="100" step="5"><input id="small_denoise" class="readout" type="number" min="0" max="100" step="5"></div>
+          <p class="hint" id="smallWhere" data-in="small_first" hidden></p>
         </div>
       </section>
 
       <section class="card" data-card="tiles">
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Tiles</span><span class="card-sum" id="sum-tiles"></span></button>
         <div class="card-body">
-          <label class="line"><span class="field-name">Tiles</span><select id="tile_scale"></select></label>
-          <div class="slider-row"><label class="field-name" for="tile_denoise">Tile denoise</label><input type="range" data-for="tile_denoise" min="0.1" max="1" step="0.05"><input id="tile_denoise" class="readout" type="number" min="0.1" max="1" step="0.05"></div>
-          <div id="tileMore" hidden>
+          <label class="line" data-sub="tile_scale"><span class="field-name">Tiles</span><select id="tile_scale"></select></label>
+          <div class="slider-row" data-in="tile_scale"><label class="field-name" for="tile_denoise">Tile denoise</label><input type="range" data-for="tile_denoise" min="0.1" max="1" step="0.05"><input id="tile_denoise" class="readout" type="number" min="0.1" max="1" step="0.05"></div>
+          <div id="tileMore" data-in="tile_scale" hidden>
             <label class="line"><span class="field-name">Text start</span><select id="tile_start"></select></label>
             <label class="check tile-view"><input type="checkbox" id="tile_whole_view"> Whole picture view</label>
           </div>
-          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="tiles"></div></details>
         </div>
       </section>
 
@@ -250,29 +267,55 @@
           <input type="file" id="image_promptsFile" accept="image/png,image/jpeg,image/webp" multiple hidden>
           <input type="hidden" id="image_prompts">
           <div class="slider-row" id="imagePromptWeightRow" hidden><label class="field-name" for="image_prompt_weight" data-words="{image_prompt_weight}">Image prompt weight</label><input type="range" data-for="image_prompt_weight" min="-2" max="4" step="0.25"><input id="image_prompt_weight" class="readout" type="number" min="-10" max="10" step="0.25"></div>
-          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="guides"></div></details>
+          <div class="group-label" data-sub="ghost_image" data-sub-label="Ghost image"><span data-words="{ghost_image}">Ghost image</span> settings</div>
+          <div class="group-label" data-sub="style_image" data-sub-label="Style image"><span data-words="{style_image}">Style image</span> settings</div>
+        </div>
+      </section>
+
+      <section class="card" data-card="controls">
+        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Controls</span><span class="card-sum" id="sum-controls"></span></button>
+        <div class="card-body">
+          <div class="guides image-only">
+            <div class="guide" id="controlGuide">
+              <div class="field-name" data-words="{control_image}">Control image</div>
+              <div class="drop small" data-drop="control_image" tabindex="0" role="button" aria-label="Control image: drop an image or click to choose">
+                <div class="drop-empty"><span>Drop</span></div>
+                <img class="drop-image" alt="" hidden>
+                <button type="button" class="drop-clear" title="Remove" aria-label="Remove the control image" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+              </div>
+            </div>
+          </div>
+          <input type="file" id="control_imageFile" accept="image/png,image/jpeg,image/webp" hidden>
+          <p class="hint" id="controlWhere"></p>
+          <div class="slider-row" data-sub="edge_control"><label class="field-name" for="edge_control" data-words="{edge_control}">Edge control</label><input type="range" data-for="edge_control" min="0" max="2" step="0.1"><input id="edge_control" class="readout" type="number" min="0" max="10" step="0.1"></div>
+          <div class="slider-row" data-sub="depth_control"><label class="field-name" for="depth_control" data-words="{depth_control}">Depth control</label><input type="range" data-for="depth_control" min="0" max="2" step="0.1"><input id="depth_control" class="readout" type="number" min="0" max="10" step="0.1"></div>
+          <div class="slider-row" data-sub="pose_control"><label class="field-name" for="pose_control" data-words="{pose_control}">Pose control</label><input type="range" data-for="pose_control" min="0" max="2" step="0.1"><input id="pose_control" class="readout" type="number" min="0" max="10" step="0.1"></div>
+          <div class="slider-row" data-sub="person_control"><label class="field-name" for="person_control" data-words="{person_control}">Person control</label><input type="range" data-for="person_control" min="0" max="1" step="0.05"><input id="person_control" class="readout" type="number" min="0" max="1" step="0.05"></div>
+          <div class="slider-row" data-sub="face_control"><label class="field-name" for="face_control" data-words="{face_control}">Face control</label><input type="range" data-for="face_control" min="0" max="1" step="0.05"><input id="face_control" class="readout" type="number" min="0" max="1" step="0.05"></div>
+          <div class="slider-row" data-sub="face_shape"><label class="field-name" for="face_shape" data-words="{face_shape}">Face shape</label><input type="range" data-for="face_shape" min="0" max="2" step="0.1"><input id="face_shape" class="readout" type="number" min="0" max="2" step="0.1"></div>
+          <div class="slider-row"><label class="field-name" for="face_detail" data-words="{face_detail}">Face detail</label><input type="range" data-for="face_detail" min="0" max="8" step="1"><input id="face_detail" class="readout" type="number" min="0" max="16" step="1"></div>
         </div>
       </section>
 
       <section class="card" data-card="lab" id="labSection">
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Experiments</span><span class="card-sum" id="sum-lab"></span></button>
         <div class="card-body">
-          <label class="check"><input type="checkbox" id="time_travel"> Time travel</label>
-          <div class="slider-row"><label class="field-name" for="prompt_graft">Prompt graft</label><input type="range" data-for="prompt_graft" min="0" max="10" step="0.5"><input id="prompt_graft" class="readout" type="number" min="0" max="20" step="1"></div>
-          <label class="line"><span class="field-name">Live ghost</span><select id="live_ghost"></select></label>
+          <label class="check" data-sub="time_travel"><input type="checkbox" id="time_travel"> Time travel</label>
+          <div class="slider-row" data-sub="prompt_graft"><label class="field-name" for="prompt_graft">Prompt graft</label><input type="range" data-for="prompt_graft" min="0" max="10" step="0.5"><input id="prompt_graft" class="readout" type="number" min="0" max="20" step="1"></div>
+          <label class="line" data-sub="live_ghost"><span class="field-name">Live ghost</span><select id="live_ghost"></select></label>
           <div class="slider-row"><label class="field-name" for="depth_target">Depth target</label><input type="range" data-for="depth_target" min="0" max="3" step="0.1"><input id="depth_target" class="readout" type="number" min="0" max="3" step="0.1"></div>
-          <label class="check"><input type="checkbox" id="two_painters"> Two painters</label>
-          <label class="check"><input type="checkbox" id="borrow_attention"> Borrowed attention</label>
-          <label class="check"><input type="checkbox" id="detail_bands"> Broad shapes first</label>
-          <label class="check"><input type="checkbox" id="shaped_guidance"> <span data-words="Shaped {clip_guidance_scale}">Shaped Prompt strength</span></label>
+          <label class="check" data-sub="two_painters"><input type="checkbox" id="two_painters"> Two painters</label>
+          <label class="check" data-sub="borrow_attention"><input type="checkbox" id="borrow_attention"> Borrowed attention</label>
+          <label class="check" data-sub="detail_bands"><input type="checkbox" id="detail_bands"> Broad shapes first</label>
+          <label class="check" data-sub="shaped_guidance"><input type="checkbox" id="shaped_guidance"> <span data-words="Shaped {clip_guidance_scale}">Shaped Prompt strength</span></label>
           <div class="slider-row"><label class="field-name" for="gradient_momentum">Push momentum</label><input type="range" data-for="gradient_momentum" min="0" max="0.95" step="0.05"><input id="gradient_momentum" class="readout" type="number" min="0" max="0.95" step="0.05"></div>
           <div class="slider-row"><label class="field-name" for="evidence_map">Subject memory</label><input type="range" data-for="evidence_map" min="0" max="1" step="0.1"><input id="evidence_map" class="readout" type="number" min="0" max="1" step="0.1"></div>
-          <div class="slider-row"><label class="field-name" for="layout_critic">Coherence critic</label><input type="range" data-for="layout_critic" min="0" max="2" step="0.1"><input id="layout_critic" class="readout" type="number" min="0" max="2" step="0.1"></div>
-          <label class="line"><span class="field-name">Robust checker</span><select id="robust_critic"></select></label>
-          <div class="slider-row"><label class="field-name" for="one_subject">One subject</label><input type="range" data-for="one_subject" min="0" max="3" step="0.1"><input id="one_subject" class="readout" type="number" min="0" max="3" step="0.1"></div>
-          <div class="slider-row"><label class="field-name" for="correct_steps">Corrector steps</label><input type="range" data-for="correct_steps" min="0" max="3" step="1"><input id="correct_steps" class="readout" type="number" min="0" max="3" step="1"></div>
-          <label class="line"><span class="field-name">Prompt routing</span><select id="route_prompts"></select></label>
-          <details class="card-more"><summary>More settings</summary><div class="card-fields" data-fields="lab"></div></details>
+          <div class="slider-row" data-sub="layout_critic"><label class="field-name" for="layout_critic">Coherence critic</label><input type="range" data-for="layout_critic" min="0" max="2" step="0.1"><input id="layout_critic" class="readout" type="number" min="0" max="2" step="0.1"></div>
+          <label class="line" data-sub="robust_critic"><span class="field-name">Robust checker</span><select id="robust_critic"></select></label>
+          <div class="slider-row" data-sub="one_subject"><label class="field-name" for="one_subject">One subject</label><input type="range" data-for="one_subject" min="0" max="3" step="0.1"><input id="one_subject" class="readout" type="number" min="0" max="3" step="0.1"></div>
+          <div class="slider-row" data-sub="correct_steps"><label class="field-name" for="correct_steps">Corrector steps</label><input type="range" data-for="correct_steps" min="0" max="3" step="1"><input id="correct_steps" class="readout" type="number" min="0" max="3" step="1"></div>
+          <label class="line" data-sub="route_prompts"><span class="field-name">Prompt routing</span><select id="route_prompts"></select></label>
+          <div class="group-label" data-sub="partner" data-sub-label="Partner model" data-words="{partner_model}">Partner model</div>
         </div>
       </section>
 
@@ -292,6 +335,15 @@
       <img id="stageImg" alt="" hidden>
       <video id="stageVideo" controls loop muted playsinline hidden></video>
       <div id="stageEmpty" class="empty">Your image will appear here as it renders.</div>
+      <div id="regionEditor" class="region-editor" hidden>
+        <div id="regionFrame" class="region-frame"></div>
+        <div class="region-bar">
+          <span id="regionNote" class="region-note"></span>
+          <button type="button" id="regionClear" class="default">Clear</button>
+          <button type="button" id="regionCancel" class="default">Cancel</button>
+          <button type="button" id="regionDone" class="primary">Done</button>
+        </div>
+      </div>
     </div>
     <div class="under-canvas">
       <div id="progress" class="progress" hidden>
@@ -451,14 +503,17 @@
     </div>
     <h3>Prompts</h3>
     <p>Write one prompt per line, and all of them guide the image together. End a line with a weight to change how much it counts: <code>:2</code> counts double, and <code>:-1</code> steers away from it.</p>
+    <h3>Regional prompts</h3>
+    <p>The Regional prompts card puts boxes on the frame, each with a prompt of its own. Turn it on and press Edit regions, then drag on the frame to draw a box, type its prompt and press Done. Drag a box to move it, drag its corner to resize it, and press × to remove it. The boxes go with every render while the card is on, and turning it off keeps them for later. During a render the button reads Pause and edit regions: it pauses the render after the current step and opens the editor on the preview, and Continue carries on with the new boxes from there, as often as you like. A close-up inside a box is judged mostly by the box's prompt, and the main prompt keeps the rest, so the style stays the same. Strength sets how much a box's prompt takes over inside it. Regional prompts don't work with Tiles.</p>
     <h3>Looks</h3>
     <p>A look sets how the prompt shapes the picture, at any size. Changing one of its settings by hand shows Custom.</p>
     <dl id="helpLooks"></dl>
     <h3 data-words="{Cutouts} and schedules">Cutouts and schedules</h3>
     <p data-words="Each step, the {clip_lower} judge {cuts_lower} of the picture: whole-image views and close-ups. The {Cutouts} card sets how many of each there are and how close the close-ups get."></p>
-    <p data-words="The default close-up ramp keeps {cut_ic_pow} low at the start, so close-ups are wide and lay out the scene, and raises it toward the end for detail. It made real scenes where flat settings gave texture. Big shapes and Fine detail under Look hold it flat instead."></p>
+    <p data-words="The default close-up ramp keeps {cut_ic_pow} low at the start, so close-ups are wide and lay out the scene, and raises it toward the end for detail. It made real scenes where flat settings gave texture. Mostly shapes and Mostly detail under Look give more of the steps to one or the other."></p>
+    <p>The bar at the top of the card counts which steps lay out shapes and which paint detail, for the steps, Denoise or Frame skip you have set, and each schedule's graph marks where shapes end. The schedules run over 1000 points from noise to the finished picture. The first 400 lay out the scene with whole-image views and wide close-ups, and the rest paint detail with tighter and tighter close-ups. A start image skips the first steps, so at Denoise 50% Disco starts at point 500 and paints only detail over the image's shapes, which suits a restyle. Video frames do the same with Frame skip %. Fit views to the painted steps spreads the schedules over only the steps that are painted, so they start with a pass of shapes of their own and the prompt can turn what is in the image into what it describes. It's on for start images by default, and Start images and clip frames fits each frame of a clip too. Shapes share % sets how many of the steps that pass gets: 40 keeps the schedules as drawn, and 20 gives a fifth to shapes and the rest to detail.</p>
     <p>Settings that change over the render are schedules. Each one shows as a graph from the start of the render on the left to the end on the right, with its values in the corner. Click a graph to open its editor. Drag a level up or down to change it, and drag the line between two levels to move the change. Double-click a level to split it there, and double-click a line to join its two sides. The text box takes the same schedule as text, such as [12]*400+[4]*600: 12 for the first 400 of 1000 parts, then 4. A value that differs from the default shows in the accent color. Hover over a setting's name to read what it does.</p>
-    <p>Guidance holds how the push toward the prompt is smoothed and limited, and how the picture is sampled. More settings, at the bottom of some cards, holds the rest of that card's settings.</p>
+    <p>Guidance holds how the push toward the prompt is smoothed and limited, and how the picture is sampled. An option with settings of its own becomes a section when you switch it on, with its settings right under it, and its arrow folds them away. Settings that are always in use, such as those for Frames per second, start folded behind an arrow. A dot on an arrow means a setting inside is changed.</p>
     <h3>Seeds and Exact repeat</h3>
     <p>Seed 0 picks a new random seed for every render. Any other number starts from the same noise each time; slide it, or type any number up to 4294967295. A seed sets the starting noise, but the GPU adds tiny differences, so the same seed normally gives a similar start and a different image. Exact repeat removes those differences on this PC, at about 30% more time per step. Each image in a run has its own seed, so Reuse settings can make any of them again.</p>
     <h3>Images</h3>
@@ -480,17 +535,22 @@
     <p data-words="Whole picture view lets the {clip_lower} see each tile as part of the full image. Tiles use the ddim sampler, and symmetry doesn't apply."></p>
     <h3>Animation</h3>
     <p>Animation renders a clip one frame at a time. 2D moves a flat picture each frame. 3D flies a camera through the scene, with Depth Anything telling near from far, so 3D needs it from Models. Video Input repaints each frame of a video you drop on its box. Every frame after the first starts from the last one, and Frame skip % sets how much of it is kept. Higher is steadier and faster. 75 holds a scene while the camera moves, and 60 lets it keep reinventing itself. Video Input switches to 55, so the video gets repainted more. Frame skip keyframes in All settings can lower it around a prompt change, so the new prompt takes over sooner.</p>
+    <p>Clip style, under the video, sets how each frame starts. Paint over keeps each frame's shapes from the video and paints over them, at Frame skip 40% with no blend, so its painted steps all paint detail: abstract and painterly, with Disco's flicker. Reimagine fits the views to each frame too, so its painted steps get the Look's own split of shapes and detail, and the prompt can turn what is in the video into what it describes. Build up keeps more of each frame and blends in some of the last one, so the painting builds up and changes less from frame to frame. Changing one of its settings by hand shows Custom.</p>
     <p>For calmer, more painterly clips, try Step noise at about 0.3 under Sampling in All settings. It changes the first frame too.</p>
     <p>Each move has a slider for a steady value, and keyframes for change over time: <code>0:(1.0), 60:(1.04), 120:(1.0)</code> eases in and out over 120 frames. Formulas of the frame t work too: <code>0:(1+0.02*sin(t/8))</code> sways. The curve button opens an editor: drag a point to change it, double-click empty space to add a keyframe, and double-click a point to remove it. Formulas typed in its text box show as hollow points that can't be dragged.</p>
     <p>The prompt box is the prompt at the first frame. Change the prompt at a frame adds another box with the frame it starts at, so a clip can travel from one idea to the next. Prompt fade in All settings blends one into the next.</p>
     <p>Hold colors keeps the light and color close to the first frame's, so long clips don't drift. Turbo repaints only every few frames and lets the camera move the frames between, which is much faster. Last frame as ghost lets Depth target and the ghost's light and dark hold each frame to the last, which is steadier. For Video Input, Blend last frame mixes the last finished frame into each new one, so the painting builds up over the clip, and it follows the video's own motion, so the paint moves with what moves. The first frame gets a first pass of its own, so the clip doesn't open on the plain video.</p>
+    <p>Seamless loop makes a clip that loops with no jump where it starts again. Paint back to the start paints the last few frames more and more like the first, for motion that already comes back to where it began, such as a camera moving on a sin formula. Ping-pong plays the video, or the camera's moves, forward and then back, so the motion ends where it began, and paints back to the start as well. The way back is painted fresh, not played in reverse. For a video, Frames counts both ways. With In-between frames, the last frame gets in-betweens into the first too.</p>
     <p>Each clip is saved as PNG frames in a folder, an MP4 and an animated WebP, with a GIF if you choose. Stopping a clip still saves the video of the frames it has. The last frame shows in Images, and clicking it plays the clip.</p>
     <h3>Handoff</h3>
-    <p>Handoff brings in a Stable Diffusion checkpoint you already have, SD 1.5 or SDXL, in one of two ways, or both.</p>
+    <p>Handoff brings in a Stable Diffusion checkpoint you already have, SD 1.5 or SDXL, in one of two ways, or both. A third kind, Small first, hands Disco's own start from a small size to the full size, and needs no checkpoint.</p>
     <p><b>Checkpoint first, then Disco.</b> The checkpoint paints the start of every image or frame, and Disco carries on. It's not a start image: the checkpoint takes its share of the steps from noise, and Disco picks up while the scene is still blurry. The layout and subject come from the checkpoint, and the paint and detail from Disco. Handoff % is the checkpoint's share: 0 turns this part off, about 30% keeps Disco's look on a sturdier layout, and 50% keeps more of the checkpoint. Disco denoise % works like Denoise for Disco afterwards: 0 carries on from exactly where the checkpoint stopped, and higher has Disco repaint more of it. Handoff 60% with Disco denoise 75% gives Disco 150 of 200 steps on the checkpoint's picture. With a start image or in animation, the checkpoint takes its share of what would be repainted, so every frame of a clip gets it.</p>
     <p><b>Reverse handoff: Disco first, then the checkpoint.</b> Disco paints the whole image, and then the checkpoint repaints part of it, like Denoise in img2img. Reverse handoff % is how much: 0 is off, 20 to 35% tidies details such as faces and edges and keeps Disco's look, and 100% replaces Disco's image. It works with Handoff % at 0, for still images only. Keep the handoff picture also saves Disco's own image beside the result.</p>
-    <p>The checkpoint waits in RAM and comes to the GPU only for its own steps. SD 1.5 fits beside Disco. SDXL is stored in 8 bits on cards under 12GB, which halves its memory, and takes a minute or two to load the first time; after that it stays loaded between renders. Handoff steps, prompt strength, the negative prompt and few-step models such as Lightning are under More settings in the Handoff card.</p>
+    <p><b>Small first: Disco small, then Disco full size.</b> Disco's model learned at about 512 pixels, and its prompt checkers look at small views of the picture, so on a large frame such as 1280×768 different areas can each grow their own subject. Small first paints the start of each image at a smaller size in the frame's shape, while the layout is decided, then enlarges its still blurry picture and carries on at full size, where the detail is painted. Small first % is the small share: 0 is off and about 25% suits 1280×768. Full-size denoise % works like Disco denoise %: 0 carries on from exactly where the small start stopped, and higher has the full size repaint more of it, which gives it more say over the layout. Hold the small layout, also in that section, keeps the full size's broad shapes and colors close to the small picture while the detail is added, so a second subject can't grow in the empty areas; about 0.5 is a good start. Small first size is the small start's longer side, 768 by default, and Small first does nothing on frames no larger than that. The small steps are faster, so a render also takes a little less time. It works on stills and on the first frame of a clip, but not with Tiles, which have their own Render first, or with the experiments that are sized to the frame.</p>
+    <p>The checkpoint waits in RAM and comes to the GPU only for its own steps. SD 1.5 fits beside Disco. SDXL is stored in 8 bits on cards under 12GB, which halves its memory, and takes a minute or two to load the first time; after that it stays loaded between renders. Handoff steps, prompt strength, the negative prompt and few-step models such as Lightning are in the Handoff model section, which opens once a checkpoint is chosen.</p>
     <p>The Handoff list shows the SD 1.5 and SDXL checkpoints in your checkpoint folders and in ComfyUI or a Stable Diffusion web UI on the PC that renders, grouped by subfolder. Browse picks a file anywhere on the PC that renders and adds its folder.</p>
+    <h3>Controls</h3>
+    <p>ControlNet's idea, done through guidance, since Disco's model has nowhere to plug a ControlNet in. At every step the render is compared with a control picture and nudged closer, beside the prompt. A still follows the Control image, or else its start image. A clip needs none: a Video Input clip follows each frame of the video as it is before any painting, so the subject stays where it really is, and a 2D or 3D clip follows the frame each repaint starts from. Edge control holds its outlines, and only asks for an outline where it has one. Depth control holds its near and far. Pose control finds each person's skeleton and holds a body in that stance. Person control cuts out each person and holds their silhouette, clothes and broad colors, while everything around them is painted freely; it is the strongest for keeping someone in a clip. Face control finds each face and holds its features while the layout forms, where the eyes, nose and mouth are and their light and dark, then lets the paint finish them; a head turned to the side can still be painted facing forward; Face shape holds more of a turn. Face shape holds each face's outline and its near and far, measured close up, so the face keeps its own shape and a turned head keeps more of its turn, most of all with a Control image; it pushes beside the prompt as Edge and Depth do, so the face is still painted freely. Face detail gives every face close-ups of its own at each step, so faces are painted with more care; with no control picture it finds faces in the render itself, so it works with text alone. About 0.5 is a good start, and Person control holds well at 0.3. Each one has its own curve, in its section, which sets when it counts: Face lets go at 50% of the render, Depth at 60%, Pose, Person and Face shape at 70%, and Edge at 80%. They don't work with Tiles.</p>
     <h3>Experiments</h3>
     <p>These change how the image forms. They're new, so results vary a lot from seed to seed, and they can't run with tiles, symmetry, plms or the secondary model. Whichever you choose first grays out the other, and hovering a grayed setting says why.</p>
     <p>Time travel backs up and repeats some steps, so the painter can absorb the prompt's push. Subjects get cleaner, for about 35% more time.</p>
@@ -503,7 +563,7 @@
     <p>Five more change the checkers themselves, the CLIP models that compare the picture with your prompt. A checker is as happy with bits of a subject scattered over the canvas as with one whole subject, which is why Disco subjects fall apart. None of these needs the partner, and they can be combined.</p>
     <p>Coherence critic shows the checkers each view twice, once with its pieces shuffled, and pushes the picture so the shuffled one scores worse. Your prompt then only counts when it comes from how the parts fit together, so subjects hold together and the paint stays. About 0.6 is a good start. It adds about 10% time and 0.8 to 1.2GB of VRAM, less with Coherence views set to Whole-image.</p>
     <p>Robust checker adds a checker that was trained to resist tiny changes, so its push draws real shapes instead of streaks. It leads for the first third of the render, while the layout forms, then hands over to the usual checkers. Expect whole scenes and steadier subjects, with more muted color. FARE4 B/16 costs almost nothing; the L/14 ones are about 70% slower and bolder. Get them from Models in All settings. Robust checker mode set to Together keeps the usual checkers at full strength all along.</p>
-    <p>One subject finds where each subject sits in the picture and pushes it into one place, so it isn't repeated, and keeps separate subjects apart. Name them in Subjects under More settings, separated by semicolons, such as "a woman; a white horse". Left empty, it uses the first phrase of your prompt. About 1 suits one subject and 2 suits two; higher can lose a face. It needs a ViT checker.</p>
+    <p>One subject finds where each subject sits in the picture and pushes it into one place, so it isn't repeated, and keeps separate subjects apart. Name them in Subjects, in the One subject section once it's on, separated by semicolons, such as "a woman; a white horse". Left empty, it uses the first phrase of your prompt. About 1 suits one subject and 2 suits two; higher can lose a face. It needs a ViT checker.</p>
     <p>Corrector steps add small extra steps early in the render, which let the picture settle at each stage before it moves on. One step gives cleaner faces and steadier layouts for about 50% more time. With Two painters, they also make both models agree, which changes Two painters a lot.</p>
     <p>Prompt routing scores the subject of your prompt on whole-image views and the rest, its style, on close-ups, so the subject forms once and the paint covers everything. The subject is the first phrase of each line, up to the first comma, or the first line. Its curve applies it for the first half of the render by default; the whole render can turn abstract. It costs nothing.</p>
     <p>Push momentum goes wilder and more abstract as it rises. Broad shapes first, Subject memory and Shaped prompt strength give smaller changes.</p>
@@ -600,5 +660,6 @@
 <div id="imageMenu" class="context-menu" role="menu" aria-label="Image actions" hidden></div>
 <div id="toast" class="toast" role="status" hidden></div>
 <script src="app.js"></script>
+<script src="regions.js"></script>
 </body>
 </html>

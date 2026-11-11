@@ -5,7 +5,7 @@ One place for every rule, so the page and the renderer agree.
 import os
 
 import models
-from settings import DEFAULTS, LABELS
+from settings import DEFAULTS, LABELS, small_first_on
 
 # Experiments change the generation loop in ways tiles, symmetry, plms and the secondary model can't follow.
 EXPERIMENTS = ["time_travel", "prompt_graft", "live_ghost", "depth_target", "two_painters", "borrow_attention", "partner_model",
@@ -13,6 +13,10 @@ EXPERIMENTS = ["time_travel", "prompt_graft", "live_ghost", "depth_target", "two
                "route_prompts", "layout_critic", "robust_critic", "one_subject", "correct_steps"]
 LOOP_CHANGES = ["tile_scale", "use_secondary_model", "use_horizontal_symmetry", "use_vertical_symmetry", "diffusion_sampling_mode"]
 PARTNER_USERS = ["prompt_graft", "live_ghost", "two_painters", "borrow_attention"]
+# Sized to the frame when a render starts, so they can't follow Small first's start at another size.
+FRAME_SIZED = PARTNER_USERS + ["depth_target", "ghost_image", "style_image", "frame_ghost"]
+# Controls that follow a control picture. Face detail is one too, but finds faces in the render without one.
+CONTROLS = ["edge_control", "depth_control", "pose_control", "person_control", "face_control", "face_shape"]
 RESNETS = ["RN50", "RN101", "RN50x4", "RN50x16", "RN50x64"]
 VITS = ["ViTB32", "ViTB16", "ViTL14"]
 CHECKERS = RESNETS + VITS  # never reported as conflicts: they are blocked only to stop the last one going
@@ -33,11 +37,19 @@ def _on(cfg, name):
         return value not in (None, "", "Off")
     if name == "partner_model":
         return False  # a choice, not a switch: it is only in the way when the partner is used
+    if name == "small_first":
+        return small_first_on(cfg)
     if name == "frame_ghost":
         return bool(value) and cfg.get("animation_mode", "None") != "None"
     if isinstance(value, str):
         return bool(value.strip())
     return bool(value)
+
+
+def regions_on(cfg):
+    """True when the render has regional prompts: boxes with prompts of their own."""
+    regions = cfg.get("regions")
+    return isinstance(regions, dict) and any(str(b.get("text", "")).strip() for b in regions.get("boxes", []) if isinstance(b, dict))
 
 
 def _names(names):
@@ -72,6 +84,23 @@ def blocked(cfg, downloaded=_have):
         block(["use_horizontal_symmetry", "use_vertical_symmetry", "tile_scale"], "Needs the ddim sampler.")
     if _on(cfg, "use_horizontal_symmetry") or _on(cfg, "use_vertical_symmetry"):
         block(["diffusion_sampling_mode", "tile_scale"], "Mirroring needs ddim and no tiles.")
+    sized = [n for n in FRAME_SIZED if _on(cfg, n)]
+    if _on(cfg, "small_first"):
+        block(FRAME_SIZED, "Can't run with Small first %, which paints the start at another size.")
+        block(["tile_scale"], "Can't run with Small first %. Tiles have their own small start, Render first.")
+    if sized:
+        block(["small_first"], f"Can't run with {_names(sized)}, which are sized to the frame.")
+    if _on(cfg, "tile_scale"):
+        block(["small_first"], "Tiles have their own small start: Render first, under Text start.")
+    if regions_on(cfg):
+        block(["tile_scale"], "Can't run with Regional prompts. Turn them off first.")
+    steering = [n for n in CONTROLS + ["face_detail"] if _on(cfg, n)]
+    if _on(cfg, "tile_scale"):
+        block(CONTROLS + ["face_detail"], "Controls can't run with Tiles.")
+    if steering:
+        block(["tile_scale"], f"Can't run with {_names(steering)}.")
+    if not ((str(cfg.get("control_image") or "").strip() and not animating) or str(cfg.get("init_image") or "").strip() or animating):
+        block(CONTROLS, "Needs a Control image or a start image to follow.")
 
     partner_named = cfg["partner_model"]
     if partner_named == "Tiny SD" and not downloaded(models.PARTNER):
@@ -88,7 +117,7 @@ def blocked(cfg, downloaded=_have):
     if robust and not downloaded(robust[0]):
         block(["robust_critic"], f"Get {models.LABELS[robust[0]]} from Models in All settings first.")
     if not downloaded(models.DEPTH):
-        block(["depth_target"], "Get Depth Anything from Models in All settings first.")
+        block(["depth_target", "depth_control", "face_shape"], "Get Depth Anything from Models in All settings first.")
     elif not (_on(cfg, "live_ghost") or _on(cfg, "ghost_image") or (animating and cfg["frame_ghost"])):
         block(["depth_target"], "Needs Live ghost, a Ghost image or Last frame as ghost.")
     resnets = [n for n in RESNETS if cfg[n]]

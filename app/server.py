@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 print("Loading the web server", flush=True)
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
@@ -59,7 +59,7 @@ except OSError:
 for d in (OUT_DIR, INIT_DIR, JOBS_DIR, BUILT_IN_UPSCALERS, BUILT_IN_CHECKPOINTS):
     os.makedirs(d, exist_ok=True)
 
-KNOWN_FIELDS = {f["name"] for f in FIELDS} | {"width_height", "init_image"}
+KNOWN_FIELDS = {f["name"] for f in FIELDS} | {"width_height", "init_image", "regions"}
 FRIENDLY = {
     "oom": "The GPU ran out of memory. Close other GPU apps, or lower the size or use fewer CLIP models.",
     "error": "The render failed. Details are in the log below.",
@@ -84,6 +84,7 @@ class Task:
         self.started = time.time()
         self.sampling_started = None
         self.paused = False  # a status message came between steps
+        self.holding = False  # paused by the page, for regions to be drawn
         self.seed = None
         self.images = []
         self.preview_rev = 0
@@ -264,6 +265,11 @@ def handle_event(task, e):
                 task.state, task.message, task.paused = "rendering", "Upscaling" if task.kind == "upscale" else "Rendering", False
             task.step, task.total, task.batch = e["step"], e["total"], e["batch"]
             task.step_times.append(e["t"])
+        elif kind == "paused":
+            task.state, task.message, task.holding = "paused", "Paused. Draw regions, then Continue.", True
+        elif kind == "resumed":
+            task.state, task.message, task.holding = "rendering", "Rendering", False
+            task.step_times.clear()  # the wait isn't render time
         elif kind == "preview":
             task.preview_rev += 1
         elif kind == "image":
@@ -285,7 +291,7 @@ def task_json(task):
         return None
     spp = seconds_per_step(task)
     eta = None
-    if spp and task.total:
+    if spp and task.total and not task.holding:
         left = max(task.total - task.step, 0) + (task.n_batches - task.batch - 1) * task.total
         eta = round(left * spp)
     return {
@@ -295,6 +301,7 @@ def task_json(task):
         "elapsed_s": round((task.finished_at or time.time()) - task.started), "preview_rev": task.preview_rev,
         "images": [image_url(p) for p in task.images], "peak_vram_gb": task.peak_vram, "error": task.error,
         "log": list(task.log)[-14:] if task.state in ("error", "oom") else [],
+        "pausing": task.kind == "render" and os.path.exists(os.path.join(task.job_dir, "pause")),
         "active": task.running(),
     }
 
@@ -629,7 +636,7 @@ def schema():
 @app.get("/api/models")
 def model_list():
     def kind(name):
-        if name in (models.PARTNER, models.DEPTH, models.RIFE, *models.ROBUST):
+        if name in (models.PARTNER, models.DEPTH, models.POSE, models.PERSON, models.FACES, models.RIFE, *models.ROBUST):
             return "partner"
         return "upscaler" if name == models.UPSCALER else "helper" if name == "secondary" else "diffusion"
     return {"models": [{"name": n, "label": models.LABELS.get(n, n), "kind": kind(n), "about": models.ABOUT[n],
@@ -708,6 +715,9 @@ async def render(request: Request):
         if current and current.running():
             raise HTTPException(409, "Something is already running.")
         settings = {k: v for k, v in body.get("settings", {}).items() if k in KNOWN_FIELDS}
+        settings["regions"] = clean_regions(settings.get("regions"))
+        if not settings["regions"]:
+            del settings["regions"]
         clash = rules.conflicts(settings)
         if clash:
             raise HTTPException(400, clash[0])
@@ -769,14 +779,81 @@ def stop():
     return {"ok": True}
 
 
+def clean_regions(value):
+    """Regional prompts as the page sends them, checked: boxes in fractions of the frame, each with a prompt."""
+    if not isinstance(value, dict):
+        return None
+    boxes = []
+    for box in value.get("boxes", [])[:12]:
+        try:
+            x, y, w, h = (min(max(float(box[k]), 0.0), 1.0) for k in ("x", "y", "w", "h"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        text = str(box.get("text", "")).strip()[:400]
+        if text and w > 0.01 and h > 0.01:
+            boxes.append({"x": x, "y": y, "w": min(w, 1 - x), "h": min(h, 1 - y), "text": text})
+    try:
+        strength = min(max(float(value.get("strength", 0.75)), 0.0), 1.0)
+    except (TypeError, ValueError):
+        strength = 0.75
+    return {"strength": strength, "boxes": boxes} if boxes else None
+
+
+@app.post("/api/pause")
+def pause():
+    """Holds the render after its next step, so regions can be drawn on the preview."""
+    with lock:
+        if not current or not current.running() or current.kind != "render":
+            return {"ok": False}
+        open(os.path.join(current.job_dir, "pause"), "w").close()
+        if not current.holding:
+            current.message = "Pausing after this step"
+    return {"ok": True}
+
+
+@app.post("/api/resume")
+def resume(body: dict):
+    """Carries on a paused render, with the regions the page sends."""
+    with lock:
+        if not current or current.kind != "render":
+            return {"ok": False}
+        regions = clean_regions(body.get("regions"))
+        settings = {}
+        try:
+            with open(os.path.join(current.job_dir, "job.json"), encoding="utf-8") as f:
+                settings = json.load(f)["settings"]
+        except (OSError, ValueError, KeyError):
+            pass
+        if regions and rules._on(settings, "tile_scale"):
+            raise HTTPException(400, "Regional prompts can't run with Tiles.")
+        if "regions" in body:  # without them, it carries on with the regions it had
+            temp = os.path.join(current.job_dir, "regions.tmp")
+            with open(temp, "w", encoding="utf-8") as f:
+                json.dump(regions, f)
+            os.replace(temp, os.path.join(current.job_dir, "regions.json"))  # whole before the worker reads it
+        try:
+            os.remove(os.path.join(current.job_dir, "pause"))
+        except FileNotFoundError:
+            pass
+        if current.running() and current.state in ("paused", "rendering"):
+            # at once, so the page doesn't read the pause it just ended as a new one
+            current.state, current.message, current.holding = "rendering", "Rendering", False
+    return {"ok": True}
+
+
 @app.get("/api/preview/{job_id}")
 def preview(job_id: str):
     if not re.fullmatch(r"[0-9A-Za-z-]+", job_id):
         raise HTTPException(400, "Bad job id.")
     path = os.path.join(JOBS_DIR, job_id, "preview.jpg")
-    if not os.path.isfile(path):
-        raise HTTPException(404, "No preview yet.")
-    return FileResponse(path, headers={"Cache-Control": "no-store"})
+    # Read whole, in one go: the renderer replaces this file at every step, and a file sent in pieces could change
+    # partway, which breaks the picture and blanks the page's preview for a moment.
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        raise HTTPException(404, "No preview yet.") from None
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 GALLERY_PER_FOLDER = 200

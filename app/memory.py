@@ -310,6 +310,15 @@ def free_text_encoders(clip_models):
     torch.cuda.empty_cache()
 
 
+def text_encoders_back(clip_models, device):
+    """Brings the text halves of CLIP back for a moment, to encode prompts set during a render."""
+    for model in clip_models:
+        for part in ("transformer", "token_embedding", "ln_final"):
+            module = getattr(model, part, None)
+            if module is not None:
+                module.to(device)
+
+
 def limit_vram():
     """Caps this process below what is free, so running out is a clean error.
 

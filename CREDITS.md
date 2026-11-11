@@ -52,6 +52,8 @@ Everyone is listed because the project they built is what made this one possible
 | [PyAV](https://github.com/PyAV-Org/PyAV), which reads and writes video. Its wheels include FFmpeg, built with x264 | PyAV contributors; the FFmpeg and x264 developers | BSD 3-Clause; FFmpeg and x264 under the GPL |
 | [OpenCV](https://github.com/opencv/opencv), which follows a video's motion | OpenCV contributors | Apache 2.0 |
 | [RIFE](https://github.com/hzwer/Practical-RIFE) 4.7, for in-between frames, an optional download. `app/rife.py` follows its network, as packaged by [vs-rife](https://github.com/HolyWu/vs-rife) | Zhewei Huang (hzwer) and others; HolyWu | [MIT](LICENSES/rife.txt) |
+| [Keypoint R-CNN and Mask R-CNN](https://github.com/pytorch/vision), through torchvision, optional downloads for Pose control and Person control | The torchvision team | BSD 3-Clause |
+| [RetinaFace](https://arxiv.org/abs/1905.00641) ResNet-50, an optional download for Face control and Face detail. `app/retinaface.py` follows the network of [Pytorch_Retinaface](https://github.com/biubug6/Pytorch_Retinaface), and the weights come from [facexlib](https://github.com/xinntao/facexlib)'s release | Jiankang Deng and others; biubug6; Xintao Wang | [MIT](LICENSES/pytorch-retinaface.txt); MIT |
 | [FastAPI](https://github.com/fastapi/fastapi), [Uvicorn](https://github.com/encode/uvicorn) | Sebastián Ramírez; Encode | MIT; BSD 3-Clause |
 
 guided-diffusion, CLIP, ResizeRight and the Python packages are downloaded by `setup.bat`. The

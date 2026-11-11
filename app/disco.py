@@ -26,6 +26,7 @@ from torch import nn
 from torch.nn import functional as F
 
 import animate
+import control
 import critic
 import depth
 import graft
@@ -37,7 +38,7 @@ import partner
 import paths
 import rules
 import tiles
-from settings import DEFAULTS, handoff_parts, uses_partner
+from settings import DEFAULTS, handoff_parts, small_first_on, small_frame, uses_partner
 
 device = torch.device("cuda")
 normalize = T.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
@@ -75,9 +76,10 @@ class CpuRotation:
 
 
 class MakeCutoutsDango(nn.Module):
-    def __init__(self, cut_size, overview, inner_crop, ic_size_pow, ic_grey_p, skip_augs, exact_repeat=False, evidence=None):
+    def __init__(self, cut_size, overview, inner_crop, ic_size_pow, ic_grey_p, skip_augs, exact_repeat=False, evidence=None,
+                 extra=()):
         super().__init__()
-        self.evidence, self.boxes = evidence, []
+        self.evidence, self.boxes, self.extra = evidence, [], list(extra)  # extra: (left, top, size) close-ups, such as faces
         self.cut_size, self.overview, self.inner_crop = cut_size, overview, inner_crop
         self.ic_size_pow, self.ic_grey_p, self.skip_augs = ic_size_pow, ic_grey_p, skip_augs
         self.augs = T.Compose([
@@ -124,12 +126,14 @@ class MakeCutoutsDango(nn.Module):
             else:
                 offset_x = torch.randint(0, side_x - size + 1, ())
                 offset_y = torch.randint(0, side_y - size + 1, ())
-            if self.evidence:
-                self.boxes.append((int(offset_x), int(offset_y), size))
+            self.boxes.append((int(offset_x), int(offset_y), size))  # where each close-up is, for evidence and regions
             cutout = input[:, :, offset_y:offset_y + size, offset_x:offset_x + size]
             if i <= int(self.ic_grey_p * self.inner_crop):
                 cutout = gray(cutout)
             cutouts.append(resize(cutout, out_shape=output_shape))
+        for offset_x, offset_y, size in self.extra:
+            self.boxes.append((offset_x, offset_y, size))
+            cutouts.append(resize(input[:, :, offset_y:offset_y + size, offset_x:offset_x + size], out_shape=output_shape))
         cutouts = torch.cat(cutouts)
         return cutouts if self.skip_augs else self.augs(cutouts)
 
@@ -534,6 +538,9 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     clash = rules.conflicts(cfg)
     if clash:
         raise ValueError(clash[0])
+    # Small first: the first small_steps of the path are painted at `small`, in the frame's shape.
+    small = small_frame(side_x, side_y, int(cfg["small_side"])) if grid == 1 and small_first_on(cfg) else None
+    small_steps = min(round(cfg["steps"] * float(cfg["small_first"]) / 100), cfg["steps"] - 1) if small else 0
     trying = lab.wanted(cfg) or critic.wanted(cfg)
     animating = cfg["animation_mode"] != "None"
     mirrored = cfg["use_horizontal_symmetry"] or cfg["use_vertical_symmetry"]
@@ -561,6 +568,27 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     innercut = schedule(cfg["cut_innercut"])
     ic_pow = schedule(cfg["cut_ic_pow"])
     icgray_p = schedule(cfg["cut_icgray_p"])
+    # The views schedules lay out the scene in their first 40% and paint detail after. Shapes share spreads that
+    # first part over a share of the steps, and Fit views spreads both over only the steps a picture paints, so one
+    # that starts partway, from a start image or a video frame, still lays out shapes before its detail.
+    views = {"from": 0}  # where on the 1000-point schedule the picture being painted began
+
+    def fit_views(skip, frame=False):
+        """`frame` is a clip's frame, which is fitted only with Start images and clip frames."""
+        mode = cfg["views_fit"]
+        if isinstance(mode, bool):  # settings saved while it was a switch
+            mode = "Start images and clip frames" if mode else "Off"
+        fit = mode == "Start images and clip frames" or (mode == "Start images" and not frame)
+        views["from"] = min(round(1000 * skip / diffusion.num_timesteps), 999) if fit else 0
+
+    def view_at(at):
+        begin, shapes, pivot = views["from"], min(max(float(cfg["views_shapes"]) / 100, 0), 1), 400
+        done = min(max((at - begin) / (1000 - begin), 0), 1)
+        if done < shapes:
+            point = done / shapes * pivot
+        else:
+            point = pivot + (done - shapes) / max(1 - shapes, 1e-6) * (1000 - pivot)
+        return min(int(point), 999)
 
     clip_models = load_clip_models(cfg, hooks.status)
     model, diffusion = load_unet(cfg, hooks)
@@ -578,6 +606,51 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     stats = all_stats[0][1]
     if judge:
         judge.prepare_subjects(stats, critic.subject_text(cfg, sets[0][1], parse_prompt), clip.tokenize, device)
+    regions = {"rev": None, "boxes": [], "strength": 0.0, "embeds": {}, "dirty": False}
+
+    def take_regions():
+        """Regional prompts: boxes with prompts of their own. Encodes them at the start, and again when a pause
+        changed them. Returns True when it changed them."""
+        rev = getattr(hooks, "regions_rev", 0)
+        if rev == regions["rev"]:
+            return False
+        given = hooks.regions if hasattr(hooks, "regions") else cfg.get("regions")
+        boxes = [b for b in (given or {}).get("boxes", []) if str(b.get("text", "")).strip()]
+        if boxes and grid > 1:
+            raise ValueError("Regional prompts can't run with Tiles.")
+        moving = regions["rev"] is not None and boxes  # the text encoders have left the GPU by now
+        regions.update(rev=rev, boxes=boxes, strength=float((given or {}).get("strength", 0.75)), embeds={})
+        if regions["rev"] or given:
+            cfg["regions"] = given
+            regions["dirty"] = True
+        if moving:
+            memory.text_encoders_back(clip_models, device)
+        with torch.no_grad():
+            for model in clip_models:
+                tokens = clip.tokenize([parse_prompt(b["text"])[0] for b in boxes], truncate=True).to(device) if boxes else None
+                if tokens is not None:
+                    regions["embeds"][model] = model.encode_text(tokens).float()
+        if moving:
+            memory.free_text_encoders(clip_models)
+        return True
+
+    def region_rows(main, boxes, overview, total, height, width):
+        """[cuts, prompts + regions] weights. A close-up is judged by each region's prompt in proportion to how much
+        of it the region covers, times Region strength, and by the main prompts for the rest. A whole-image view
+        is judged the same way, by how much of the frame each region covers."""
+        rects = torch.tensor([[b["x"] * width, b["y"] * height, (b["x"] + b["w"]) * width, (b["y"] + b["h"]) * height]
+                              for b in regions["boxes"]], device=device)
+        spots = torch.tensor([[0, 0, width, height]] * overview + [[x, y, x + size, y + size] for x, y, size in boxes],
+                             device=device, dtype=torch.float32)
+        across = (torch.minimum(spots[:, None, 2], rects[None, :, 2]) - torch.maximum(spots[:, None, 0], rects[None, :, 0])).clamp(min=0)
+        down = (torch.minimum(spots[:, None, 3], rects[None, :, 3]) - torch.maximum(spots[:, None, 1], rects[None, :, 1])).clamp(min=0)
+        cover = across * down / ((spots[:, 2] - spots[:, 0]) * (spots[:, 3] - spots[:, 1]))[:, None]
+        cover = cover / cover.sum(1, keepdim=True).clamp(min=1)  # overlapping regions share the cut
+        share = regions["strength"] * cover
+        main = main.expand(total, -1) if main.dim() == 1 else main
+        return torch.cat([main * (1 - share.sum(1, keepdim=True)), share], 1)
+
+    take_regions()
     memory.free_text_encoders(clip_models)
 
     start_image = cfg.get("init_image") or None
@@ -616,14 +689,47 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                                      sized(cfg["style_image"]) if cfg["style_image"] else None, [s["model"] for s in stats], normalize,
                                      depth.Depth(device, hooks.status) if cfg["depth_target"] else None)
 
+    steer = None  # the controls: edges, depth and pose held to a control picture
+    fixed_control = None  # the Control image, when one is set; otherwise the start image or each frame's video frame
+    if control.wanted(cfg):
+        steer = control.Control(cfg, schedule, device, hooks.status,
+                                experiment.ghost.depth if experiment and experiment.ghost else None, kept)
+        if cfg.get("control_image") and not animating:  # a clip follows each frame, never one fixed picture
+            fixed_control = TF.to_tensor(size_start_image(upright(cfg["control_image"]), side_x, side_y, init_fit)).unsqueeze(0)
+
     progress = {"t": None}
-    given = {"ghost": None, "sketch": None}  # in animation, a ghost made from the last frame, and the clip's one sketch
+    # in animation, a ghost made from the last frame, the clip's one sketch, and a frame's own start noise
+    given = {"ghost": None, "sketch": None, "noise": None}
+
+    def start_noise(shape, where):
+        """The frame's own start noise, when it has one of this shape, or None for a fresh draw."""
+        noise = given["noise"]
+        if noise is None or tuple(noise.shape) != tuple(shape):
+            return None
+        return noise.to(where)
     place = None  # while tiling, puts the tile into a small copy of the whole picture
     pull = {"set": False, "to": None}  # after a handoff, Init scale still compares against the start before it
+    ahead = {"steps": 0}  # steps Small first already painted, so the full-size pass counts on from them
+    hold = {"to": None}  # after Small first, the small picture the full size holds its broad shapes to
+    hold_curve = schedule(cfg["small_hold_curve"]) if small and float(cfg["small_hold"] or 0) else None
+    hold_size = max(8, min(side_x, side_y) // 24)  # shapes broader than this are held: 32 pixels at 1280x768
+
+    def hold_layout(x, estimate, i):
+        """Hold the small layout: after the step at index i, moves the render's broad shapes and colors toward the
+        small picture, as a ghost's light and dark is moved, and leaves the detail free."""
+        if hold["to"] is None or hold_curve is None or i == 0:
+            return x
+        at = min(int(1000 * (1 - (i + 1) / diffusion.num_timesteps)), 999)
+        strength = float(cfg["small_hold"]) * hold_curve[at]
+        if not strength:
+            return x
+        scale = math.sqrt(float(diffusion.alphas_cumprod_prev[i]))
+        return x + (strength * scale * lab.low_pass(hold["to"] - estimate.detach().float(), hold_size)).to(x.dtype)
     one_pass = OnePassUNet(model) if cfg["diffusion_sampling_mode"] == "ddim" and not secondary else None
 
     def cond_fn(x, t, y=None):
         cur_t = progress["t"]
+        take_regions()  # before the step's graph is built, as it may bring the text encoders back for a moment
         with torch.enable_grad():
             x = one_pass.leaf if one_pass else x.detach().requires_grad_()
             n = x.shape[0]
@@ -639,28 +745,37 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             x_in = pred * fac + x * (1 - fac)
             x_in_grad = torch.zeros_like(x_in)
             at = 1000 - (int(t.item()) + 1)
+            view = view_at(at)  # the views schedules' point, which Fit views and Shapes share can move
             guidance = cfg["clip_guidance_scale"] * experiment.guidance[at] if experiment else cfg["clip_guidance_scale"]
             for stat in stats:
                 share = judge.model_weight(stat["model"], at) if judge else 1.0
                 if not share:
                     continue  # a checker with no say at this step costs no time
+                own = regions["embeds"][stat["model"]] if regions["boxes"] else None
+                # with regions, their prompts join the main ones, and each cut weighs them by how much it covers
+                full = stat if own is None else {**stat, "embeds": torch.cat([stat["embeds"], own]),
+                                                 "weights": F.pad(stat["weights"], (0, len(own)))}
                 for _ in range(cfg["cutn_batches"]):
-                    cuts = MakeCutoutsDango(stat["model"].visual.input_resolution, int(overview[at]), int(innercut[at]),
-                                            ic_pow[at], icgray_p[at], cfg["skip_augs"], cfg["exact_repeat"],
-                                            experiment.evidence if experiment else None)
-                    whole = place(x_in).add(1).div(2) if place and int(overview[at]) else None
+                    faces = steer.face_crops(x_in, at) if steer else []  # Face detail: close-ups on each face
+                    cuts = MakeCutoutsDango(stat["model"].visual.input_resolution, int(overview[view]), int(innercut[view]),
+                                            ic_pow[view], icgray_p[view], cfg["skip_augs"], cfg["exact_repeat"],
+                                            experiment.evidence if experiment else None, faces)
+                    whole = place(x_in).add(1).div(2) if place and int(overview[view]) else None
                     batch = normalize(cuts(x_in.add(1).div(2), whole))
-                    total = int(overview[at]) + int(innercut[at])
+                    total = int(overview[view]) + int(innercut[view]) + len(faces)
                     chunk = memory.clip_chunk(stat["model"]) * n
-                    rows = judge.prompt_weights(stat, total, int(overview[at]), at) if judge else None
-                    weights = stat["weights"] if rows is None else rows[:, None, :]  # per cut when prompts are routed
+                    rows = judge.prompt_weights(stat, total, int(overview[view]), at) if judge else None
+                    if own is not None:
+                        rows = region_rows(stat["weights"] if rows is None else rows, cuts.boxes, int(overview[view]), total,
+                                           x_in.shape[2], x_in.shape[3])
+                    weights = full["weights"] if rows is None else rows[:, None, :]  # per cut when prompts are routed or regions set
                     layout = judge is not None and judge.layout_on(at)
                     if chunk >= batch.shape[0]:
                         image_embeds = stat["model"].encode_image(batch).float()
-                        dists = spherical_dist_loss(image_embeds.unsqueeze(1), stat["embeds"].unsqueeze(0))
+                        dists = spherical_dist_loss(image_embeds.unsqueeze(1), full["embeds"].unsqueeze(0))
                         dists = dists.view([total, n, -1])
                         if layout:
-                            x_in_grad += share * judge.layout_grad(stat, batch, dists, int(overview[at]), n, x_in, chunk, guidance,
+                            x_in_grad += share * judge.layout_grad(full, batch, dists, int(overview[view]), n, x_in, chunk, guidance,
                                                                    at, rows) / cfg["cutn_batches"]
                         losses = dists.mul(weights).sum(2).mean(0)
                         x_in_grad += torch.autograd.grad(losses.sum() * guidance * share, x_in)[0] / cfg["cutn_batches"]
@@ -668,22 +783,24 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                         leaf, cut_grad, parts = batch.detach().requires_grad_(), 0, []
                         for i in range(0, leaf.shape[0], chunk):
                             image_embeds = stat["model"].encode_image(leaf[i:i + chunk]).float()
-                            part = spherical_dist_loss(image_embeds.unsqueeze(1), stat["embeds"].unsqueeze(0)).view([-1, n, len(stat["weights"])])
+                            part = spherical_dist_loss(image_embeds.unsqueeze(1), full["embeds"].unsqueeze(0)).view([-1, n, len(full["weights"])])
                             w = weights if rows is None else weights[i // n:i // n + part.shape[0]]
                             loss = part.mul(w).sum(2).sum(0).sum() / total
                             cut_grad = cut_grad + torch.autograd.grad(loss * guidance * share, leaf)[0]
                             parts.append(part.detach())
                         dists = torch.cat(parts)
                         if layout:
-                            x_in_grad += share * judge.layout_grad(stat, batch, dists, int(overview[at]), n, x_in, chunk, guidance,
+                            x_in_grad += share * judge.layout_grad(full, batch, dists, int(overview[view]), n, x_in, chunk, guidance,
                                                                    at, rows) / cfg["cutn_batches"]
                         x_in_grad += torch.autograd.grad(batch, x_in, cut_grad)[0] / cfg["cutn_batches"]
                     if cuts.evidence:
-                        cuts.evidence.add(cuts.boxes, dists.mul(stat["weights"]).sum(2)[int(overview[at]):, 0])
+                        cuts.evidence.add(cuts.boxes, dists.mul(full["weights"]).sum(2)[int(overview[view]):, 0])
             if experiment:
                 x_in_grad = experiment.shape_push(x_in_grad, at)
                 if experiment.ghost:
                     x_in_grad = experiment.ghost.push(x_in, x_in_grad, at)
+            if steer:
+                x_in_grad = steer.push(x_in, x_in_grad, at)
             if judge:
                 x_in_grad = judge.subject_push(x_in, x_in_grad, at, normalize)
             sat_losses = torch.abs(x_in - x_in.clamp(min=-1, max=1)).mean()
@@ -728,27 +845,35 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         if again or not os.path.exists(notes):
             with open(notes, "w", encoding="utf-8") as f:
                 json.dump({**cfg, "text_prompts": {str(at): lines for at, lines in sets}, "seed": seed, "init_fit": init_fit,
-                           "offload": offload, "range_scale_works": True, "width_height": [side_x, side_y], "final_size": list(final)}, f, indent=2)
+                           "offload": offload, "range_scale_works": True, "width_height": [side_x, side_y], "final_size": list(final),
+                           **({"small_size": list(small), "small_steps": small_steps} if small else {})}, f, indent=2)
 
     def save(image, batch):
         path = os.path.join(folder, f"{batch_name}({run})_{batch}.png")
-        write_notes()
+        write_notes(again=regions["dirty"] and os.path.exists(os.path.join(folder, f"{batch_name}({run})_settings.txt")))
+        regions["dirty"] = False
         image.save(path)
         return path
+
+    def pausing():
+        return getattr(hooks, "pausing", lambda: False)()
 
     def to_image(tensor):
         return TF.to_pil_image(tensor[0].add(1).div(2).clamp(0, 1).cpu())
 
-    def denoise(start, width, height, skip, batch, mask=None, show=to_image):
-        """Runs one render and returns its finished image as a -1 to 1 tensor."""
+    def denoise(start, width, height, skip, batch, mask=None, show=to_image, stop=None):
+        """Runs one render and returns its finished image as a -1 to 1 tensor. With `stop`, it ends after that
+        many steps and returns its picture at that point, still blurry."""
         nonlocal init
         init = pull["to"] if pull["set"] else start  # Init scale compares against this
         painting_tile = mask is not None
         common = dict(clip_denoised=cfg["clip_denoised"], model_kwargs={}, cond_fn=cond_fn, progress=False,
                       skip_timesteps=skip, init_image=start, randomize_class=cfg["randomize_class"])
         progress["t"] = diffusion.num_timesteps - skip - 1
-        total_steps = progress["t"]
+        before, ahead["steps"] = ahead["steps"], 0
+        total_steps = progress["t"] + before
         shape = (1, 3, height, width)
+        common["noise"] = start_noise(shape, device)
         if cfg["diffusion_sampling_mode"] == "ddim":
             samples = diffusion.ddim_sample_loop_progressive(
                 one_pass or model, shape, eta=cfg["eta"], transformation_fn=None if painting_tile else symmetry,
@@ -757,17 +882,24 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             samples = diffusion.plms_sample_loop_progressive(model, shape, order=2, **common)
         for j, sample in enumerate(samples):
             progress["t"] -= 1
-            last = progress["t"] == -1
-            hooks.step(j, total_steps, batch, n_batches, seed)
-            if j % cfg["display_rate"] == 0 or last:
+            last = progress["t"] == -1 or j + 1 == stop
+            if j % cfg["display_rate"] == 0 or last or pausing():
                 hooks.preview(show(sample["pred_xstart"]))
+            hooks.step(j + before, total_steps, batch, n_batches, seed)  # after the preview, so a pause shows this step
+            if j + 1 == stop:
+                break
+            if hold["to"] is not None:  # the sampler reads the sample back for the next step
+                sample["sample"] = hold_layout(sample["sample"], sample["pred_xstart"], progress["t"] + 1)
+            if steer:
+                sample["sample"] = steer.pull(sample["sample"], sample["pred_xstart"], progress["t"] + 1, diffusion)
         release()
         return sample["pred_xstart"].detach()
 
-    def denoise_lab(start, width, height, skip, batch):
-        """The normal ddim loop, with room for the experiments that work between steps."""
+    def denoise_lab(start, width, height, skip, batch, stop=None, show=to_image):
+        """The normal ddim loop, with room for the experiments that work between steps. `stop` and `show` work as in denoise."""
         nonlocal init
         init = pull["to"] if pull["set"] else start
+        before, ahead["steps"] = ahead["steps"], 0
         experiment.reset(height, width, device)
         helper = experiment.partner
         ghost = experiment.ghost
@@ -793,14 +925,16 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         if given["ghost"] is not None:
             ghost.ghost = given["ghost"]
         first = diffusion.num_timesteps - skip - 1
-        x = torch.randn(1, 3, height, width, device=device)
+        x = start_noise((1, 3, height, width), device)
+        if x is None:
+            x = torch.randn(1, 3, height, width, device=device)
         if skip or start is not None:
             base = torch.zeros_like(x) if start is None else start
             x = diffusion.q_sample(base, torch.tensor([first], device=device), x)
         image = torch.zeros_like(x)
         for j, i in enumerate(range(first, -1, -1)):
             progress["t"] = i
-            hooks.step(j, first, batch, n_batches, seed)
+            hooks.step(j + before, first + before, batch, n_batches, seed)
             t = torch.tensor([i], device=device)
             at = min(int(1000 * (1 - (i + 1) / diffusion.num_timesteps)), 999)
             band = int(experiment.band[at])
@@ -828,6 +962,9 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             image = out["pred_xstart"].detach()
             if ghost:
                 x = ghost.pull(x, image, math.sqrt(alpha_prev), at)
+            x = hold_layout(x, image, i)
+            if steer:
+                x = steer.pull(x, image, i, diffusion)
             if band:
                 moved = experiment.share(helper.sketch(), image, band)
                 image = image + moved
@@ -849,8 +986,10 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                             mine = mine + experiment.share(theirs, mine, band)
                         x = judge.corrector(x, mine, float(alpha_prev), float(cfg["correct_snr"]))
                 image = mine.detach()
-            if j % cfg["display_rate"] == 0 or not i:
-                hooks.preview(to_image(image))
+            if j % cfg["display_rate"] == 0 or not i or j + 1 == stop or pausing():
+                hooks.preview(show(image))
+            if j + 1 == stop:
+                break
         if helper and needed and helper.z0 is not None and cfg["partner_keep_sketch"]:
             save_sketch(helper.sketch())
         release()
@@ -889,6 +1028,39 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         hooks.status(f"Disco carries on from step {skip + 1} of {cfg['steps']}")
         return TF.to_tensor(image).unsqueeze(0).mul(2).sub(1).to(device), skip
 
+    def small_start(start, skip, n, paint):
+        """Small first: Disco paints the start of the path at `small`, in the frame's shape, and stops at
+        small_steps while the picture is still blurry. Enlarged, that picture is the start for the rest of the
+        path at full size, where Disco adds the noise for that step as it does to any start image, so it
+        carries on from the same point. Returns the new start and skip, like hand_over."""
+        hold["to"] = None
+        if not small_steps or skip >= small_steps:
+            return start, skip
+        width, height = small
+
+        def sized(image, w, h):
+            if image is None:
+                return None
+            return F.interpolate(image.float(), size=(h, w), mode="bicubic", antialias=True, align_corners=False)
+
+        held = pull["to"] if pull["set"] else start  # what Init scale compares against at full size
+        pull["set"], pull["to"] = True, sized(held, width, height)
+        hooks.status(f"Painting steps {skip + 1} to {small_steps} of {cfg['steps']} at {width}x{height}")
+        # The preview is enlarged to the frame, so it looks the same size all the way through.
+        rough = paint(sized(start, width, height), width, height, skip, n, stop=small_steps - skip,
+                      show=lambda image: to_image(sized(image, side_x, side_y)))
+        pull["set"], pull["to"] = True, held
+        ahead["steps"] = small_steps - skip
+        carry_on = small_steps
+        repaint = float(cfg["small_denoise"] or 0)
+        if repaint > 0:  # the full size repaints its share of the small picture, never less than what is left
+            carry_on = min(max(cfg["steps"] - round(cfg["steps"] * repaint / 100), 0), small_steps)
+        hooks.status(f"Carrying on at {side_x}x{side_y} from step {carry_on + 1} of {cfg['steps']}")
+        enlarged = sized(rough, side_x, side_y).clamp(-1, 1)
+        if hold_curve is not None:
+            hold["to"] = enlarged  # Hold the small layout pulls the full size toward this
+        return enlarged, carry_on
+
     def finish(image, n, seed_value, keep_as=None):
         """Finish %: the handoff model repaints the end of Disco's finished picture to clean it up."""
         if handing is None or not hand_finish:
@@ -913,7 +1085,9 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         """
         nonlocal place, init
         size = (1, 3, final[1], final[0])
-        noise = torch.randn(size)
+        noise = start_noise(size, "cpu")
+        if noise is None:
+            noise = torch.randn(size)
         first = diffusion.num_timesteps - skip - 1
         canvas = noise if skip == 0 and start is None else None
         if canvas is None:
@@ -961,6 +1135,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         """Renders the frames of an animation, each from the last one moved by the camera or from a video frame."""
         nonlocal stats, init_scale, lpips_model, n_batches
         mode = cfg["animation_mode"]
+        loop = cfg["loop_mode"] if cfg["loop_mode"] in ("Paint back to the start", "Ping-pong") else None
         write_notes(again=bool(resume))  # claims the run number, so a stopped animation keeps its frames
         frames_dir = os.path.join(folder, f"{batch_name}({run})_frames")
         os.makedirs(frames_dir, exist_ok=True)
@@ -968,8 +1143,12 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         if mode == "Video Input":
             hooks.status("Reading the video")
             video = animate.VideoInput(cfg["video_init_path"], max(int(cfg["extract_nth_frame"]), 1), *final,
-                                       init_fit, size_start_image, int(cfg["max_frames"]))
+                                       init_fit, size_start_image, int(cfg["max_frames"]), loop == "Ping-pong")
         total = min(int(cfg["max_frames"]), len(video.frames)) if video else int(cfg["max_frames"])
+        # Seamless loop: the last `reach` frames are painted more and more like the frame they lead back to. With
+        # ping-pong that is the frame at the same point on the way out, so it must already be painted.
+        reach = min(max(int(cfg["loop_frames"]), 1), (total - 1) // 2 if loop == "Ping-pong" else total - 1) if loop else 0
+        circle = None  # with ping-pong and one shared noise, the noise goes once around a circle between two draws
         n_batches = total
         depth_model = experiment.ghost.depth if experiment and experiment.ghost else None  # one copy serves both
         camera = animate.Camera(cfg, total, device, hooks.status, depth_model) if mode in ("2D", "3D") else None
@@ -980,10 +1159,16 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
 
         def paint(start, skip, n, hand=True):
             """One frame. With tiles, each frame is tiled like a still, and a start uses Tile denoise."""
+            # before a handoff moves where Disco starts, so the views stay spread over the whole frame. A video's frames
+            # and every frame after the first are clip frames; a 2D or 3D clip's first frame is its start image.
+            fit_views(skip, frame=bool(video) or n > 0)
+            if hand:  # the last frame's Small first is not this one's
+                pull["set"], pull["to"] = False, None
             if hand and handing:
                 start, skip = hand_over(start, skip, n, (side_x, side_y) if grid == 1 else final, frame_seed)
                 set_seeds(frame_seed)  # each frame starts alike, whatever the handoff drew
             if grid == 1:
+                start, skip = small_start(start, skip, n, whole)
                 return whole(start, side_x, side_y, skip, n)
             return paint_tiles(None if start is None else start.float().cpu(), skip, n).to(device)
 
@@ -995,6 +1180,10 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         rendered_first = False  # the first frame's Render first pass already had its handoff
         between, painted_at = [], 0  # with Turbo, the frames moved on from the last repaint
         begin = 0
+
+        def frame_at(n):
+            return TF.to_tensor(Image.open(saved[n]).convert("RGB")).unsqueeze(0).mul(2).sub(1).to(device)
+
         if resume:  # pick up after the last frame on disk, as if the run had never stopped
             while os.path.isfile(os.path.join(frames_dir, f"{begin:05d}.png")):
                 saved[begin] = os.path.join(frames_dir, f"{begin:05d}.png")
@@ -1003,10 +1192,6 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                 raise ValueError("That clip has no frames to continue from.")
             if begin >= total:
                 raise ValueError(f"That clip already has {begin} frames. Raise Frames to make it longer.")
-
-            def frame_at(n):
-                return TF.to_tensor(Image.open(saved[n]).convert("RGB")).unsqueeze(0).mul(2).sub(1).to(device)
-
             previous = frame_at(begin - 1)
             if tuple(previous.shape[-2:]) != (final[1], final[0]):
                 raise ValueError(f"That clip's frames are {previous.shape[-1]}x{previous.shape[-2]}. Set the same size and Tiles "
@@ -1024,7 +1209,18 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                 stats = animate.stats_at(all_stats, n, cfg["prompt_fade"])
                 # Only a video can share one noise: a moving camera drags fixed noise across the scene into streaks.
                 frame_seed = seed if video and cfg["video_init_seed_continuity"] else seed + n
+                if video and loop == "Ping-pong" and cfg["video_init_seed_continuity"]:
+                    # The same noise would paint the way back as a copy of the way out. Going round a circle, each
+                    # frame's noise is close to the last one's, and the frame after the last is back at the first's.
+                    sized = (1, 3, final[1], final[0]) if grid > 1 else (1, 3, side_y, side_x)
+                    if circle is None:
+                        circle = [torch.randn(sized, generator=torch.Generator().manual_seed(seed + k)) for k in (0, 1)]
+                    turn = 2 * math.pi * n / total
+                    given["noise"] = math.cos(turn) * circle[0] + math.sin(turn) * circle[1]
                 set_seeds(frame_seed)
+                if steer and (fixed_control is not None or video):
+                    # the Control image, or else the clean video frame, never the start the last frame was mixed into
+                    steer.set_source(fixed_control if fixed_control is not None else TF.to_tensor(video.frames[n]).unsqueeze(0))
                 if video:
                     shown = TF.to_tensor(video.frames[n]).unsqueeze(0).mul(2).sub(1).to(device)
                     start = shown
@@ -1037,6 +1233,9 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                         last = previous
                         if cfg["video_flow"] and n:  # the last frame's paint travels with what moved in the video
                             last = animate.follow_flow(previous, animate.video_flow(video.frames[n - 1], video.frames[n]), cfg)
+                        # The carried paint is repainted every frame, and each pass adds contrast and color. Held to the
+                        # first frame's light and color, as camera moves are, it can't compound into a burned-out clip.
+                        last = animate.hold_colors(last, first, cfg["color_hold"])
                         start = shown + cfg["video_blend"] * (last - shown)
                     skip = skips[n]
                 elif n == 0:
@@ -1044,6 +1243,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                     skip = start_skip if start_image else skip_steps
                     if grid > 1 and not start_image and cfg["tile_start"] == "Render first":
                         hooks.status("Painting the first frame at tile size")
+                        fit_views(skip_steps, frame=bool(video))
                         rough, rough_skip = hand_over(None, skip_steps, n, (side_x, side_y), frame_seed)
                         set_seeds(frame_seed)
                         rough = to_image(denoise(rough, side_x, side_y, rough_skip, n)).resize(final, Image.LANCZOS)
@@ -1053,7 +1253,14 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                     moved = animate.sharpen(camera.move(previous, n), cfg["frame_sharpen"])
                     shown = start = animate.hold_colors(moved, first, cfg["color_hold"])
                     skip = skips[n]
+                if reach and n >= total - reach:
+                    back_to = (n - (total - reach) + 1) / (reach + 1)
+                    target = frame_at(total - n if loop == "Ping-pong" else 0)
+                    hooks.status(f"Painting back to the start, {round(100 * back_to)}% of the way")
+                    start = start + back_to * (target - start)
                 init_scale = 0 if start is None else cfg["frames_scale"] if (n or video) else cfg["init_scale"]
+                if steer and fixed_control is None and not video:  # a camera move follows the frame it starts from
+                    steer.set_source(None if shown is None else shown.add(1).div(2))
                 given["ghost"] = shown.add(1).div(2).float() if frame_ghost and shown is not None else None
                 if turbo > 1 and n % turbo and n < total - 1:
                     between.append((n, start))  # between repaints the camera alone moves the picture
@@ -1081,7 +1288,8 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                 fps = max(float(cfg["fps"]), 1)
                 extra = int(cfg["in_between"])
                 if extra > 0 and len(saved) > 1:  # the clip keeps its length, at a higher frame rate
-                    saved = animate.add_between(saved, extra, os.path.join(frames_dir, "between"), device, hooks.status)
+                    saved = animate.add_between(saved, extra, os.path.join(frames_dir, "between"), device, hooks.status,
+                                                wrap=bool(loop) and len(saved) == total)
                     fps *= extra + 1
                 hooks.status("Saving the video")
                 base = os.path.join(folder, f"{batch_name}({run})")
@@ -1104,19 +1312,26 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         torch.cuda.empty_cache()
         set_seeds(seed + batch)  # each image can be made again on its own
         start = TF.to_tensor(source).unsqueeze(0).mul(2).sub(1).to(device) if start_image else None
+        if steer:
+            steer.set_source(fixed_control if fixed_control is not None else start.add(1).div(2) if start is not None else None)
         handoff_picture = cfg["handoff_keep"] and os.path.join(folder, f"{batch_name}({run})_{batch}_handoff.png")
         if grid == 1:
             paint = denoise_lab if experiment else denoise
+            fit_views(skip_steps)
             start, skip = hand_over(start, skip_steps, batch, (side_x, side_y), seed + batch, handoff_picture)
             set_seeds(seed + batch)
+            start, skip = small_start(start, skip, batch, paint)
             image = to_image(paint(start, side_x, side_y, skip, batch))
         else:
             if not start_image and cfg["tile_start"] == "Render first":
+                fit_views(skip_steps)
                 start, skip = hand_over(None, skip_steps, batch, (side_x, side_y), seed + batch, handoff_picture)
                 set_seeds(seed + batch)
                 first = to_image(denoise(start, side_x, side_y, skip, batch))
                 start, skip = TF.to_tensor(first.resize(final, Image.LANCZOS)).unsqueeze(0).mul(2).sub(1), tile_skip
+                fit_views(tile_skip)
             else:
+                fit_views(tile_skip if start is not None else skip_steps)
                 start, skip = hand_over(start, tile_skip if start is not None else skip_steps, batch, final, seed + batch, handoff_picture)
                 set_seeds(seed + batch)
             image = to_image(paint_tiles(None if start is None else start.cpu(), skip, batch))
