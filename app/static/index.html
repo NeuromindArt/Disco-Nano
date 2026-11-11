@@ -23,7 +23,7 @@
   <a class="icon-link" href="https://ko-fi.com/neuromindart" target="_blank" rel="noopener" title="Support on Ko-fi" aria-label="Support on Ko-fi">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M17 11h1.500a2.500 2.500 0 0 1 0 5H16.500"/><path d="M8 3v3M12 3v3"/></svg>
   </a>
-  <button type="button" id="advancedBtn" class="settings-btn" title="Every setting, searchable">
+  <button type="button" id="advancedBtn" class="settings-btn" title="How the app works: names, color, network, folders and models. Picture settings are in the cards.">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
     Settings <span id="changedCount" class="value"></span>
   </button>
@@ -40,6 +40,9 @@
         <button type="button" data-make="image">Image</button>
         <button type="button" data-make="animation">Animation</button>
       </div>
+      <button type="button" id="controlsToggle" class="icon-link" aria-controls="controlsBody">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
     </div>
     <div class="panel-body">
       <div class="field prompt-field">
@@ -103,23 +106,23 @@
             </div>
             <input type="file" id="videoFile" accept="video/*,.mkv,.gif" hidden>
             <input type="hidden" id="video_init_path">
-            <label class="line"><span class="field-name">Clip style</span><select id="clip_style"></select></label>
-            <div class="slider-row" data-sub="extract_nth_frame"><label class="field-name" for="extract_nth_frame" data-words="{extract_nth_frame}">Every nth frame</label><input type="range" data-for="extract_nth_frame" min="1" max="10" step="1"><input id="extract_nth_frame" class="readout" type="number" min="1" max="10"></div>
+            <label class="line" data-sub="clip_style"><span class="field-name">Clip style</span><select id="clip_style"></select></label>
+            <div class="slider-row"><label class="field-name" for="extract_nth_frame" data-words="{extract_nth_frame}">Every nth frame</label><input type="range" data-for="extract_nth_frame" min="1" max="10" step="1"><input id="extract_nth_frame" class="readout" type="number" min="1" max="10"></div>
             <div class="slider-row" data-sub="video_blend"><label class="field-name" for="video_blend" data-words="{video_blend}">Blend last frame</label><input type="range" data-for="video_blend" min="0" max="0.9" step="0.05"><input id="video_blend" class="readout" type="number" min="0" max="0.9" step="0.05"></div>
           </div>
           <div class="slider-row"><label class="field-name" for="max_frames" data-words="{max_frames}">Frames</label><input type="range" data-for="max_frames" min="1" max="600" step="1"><input id="max_frames" class="readout" type="number" min="1" max="10000"></div>
-          <div class="slider-row" data-sub="fps"><label class="field-name" for="fps" data-words="{fps}">Frames per second</label><input type="range" data-for="fps" min="1" max="60" step="1"><input id="fps" class="readout" type="number" min="1" max="60"></div>
+          <div class="slider-row" data-sub="fps" data-sub-label="Saved video"><label class="field-name" for="fps" data-words="{fps}">Frames per second</label><input type="range" data-for="fps" min="1" max="60" step="1"><input id="fps" class="readout" type="number" min="1" max="60"></div>
           <div class="slider-row"><label class="field-name" for="in_between" data-words="{in_between}">In-between frames</label><input type="range" data-for="in_between" min="0" max="3" step="1"><input id="in_between" class="readout" type="number" min="0" max="3"></div>
           <label class="line" data-sub="loop_mode"><span class="field-name" data-words="{loop_mode}">Seamless loop</span><select id="loop_mode"></select></label>
           <div class="slider-row" data-sub="frames_skip_steps"><label class="field-name" for="frames_skip_steps" data-words="{frames_skip_steps}">Frame skip %</label><input type="range" data-for="frames_skip_steps" min="30" max="90" step="5"><input id="frames_skip_steps" class="readout" type="number" min="0" max="95" step="5"></div>
+          <div class="slider-row"><label class="field-name" for="color_hold" data-words="{color_hold}">Hold colors</label><input type="range" data-for="color_hold" min="0" max="1" step="0.1"><input id="color_hold" class="readout" type="number" min="0" max="1" step="0.1"></div>
+          <label class="check" id="turboCheck"><input type="checkbox" id="turbo_mode"> <span data-words="{turbo_mode} (much faster)">Turbo (much faster)</span></label>
+          <div class="slider-row" id="turboEvery"><label class="field-name" for="turbo_steps" data-words="{turbo_steps}">Turbo every</label><input type="range" data-for="turbo_steps" min="2" max="6" step="1"><input id="turbo_steps" class="readout" type="number" min="2" max="6"></div>
+          <label class="check"><input type="checkbox" id="frame_ghost"> <span data-words="{frame_ghost} (steadier)">Last frame as ghost (steadier)</span></label>
           <div id="cameraBlock">
             <div class="group-label" data-sub="camera" data-sub-label="Camera">Camera, per frame</div>
             <div id="motionRows" class="motion"></div>
           </div>
-          <div class="slider-row"><label class="field-name" for="color_hold" data-words="{color_hold}">Hold colors</label><input type="range" data-for="color_hold" min="0" max="1" step="0.1"><input id="color_hold" class="readout" type="number" min="0" max="1" step="0.1"></div>
-          <label class="check" id="turboCheck"><input type="checkbox" id="turbo_mode"> <span data-words="{turbo_mode} (repaints every few frames, much faster)">Turbo (repaints every few frames, much faster)</span></label>
-          <div class="slider-row" id="turboEvery"><label class="field-name" for="turbo_steps" data-words="{turbo_steps}">Turbo every</label><input type="range" data-for="turbo_steps" min="2" max="6" step="1"><input id="turbo_steps" class="readout" type="number" min="2" max="6"></div>
-          <label class="check"><input type="checkbox" id="frame_ghost"> <span data-words="{frame_ghost} (steadier)">Last frame as ghost (steadier)</span></label>
         </div>
       </section>
 
@@ -137,6 +140,9 @@
             <span class="field-name">Width × height</span>
             <div class="pair"><select id="width" aria-label="Width"></select><span class="times" aria-hidden="true">×</span><select id="height" aria-label="Height"></select></div>
           </div>
+          <div class="slider-row" data-sub="small_first"><label class="field-name" for="small_first" data-words="{small_first}">Small first %</label><input type="range" data-for="small_first" min="0" max="60" step="5"><input id="small_first" class="readout" type="number" min="0" max="95" step="5"></div>
+          <div class="slider-row" data-in="small_first"><label class="field-name" for="small_denoise" data-words="{small_denoise}">Full-size denoise %</label><input type="range" data-for="small_denoise" min="0" max="100" step="5"><input id="small_denoise" class="readout" type="number" min="0" max="100" step="5"></div>
+          <p class="hint" id="smallWhere" data-in="small_first" hidden></p>
         </div>
       </section>
 
@@ -164,10 +170,10 @@
           <p class="model-about" id="getModelsRow" hidden><button type="button" id="getModels" class="link">Get more models</button></p>
           <div class="group-label" data-words="{clip_models}" data-help="Each one compares the picture with your prompt. More of them add detail, VRAM and time.">Prompt checkers</div>
           <div class="checks" id="clipChecks"></div>
+          <div class="group-label" data-sub="checkers" data-words="{More CLIP models}">More prompt checkers</div>
           <div class="group-label">Memory and speed</div>
           <label class="check"><input type="checkbox" id="use_secondary_model"> <span data-words="{use_secondary_model}">Secondary model</span></label>
           <label class="check"><input type="checkbox" id="exact_repeat"> Exact repeat</label>
-          <div class="group-label" data-sub="checkers" data-words="{More CLIP models}">More prompt checkers</div>
         </div>
       </section>
 
@@ -191,9 +197,9 @@
         <div class="card-body">
           <label class="check toggle" data-help="Boxes on the frame, each with a prompt of its own. Off keeps the boxes but leaves them out of renders."><input type="checkbox" id="regionsOn" class="switch" role="switch"> Regional prompts</label>
           <div id="regionsMore" class="regions-more" hidden>
-            <div class="slider-row"><label class="field-name" for="regionStrength" data-help="How much a box's prompt takes over inside it. The main prompt keeps the rest, so the style stays the same across the picture. 1 leaves the main prompt out of close-ups inside a box.">Strength</label><input type="range" data-for="regionStrength" min="0" max="1" step="0.05"><input id="regionStrength" class="readout" type="number" min="0" max="1" step="0.05"></div>
+            <div class="slider-row"><label class="field-name" for="regionStrength" data-help="How much a box's prompt takes over inside it. The main prompt keeps the rest. 1 leaves the main prompt out of close-ups inside a box.">Strength</label><input type="range" data-for="regionStrength" min="0" max="1" step="0.05"><input id="regionStrength" class="readout" type="number" min="0" max="1" step="0.05"></div>
             <ul id="regionList" class="region-list"></ul>
-            <button type="button" id="regionsBtn" class="default regions-btn" data-help="Opens the box editor on the canvas. During a render, it pauses the render after the current step so you can draw on the preview, then Continue carries on with the new boxes.">Edit regions</button>
+            <button type="button" id="regionsBtn" class="default regions-btn" data-help="Opens the box editor. During a render, it pauses after the current step so you can draw, then Continue carries on with the new boxes.">Edit regions</button>
           </div>
           <p class="hint" id="regionsWhy" hidden></p>
         </div>
@@ -207,16 +213,14 @@
             <div class="pick-row"><select id="handoffPick"></select><button type="button" id="handoffBrowse" class="default icon-button" title="Browse for a checkpoint file on the PC that renders" aria-label="Browse for a checkpoint file"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button></div>
           </div>
           <input type="hidden" id="handoff_file">
-          <div class="group-label handoff-part" data-in="checkpoint">Handoff: checkpoint, then Disco</div>
+          <div class="group-label handoff-part" data-in="checkpoint">Checkpoint</div>
+          <div class="fields-slot" data-in="checkpoint"></div>
+          <div class="group-label handoff-part" data-in="checkpoint">Checkpoint, then Disco</div>
+          <div class="slider-row" data-in="checkpoint"><label class="field-name" for="handoff_start_denoise" data-words="{handoff_start_denoise}">Start denoise %</label><input type="range" data-for="handoff_start_denoise" min="0" max="100" step="5"><input id="handoff_start_denoise" class="readout" type="number" min="0" max="100" step="5"></div>
           <div class="slider-row" data-in="checkpoint"><label class="field-name" for="handoff_share" data-words="{handoff_share}">Handoff %</label><input type="range" data-for="handoff_share" min="0" max="100" step="5"><input id="handoff_share" class="readout" type="number" min="0" max="100" step="5"></div>
-          <div class="slider-row" data-in="checkpoint"><label class="field-name" for="handoff_denoise" data-words="{handoff_denoise}">Disco denoise %</label><input type="range" data-for="handoff_denoise" min="0" max="100" step="5"><input id="handoff_denoise" class="readout" type="number" min="0" max="100" step="5"></div>
-          <div class="group-label handoff-part" data-in="checkpoint">Reverse handoff: Disco, then checkpoint</div>
-          <div class="slider-row" data-in="checkpoint"><label class="field-name" for="handoff_finish" data-words="{handoff_finish}">Reverse handoff %</label><input type="range" data-for="handoff_finish" min="0" max="100" step="5"><input id="handoff_finish" class="readout" type="number" min="0" max="100" step="5"></div>
+          <div class="group-label handoff-part" data-in="checkpoint">Disco, then checkpoint</div>
+          <div class="slider-row" data-in="checkpoint"><label class="field-name" for="handoff_finish" data-words="{handoff_finish}">Finish %</label><input type="range" data-for="handoff_finish" min="0" max="100" step="5"><input id="handoff_finish" class="readout" type="number" min="0" max="100" step="5"></div>
           <p class="hint"><span id="handoffWhere"></span></p>
-          <div class="group-label" id="smallLabel">Small first: Disco small, then Disco full size</div>
-          <div class="slider-row" data-sub="small_first"><label class="field-name" for="small_first" data-words="{small_first}">Small first %</label><input type="range" data-for="small_first" min="0" max="60" step="5"><input id="small_first" class="readout" type="number" min="0" max="95" step="5"></div>
-          <div class="slider-row" data-in="small_first"><label class="field-name" for="small_denoise" data-words="{small_denoise}">Full-size denoise %</label><input type="range" data-for="small_denoise" min="0" max="100" step="5"><input id="small_denoise" class="readout" type="number" min="0" max="100" step="5"></div>
-          <p class="hint" id="smallWhere" data-in="small_first" hidden></p>
         </div>
       </section>
 
@@ -267,7 +271,7 @@
           <input type="file" id="image_promptsFile" accept="image/png,image/jpeg,image/webp" multiple hidden>
           <input type="hidden" id="image_prompts">
           <div class="slider-row" id="imagePromptWeightRow" hidden><label class="field-name" for="image_prompt_weight" data-words="{image_prompt_weight}">Image prompt weight</label><input type="range" data-for="image_prompt_weight" min="-2" max="4" step="0.25"><input id="image_prompt_weight" class="readout" type="number" min="-10" max="10" step="0.25"></div>
-          <div class="group-label" data-sub="ghost_image" data-sub-label="Ghost image"><span data-words="{ghost_image}">Ghost image</span> settings</div>
+          <div class="group-label" data-sub="ghost_image" data-sub-label="Ghost">Ghost settings</div>
           <div class="group-label" data-sub="style_image" data-sub-label="Style image"><span data-words="{style_image}">Style image</span> settings</div>
         </div>
       </section>
@@ -300,22 +304,25 @@
       <section class="card" data-card="lab" id="labSection">
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Experiments</span><span class="card-sum" id="sum-lab"></span></button>
         <div class="card-body">
-          <label class="check" data-sub="time_travel"><input type="checkbox" id="time_travel"> Time travel</label>
+          <div class="group-label">With a partner model</div>
           <div class="slider-row" data-sub="prompt_graft"><label class="field-name" for="prompt_graft">Prompt graft</label><input type="range" data-for="prompt_graft" min="0" max="10" step="0.5"><input id="prompt_graft" class="readout" type="number" min="0" max="20" step="1"></div>
           <label class="line" data-sub="live_ghost"><span class="field-name">Live ghost</span><select id="live_ghost"></select></label>
           <div class="slider-row"><label class="field-name" for="depth_target">Depth target</label><input type="range" data-for="depth_target" min="0" max="3" step="0.1"><input id="depth_target" class="readout" type="number" min="0" max="3" step="0.1"></div>
           <label class="check" data-sub="two_painters"><input type="checkbox" id="two_painters"> Two painters</label>
           <label class="check" data-sub="borrow_attention"><input type="checkbox" id="borrow_attention"> Borrowed attention</label>
+          <div class="group-label" data-sub="partner" data-sub-label="Partner model" data-words="{partner_model}">Partner model</div>
+          <div class="group-label">Each step</div>
+          <label class="check" data-sub="time_travel"><input type="checkbox" id="time_travel"> Time travel</label>
           <label class="check" data-sub="detail_bands"><input type="checkbox" id="detail_bands"> Broad shapes first</label>
           <label class="check" data-sub="shaped_guidance"><input type="checkbox" id="shaped_guidance"> <span data-words="Shaped {clip_guidance_scale}">Shaped Prompt strength</span></label>
           <div class="slider-row"><label class="field-name" for="gradient_momentum">Push momentum</label><input type="range" data-for="gradient_momentum" min="0" max="0.95" step="0.05"><input id="gradient_momentum" class="readout" type="number" min="0" max="0.95" step="0.05"></div>
+          <div class="slider-row" data-sub="correct_steps"><label class="field-name" for="correct_steps">Corrector steps</label><input type="range" data-for="correct_steps" min="0" max="3" step="1"><input id="correct_steps" class="readout" type="number" min="0" max="3" step="1"></div>
+          <div class="group-label">Prompt checkers</div>
           <div class="slider-row"><label class="field-name" for="evidence_map">Subject memory</label><input type="range" data-for="evidence_map" min="0" max="1" step="0.1"><input id="evidence_map" class="readout" type="number" min="0" max="1" step="0.1"></div>
           <div class="slider-row" data-sub="layout_critic"><label class="field-name" for="layout_critic">Coherence critic</label><input type="range" data-for="layout_critic" min="0" max="2" step="0.1"><input id="layout_critic" class="readout" type="number" min="0" max="2" step="0.1"></div>
           <label class="line" data-sub="robust_critic"><span class="field-name">Robust checker</span><select id="robust_critic"></select></label>
           <div class="slider-row" data-sub="one_subject"><label class="field-name" for="one_subject">One subject</label><input type="range" data-for="one_subject" min="0" max="3" step="0.1"><input id="one_subject" class="readout" type="number" min="0" max="3" step="0.1"></div>
-          <div class="slider-row" data-sub="correct_steps"><label class="field-name" for="correct_steps">Corrector steps</label><input type="range" data-for="correct_steps" min="0" max="3" step="1"><input id="correct_steps" class="readout" type="number" min="0" max="3" step="1"></div>
           <label class="line" data-sub="route_prompts"><span class="field-name">Prompt routing</span><select id="route_prompts"></select></label>
-          <div class="group-label" data-sub="partner" data-sub-label="Partner model" data-words="{partner_model}">Partner model</div>
         </div>
       </section>
 
@@ -325,6 +332,10 @@
       <div class="actions">
         <button type="button" id="renderBtn" class="primary">Render</button>
         <button type="button" id="stopBtn" class="danger" hidden>Stop</button>
+      </div>
+      <div class="mini-actions">
+        <button type="button" id="renderMini" class="primary icon-button" title="Render" aria-label="Render"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg></button>
+        <button type="button" id="stopMini" class="danger icon-button" title="Stop" aria-label="Stop" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></button>
       </div>
       <p id="formError" class="error" role="alert" hidden></p>
     </div>
@@ -409,13 +420,14 @@
   <div class="modal-head">
     <h2>Settings</h2>
     <input id="advSearch" type="search" placeholder="Search settings" aria-label="Search settings">
-    <button type="button" id="advReset" class="link">Reset</button>
+    <button type="button" id="advReset" class="link" title="Puts the app settings in this window back to their defaults. Folders, models and the cards are left alone.">Reset these</button>
     <button type="button" id="advClose" class="default">Done</button>
   </div>
   <div class="modal-body">
+    <p id="advNone" class="hint" hidden>Nothing here matches. Settings that shape the picture are in the cards on the left, and Help lists them all.</p>
     <section id="namesBox" class="folders" aria-label="Setting names">
       <div class="folder-field">
-        <span class="adv-name" data-help="Plain names are easier to follow. Official names match Disco Diffusion's own, for anyone who knows the notebook or its guides. Settings Nano added have one name. Renders are the same either way.">Setting names</span>
+        <span class="adv-name" data-help="Plain names are easier to follow. Official names match Disco Diffusion's, for anyone who knows its notebook. Renders are the same either way.">Setting names</span>
         <div class="segmented names" role="group" aria-label="Setting names">
           <button type="button" data-names="plain">Plain</button>
           <button type="button" data-names="official">Official</button>
@@ -425,15 +437,18 @@
         <label class="check toggle" data-help="Resting the pointer on a setting's name shows what it does. Help has the longer explanations."><input type="checkbox" id="hoverHelp" class="switch" role="switch"> Help on hover</label>
       </div>
     </section>
-    <section id="lookBox" class="folders" aria-label="Accent color">
+    <section id="lookBox" class="folders" aria-label="Appearance">
       <div class="folder-field">
         <span class="adv-name" data-help="Colors the Render button, changed values, the selected image and the progress bar. It's saved in this browser.">Accent color</span>
         <div class="swatches" id="accentSwatches" role="group" aria-label="Accent color"></div>
       </div>
+      <div class="folder-field">
+        <label class="check toggle" data-help="The faint grid behind the picture. Off leaves a plain gray background. It's saved in this browser."><input type="checkbox" id="canvasGrid" class="switch" role="switch"> Grid behind the picture</label>
+      </div>
     </section>
     <section id="networkBox" class="folders" aria-label="Network">
       <div class="folder-field local-only">
-        <span class="adv-name" data-help="On the other PC, open the address in a browser and type the code once. Renders run on this PC's GPU, and images are saved here; the other PC sees them in Images and can save them. Windows may ask once whether Python can use private networks: choose Allow. A new code signs out every other PC.">Share this PC</span>
+        <span class="adv-name" data-help="On the other PC, open the address in a browser and type the code once. Renders run here. If Windows asks about private networks, choose Allow. A new code signs out other PCs.">Share this PC</span>
         <label class="check toggle"><input type="checkbox" id="shareToggle"> Let other PCs on this network render here</label>
         <div id="shareInfo" class="share-info" hidden>
           <div class="share-line"><span class="hint">Address</span><span id="shareAddress" class="value"></span></div>
@@ -442,7 +457,7 @@
         <p id="shareError" class="error" role="alert" hidden></p>
       </div>
       <div class="folder-field">
-        <label class="adv-name" for="remoteAddress" data-help="Turn on Share this PC on the PC with the GPU first. Its address and code are under Network in its Settings.">Render on another PC</label>
+        <label class="adv-name" for="remoteAddress" data-help="Turn on Share this PC on the PC with the GPU first. Its address and code are under Share this PC in its Settings.">Render on another PC</label>
         <form class="folder-row" id="remoteForm">
           <input id="remoteAddress" type="text" spellcheck="false" placeholder="Its address, such as 192.168.1.20">
           <button type="submit" class="default">Open</button>
@@ -465,7 +480,7 @@
         </div>
       </div>
       <div class="folder-field">
-        <label class="adv-name" for="checkpointDirs" data-help="One folder per line. Stable Diffusion 1.5 and SDXL checkpoints here show in the Handoff list. They're read where they are, never copied. Find in other apps adds the checkpoint folders of ComfyUI or a Stable Diffusion web UI on this PC.">Checkpoint folders</label>
+        <label class="adv-name" for="checkpointDirs" data-help="One folder per line. Stable Diffusion 1.5 and SDXL checkpoints here show in the Handoff list. Find in other apps adds folders from ComfyUI or a web UI on this PC.">Checkpoint folders</label>
         <div class="folder-row">
           <textarea id="checkpointDirs" rows="2" spellcheck="false"></textarea>
           <button type="button" id="checkpointBrowse" class="default">Add folder</button>
@@ -531,27 +546,28 @@
     <p>The bars at the bottom read the same way. Gray on the left is what the rest of the PC uses. Color on the right of it is Disco: green on VRAM, blue on RAM, purple for its files on the disk. Before a render, the colored part is lighter and shows what the next render will take, so it grows as you add to it. While a render runs, it turns solid and shows what Disco really uses. Hover any part to see its size.</p>
     <p>The striped end of VRAM is kept free so Windows can draw the screen. When a render won't fit in what is left, part of its working data moves to system RAM by itself, which is slower but works: that part leaves the green VRAM bar and shows green inside the RAM bar. Red means it's too big even then, so lower the size or use fewer prompt checkers. The secondary model is faster and lighter, at lower quality.</p>
     <h3>Guide images</h3>
-    <p>Each box takes an image dropped on it, or click it to choose one. A ghost image guides the layout and a style image the texture and palette; their strengths are under Experimental in Settings.</p>
+    <p>Each box takes an image dropped on it, or click it to choose one. A ghost image guides the layout and a style image the texture and palette; their strengths are under Ghost settings and Style image settings in Guide images.</p>
     <p>Image prompts take many images at once: drop a set of images or a whole folder. They guide the render beside your text. Every prompt checker reads each image, and what the images have in common counts: a subject, a style, a palette, a mood. It's close to what an embedding does, but nothing is trained, so it takes seconds and works with any set. Ten to fifty images that share one idea work best. Image prompt weight sets how much they count beside a text line weighted 1, and below 0 steers away from them.</p>
     <h3>Tiles</h3>
     <p>Tiles builds a larger image from several renders at the frame size, so it needs no more VRAM than the frame does. Every tile takes each step in turn, and the overlaps are averaged before the next step, so neighbors settle on one image with no joins. Time grows with the number of tiles: 4 tiles take four times as long per step, 16 take sixteen times.</p>
     <p data-words="With a start image, Tile denoise sets how much is repainted, and {skip_steps} isn't used. Your image can be any size, because it is resized to the final size first. With text only, Text start chooses how the picture begins. Render first, the default, paints one image at the frame size and the tiles repaint it using Tile denoise, which keeps one scene with large shapes. Split the noise paints at full size from the first step and uses {skip_steps}; it is busier, and each tile can paint its own copy of the subject."></p>
     <p data-words="Whole picture view lets the {clip_lower} see each tile as part of the full image. Tiles use the ddim sampler, and symmetry doesn't apply."></p>
     <h3>Animation</h3>
-    <p>Animation renders a clip one frame at a time. 2D moves a flat picture each frame. 3D flies a camera through the scene, with Depth Anything telling near from far, so 3D needs it from Models. Video Input repaints each frame of a video you drop on its box. Every frame after the first starts from the last one, and Frame skip % sets how much of it is kept. Higher is steadier and faster. 75 holds a scene while the camera moves, and 60 lets it keep reinventing itself. Video Input switches to 55, so the video gets repainted more. Frame skip keyframes in Settings can lower it around a prompt change, so the new prompt takes over sooner.</p>
+    <p>Animation renders a clip one frame at a time. 2D moves a flat picture each frame. 3D flies a camera through the scene, with Depth Anything telling near from far, so 3D needs it from Models. Video Input repaints each frame of a video you drop on its box. Every frame after the first starts from the last one, and Frame skip % sets how much of it is kept. Higher is steadier and faster. 75 holds a scene while the camera moves, and 60 lets it keep reinventing itself. Video Input switches to 55, so the video gets repainted more. Frame skip keyframes, under the arrow beside Frame skip %, can lower it around a prompt change, so the new prompt takes over sooner.</p>
     <p>Clip style, under the video, sets how each frame starts. Paint over keeps each frame's shapes from the video and paints over them, at Frame skip 40% with no blend, so its painted steps all paint detail: abstract and painterly, with Disco's flicker. Reimagine fits the views to each frame too, so its painted steps get the Look's own split of shapes and detail, and the prompt can turn what is in the video into what it describes. Build up keeps more of each frame and blends in some of the last one, so the painting builds up and changes less from frame to frame. Changing one of its settings by hand shows Custom.</p>
-    <p>For calmer, more painterly clips, try Step noise at about 0.3 under Sampling in Settings. It changes the first frame too.</p>
+    <p>For calmer, more painterly clips, try Step noise at about 0.3, under the arrow beside Sampler in the Guidance card. It changes the first frame too.</p>
     <p>Each move has a slider for a steady value, and keyframes for change over time: <code>0:(1.0), 60:(1.04), 120:(1.0)</code> eases in and out over 120 frames. Formulas of the frame t work too: <code>0:(1+0.02*sin(t/8))</code> sways. The curve button opens an editor: drag a point to change it, double-click empty space to add a keyframe, and double-click a point to remove it. Formulas typed in its text box show as hollow points that can't be dragged.</p>
-    <p>The prompt box is the prompt at the first frame. Change the prompt at a frame adds another box with the frame it starts at, so a clip can travel from one idea to the next. Prompt fade in Settings blends one into the next.</p>
+    <p>The prompt box is the prompt at the first frame. Change the prompt at a frame adds another box with the frame it starts at, so a clip can travel from one idea to the next. Prompt fade, under the arrow beside Change the prompt at a frame, blends one into the next.</p>
     <p>Hold colors keeps the light and color close to the first frame's, so long clips don't drift. Turbo repaints only every few frames and lets the camera move the frames between, which is much faster. Last frame as ghost lets Depth target and the ghost's light and dark hold each frame to the last, which is steadier. For Video Input, Blend last frame mixes the last finished frame into each new one, so the painting builds up over the clip, and it follows the video's own motion, so the paint moves with what moves. The first frame gets a first pass of its own, so the clip doesn't open on the plain video.</p>
     <p>Seamless loop makes a clip that loops with no jump where it starts again. Paint back to the start paints the last few frames more and more like the first, for motion that already comes back to where it began, such as a camera moving on a sin formula. Ping-pong plays the video, or the camera's moves, forward and then back, so the motion ends where it began, and paints back to the start as well. The way back is painted fresh, not played in reverse. For a video, Frames counts both ways. With In-between frames, the last frame gets in-betweens into the first too.</p>
     <p>Each clip is saved as PNG frames in a folder, an MP4 and an animated WebP, with a GIF if you choose. Stopping a clip still saves the video of the frames it has. The last frame shows in Images, and clicking it plays the clip.</p>
     <h3>Handoff</h3>
-    <p>Handoff brings in a Stable Diffusion checkpoint you already have, SD 1.5 or SDXL, in one of two ways, or both. A third kind, Small first, hands Disco's own start from a small size to the full size, and needs no checkpoint.</p>
-    <p><b>Checkpoint first, then Disco.</b> The checkpoint paints the start of every image or frame, and Disco carries on. It's not a start image: the checkpoint takes its share of the steps from noise, and Disco picks up while the scene is still blurry. The layout and subject come from the checkpoint, and the paint and detail from Disco. Handoff % is the checkpoint's share: 0 turns this part off, about 30% keeps Disco's look on a sturdier layout, and 50% keeps more of the checkpoint. Disco denoise % works like Denoise for Disco afterwards: 0 carries on from exactly where the checkpoint stopped, and higher has Disco repaint more of it. Handoff 60% with Disco denoise 75% gives Disco 150 of 200 steps on the checkpoint's picture. With a start image or in animation, the checkpoint takes its share of what would be repainted, so every frame of a clip gets it.</p>
-    <p><b>Reverse handoff: Disco first, then the checkpoint.</b> Disco paints the whole image, and then the checkpoint repaints part of it, like Denoise in img2img. Reverse handoff % is how much: 0 is off, 20 to 35% tidies details such as faces and edges and keeps Disco's look, and 100% replaces Disco's image. It works with Handoff % at 0, for still images only. Keep the handoff picture also saves Disco's own image beside the result.</p>
-    <p><b>Small first: Disco small, then Disco full size.</b> Disco's model learned at about 512 pixels, and its prompt checkers look at small views of the picture, so on a large frame such as 1280×768 different areas can each grow their own subject. Small first paints the start of each image at a smaller size in the frame's shape, while the layout is decided, then enlarges its still blurry picture and carries on at full size, where the detail is painted. Small first % is the small share: 0 is off and about 25% suits 1280×768. Full-size denoise % works like Disco denoise %: 0 carries on from exactly where the small start stopped, and higher has the full size repaint more of it, which gives it more say over the layout. Hold the small layout, also in that section, keeps the full size's broad shapes and colors close to the small picture while the detail is added, so a second subject can't grow in the empty areas; about 0.5 is a good start. Small first size is the small start's longer side, 768 by default, and Small first does nothing on frames no larger than that. The small steps are faster, so a render also takes a little less time. It works on stills and on the first frame of a clip, but not with Tiles, which have their own Render first, or with the experiments that are sized to the frame.</p>
-    <p>The checkpoint waits in RAM and comes to the GPU only for its own steps. SD 1.5 fits beside Disco. SDXL is stored in 8 bits on cards under 12GB, which halves its memory, and takes a minute or two to load the first time; after that it stays loaded between renders. Handoff steps, prompt strength, the negative prompt and few-step models such as Lightning are in the Handoff model section, which opens once a checkpoint is chosen.</p>
+    <p>Handoff brings in a Stable Diffusion checkpoint you already have, SD 1.5 or SDXL: it paints first and Disco repaints its picture, or it finishes Disco's image, or both in one render.</p>
+    <p><b>The checkpoint's settings</b> come first once a checkpoint is chosen, and both ways use them: its steps, CFG, sampler, Karras schedule, Clip skip, few-step spacing and negative prompt. Each checkpoint remembers its own, so choosing it again brings them back.</p>
+    <p><b>Checkpoint, then Disco.</b> Handoff % is how much of its picture the checkpoint paints. At 100, the default, it finishes its picture, and Disco repaints Denoise of it, in the Render card, as it would a start image, so the layout and subject come from the checkpoint and the paint from Disco. Choosing a checkpoint sets Denoise to 60% if it was at 100%. Below 100, the checkpoint hands over a picture still forming and Disco carries on from that point, so Denoise isn't used; about 30% keeps Disco's look on a sturdier layout. 0 turns this part off. With a start image, or on a clip's frames, the checkpoint starts from it, and Start denoise % is how much of it the checkpoint repaints: lower lets more of your image through, and 0 uses the same share as Denoise.</p>
+    <p><b>Disco, then checkpoint.</b> Finish % is the reverse handoff: after Disco is done, the checkpoint repaints that much of the finished image, like Denoise. 0 is off, 20 to 35% tidies details such as faces and edges and keeps Disco's look, and 100% replaces Disco's image. It works with Handoff % at 0, for still images only. Save its picture also saves Disco's own image beside the result.</p>
+    <p><b>Small first</b>, in the Size card, hands Disco's own start from a small size to the full size, and needs no checkpoint. Disco's model learned at about 512 pixels, and its prompt checkers look at small views of the picture, so on a large frame such as 1280×768 different areas can each grow their own subject. Small first paints the start of each image at a smaller size in the frame's shape, while the layout is decided, then enlarges its still blurry picture and carries on at full size, where the detail is painted. Small first % is the small share: 0 is off and about 25% suits 1280×768. Full-size denoise % works like Denoise: 0 carries on from exactly where the small start stopped, and higher has the full size repaint more of it, which gives it more say over the layout. Hold the small layout, also in that section, keeps the full size's broad shapes and colors close to the small picture while the detail is added, so a second subject can't grow in the empty areas; about 0.5 is a good start. Small first size is the small start's longer side, 768 by default, and Small first does nothing on frames no larger than that. The small steps are faster, so a render also takes a little less time. It works on stills, and on any frame of a clip whose skipped steps leave some of its small share to paint, but not with Tiles, which have their own Render first, or with the experiments that are sized to the frame. It's off while a Handoff checkpoint is chosen, which already paints the start at its own size.</p>
+    <p>The checkpoint waits in RAM and comes to the GPU only for its own steps. SD 1.5 fits beside Disco. SDXL is stored in 8 bits on cards under 12GB, which halves its memory, and takes a minute or two to load the first time; after that it stays loaded between renders.</p>
     <p>The Handoff list shows the SD 1.5 and SDXL checkpoints in your checkpoint folders on the PC that renders, grouped by subfolder. The welcome screen fills in the folders of ComfyUI or a Stable Diffusion web UI it finds, and Find in other apps, beside Checkpoint folders in Settings, looks again. Browse picks a file anywhere on the PC that renders and adds its folder.</p>
     <h3>Controls</h3>
     <p>ControlNet's idea, done through guidance, since Disco's model has nowhere to plug a ControlNet in. At every step the render is compared with a control picture and nudged closer, beside the prompt. A still follows the Control image, or else its start image. A clip needs none: a Video Input clip follows each frame of the video as it is before any painting, so the subject stays where it really is, and a 2D or 3D clip follows the frame each repaint starts from. Edge control holds its outlines, and only asks for an outline where it has one. Depth control holds its near and far. Pose control finds each person's skeleton and holds a body in that stance. Person control cuts out each person and holds their silhouette, clothes and broad colors, while everything around them is painted freely; it is the strongest for keeping someone in a clip. Face control finds each face and holds its features while the layout forms, where the eyes, nose and mouth are and their light and dark, then lets the paint finish them; a head turned to the side can still be painted facing forward; Face shape holds more of a turn. Face shape holds each face's outline and its near and far, measured close up, so the face keeps its own shape and a turned head keeps more of its turn, most of all with a Control image; it pushes beside the prompt as Edge and Depth do, so the face is still painted freely. Face detail gives every face close-ups of its own at each step, so faces are painted with more care; with no control picture it finds faces in the render itself, so it works with text alone. About 0.5 is a good start, and Person control holds well at 0.3. Each one has its own curve, in its section, which sets when it counts: Face lets go at 50% of the render, Depth at 60%, Pose, Person and Face shape at 70%, and Edge at 80%. They don't work with Tiles.</p>
@@ -574,7 +590,7 @@
     <h3>Models</h3>
     <p>Setup downloads the main model. The others are optional and grayed out in the Model list until you download them from Models in Settings. All of them were tested at 512×512. The style models use about 2GB less VRAM than the main model and take a little over half the time.</p>
     <h3>Rendering on another PC</h3>
-    <p>To render on a PC with a GPU while you work on another, turn on Share this PC under Network in Settings on the PC with the GPU. It shows an address and a code. On the other PC, open the address in any browser, or type it into Render on another PC in Nano's own Settings, and type the code once. That PC then uses Nano as if it sat at the GPU PC, and renders, images and settings all live there. From the other PC, Browse and Add folder show the GPU PC's own drives, so handoff checkpoints, the partner's SD 1.5 file and upscaler folders are picked from what is on the GPU PC. Start images, videos and guide images are dropped onto the page and uploaded. Where images are saved, and opening Explorer, are set on the GPU PC itself. Windows may ask once whether Python can use private networks: choose Allow. A new code signs out every other PC.</p>
+    <p>To render on a PC with a GPU while you work on another, turn on Share this PC in Settings on the PC with the GPU. It shows an address and a code. On the other PC, open the address in any browser, or type it into Render on another PC in Nano's own Settings, and type the code once. That PC then uses Nano as if it sat at the GPU PC, and renders, images and settings all live there. From the other PC, Browse and Add folder show the GPU PC's own drives, so handoff checkpoints, the partner's SD 1.5 file and upscaler folders are picked from what is on the GPU PC. Start images, videos and guide images are dropped onto the page and uploaded. Where images are saved, and opening Explorer, are set on the GPU PC itself. Windows may ask once whether Python can use private networks: choose Allow. A new code signs out every other PC.</p>
     <h3>Folders</h3>
     <p>Settings sets where images are saved and where to look for upscalers and checkpoints. You can download Real-ESRGAN x4plus from Models in Settings, or point Nano at a folder of your own.</p>
     <p><button type="button" id="showWelcome" class="link">Show the welcome screen again</button></p>

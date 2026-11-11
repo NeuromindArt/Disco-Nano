@@ -106,7 +106,7 @@ def blocked(cfg, downloaded=_have):
     if partner_named == "Tiny SD" and not downloaded(models.PARTNER):
         block(PARTNER_USERS, "Get Tiny SD from Models in Settings first.")
     if partner_named == "SD 1.5 file" and not os.path.isfile(str(cfg["partner_file"] or "")):
-        block(PARTNER_USERS, "Set SD 1.5 file under Experimental in Settings first.")
+        block(PARTNER_USERS, "Set SD 1.5 file in Experiments, under Partner model, first.")
     if partner_named != "Tiny SD":
         block(["prompt_graft"], "Needs Tiny SD as the partner model.")
     if cfg["diffusion_model"] != models.MAIN:

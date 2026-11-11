@@ -43,7 +43,11 @@ ROBUST = {"FARE4 B/16": ("Robust checker", 0.16, 0.6), "FARE2 L/14": ("Robust ch
 # The controls' finders run once on the control picture, before the steps, so they add nothing to the peak.
 FINDERS = {"pose_control": 0.24, "person_control": 0.19}  # RAM, as their files
 FACES_RAM_GB = 0.11
-HANDOFF_RAM_GB = {"sd15": 4.3, "sdxl": 19.5}  # loading SDXL reads it in 32 bits before storing it in 8
+# A handoff checkpoint waiting in RAM beside the render. Loading SDXL reads it in 32 bits before storing it in 8, which
+# peaks higher, but that comes before Disco's models load, so it only counts where it's more than the two together.
+# SDXL waiting was measured beside a 1280x768 render with Offload, which peaked at 28GB in all.
+HANDOFF_RAM_GB = {"sd15": 4.3, "sdxl": 12.0}
+HANDOFF_LOAD_GB = {"sd15": 4.3, "sdxl": 19.5}
 HANDOFF_VRAM_GB = {"sd15": 0.0, "sdxl": 0.16}
 
 
@@ -84,7 +88,7 @@ def plan(settings, gpu, ram):
         kind = "sdxl" if checkpoint_kind(hand) == "sdxl" else "sd15"
         extras.append(("Handoff model, between its steps", HANDOFF_VRAM_GB[kind], 0))
         ram_extras.append({"kind": "extra", "label": f"Handoff model ({'SDXL' if kind == 'sdxl' else 'SD 1.5'}), waiting in RAM",
-                           "gb": HANDOFF_RAM_GB[kind]})
+                           "gb": HANDOFF_RAM_GB[kind], "loading": HANDOFF_LOAD_GB[kind]})
     extra_parts = [{"kind": "extra", "label": name, "gb": gb} for name, gb, _ in extras if gb >= 0.05]
     extra_vram = sum(gb for _, gb, _ in extras)
     ram_extra = sum(r for _, _, r in extras) + sum(CHECKER_RAM.get(n, 0) for n in CHECKERS if cfg.get(n))
@@ -111,6 +115,8 @@ def plan(settings, gpu, ram):
         ram_parts.append({"kind": "offloaded", "label": "Offloaded working data", "gb": moved})
     else:
         ram_parts.append({"kind": "models", "label": "This render", "gb": render_ram})
+    for part in ram_extras:  # loading comes before the render's own models, so it counts only past them
+        part["gb"] = max(part["gb"], part.pop("loading", 0) - render_ram)
     ram_parts += ram_extras
 
     return {

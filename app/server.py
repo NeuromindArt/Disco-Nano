@@ -108,6 +108,7 @@ class Worker:
         self.sig, self.task, self.log = sig, None, None
         self.ending = False  # closing, or about to exit after a failed render: it takes no more jobs
         self.pid = None  # the Python process itself, which a venv's launcher starts as a child of proc
+        self.jobs = 0  # renders handed to it, so a stop knows whether models from an earlier one wait in it
         env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT,
                    NANO_EXACT="1" if sig["exact_repeat"] else "0", NANO_LARGE="1" if sig["large"] else "0")
         # Below normal priority: a render still gets every idle cycle, but Windows serves the desktop first,
@@ -125,6 +126,7 @@ class Worker:
         # the log first: the reader writes to it as soon as it sees a task
         self.log = open(os.path.join(task.job_dir, "run.log"), "a", encoding="utf-8", errors="replace")
         self.task = task
+        self.jobs += 1
         self.proc.stdin.write(task.job_dir + "\n")
         self.proc.stdin.flush()
 
@@ -650,7 +652,7 @@ async def connect(request: Request):
     if code != share_code():
         _wrong[who] = _wrong.get(who, 0) + 1
         time.sleep(0.5)
-        raise HTTPException(403, "That code doesn't match. It's in Settings under Network on the PC that renders.")
+        raise HTTPException(403, "That code doesn't match. It's in Settings, under Share this PC, on the PC that renders.")
     _wrong.pop(who, None)
     response = JSONResponse({"ok": True})
     response.set_cookie(KEY_COOKIE, code, max_age=60 * 60 * 24 * 365, httponly=True, samesite="strict")
@@ -821,8 +823,11 @@ def stop():
     with lock:
         if not current or not current.running():
             return {"ok": False}
-        if current.kind == "render" and current.sampling_started:
-            open(os.path.join(current.job_dir, "stop"), "w").close()  # ends cleanly at the next step
+        # A worker holding models from an earlier render ends cleanly at its next step, a handoff model's included,
+        # so those models stay loaded. A first render that's still loading has nothing to keep, so it just ends.
+        kept = current.worker is not None and current.worker.jobs > 1
+        if current.kind == "render" and (current.sampling_started or kept):
+            open(os.path.join(current.job_dir, "stop"), "w").close()
             current.message = "Stopping after this step"
         else:
             current.proc.terminate()  # still loading, nothing to preserve; the next render starts a new worker

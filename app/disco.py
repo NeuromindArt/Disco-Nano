@@ -569,7 +569,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         import handoff  # loaded before Disco, so its text encoders can use the GPU and leave
         path = cfg["handoff_file"]
         handing = kept(("handoff", path, os.path.getmtime(path)), lambda: handoff.Handoff(path, hooks.status, device))
-        handing.prepare(cfg, sets, hooks.status, getattr(hooks, "stopped", lambda: False))
+        handing.prepare(cfg, sets, hooks.status, getattr(hooks, "stopped", lambda: False), hooks.preview)
     torch.backends.cudnn.benchmark = False  # same speed here, but its cached workspaces cost VRAM
 
     overview = schedule(cfg["cut_overview"])
@@ -674,7 +674,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         raise ValueError("Prompt graft needs Tiny SD as the partner model.")
     frame_ghost = animating and cfg["frame_ghost"]
     if cfg["depth_target"] and not (drawing or cfg["ghost_image"] or frame_ghost):
-        raise ValueError("Depth target follows a ghost. Set Live ghost, or choose a Ghost image.")
+        raise ValueError("Depth target follows a ghost. Set Live ghost, choose a Ghost image, or turn on Last frame as ghost in a clip.")
     experiment = lab.Lab(cfg, schedule) if trying else None
     if uses_partner(cfg):
         text = ", ".join(parse_prompt(p)[0] for p in sets[0][1] if parse_prompt(p)[1] > 0)
@@ -1009,29 +1009,29 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             one_pass.leaf = one_pass.output = None
 
     def hand_over(start, skip, n, size, noise_seed, keep_as=None):
-        """With a handoff model, it paints its share of the path from `start` (a -1 to 1 tensor, or None
-        for noise) and Disco carries on from there. Returns the new start and skip. `size` is the size
-        painted when there is no start."""
+        """With a handoff model, it paints from `start` (a -1 to 1 tensor, or None for noise), and Disco takes
+        its picture. At Handoff 100% the checkpoint finishes it and Disco repaints `skip`'s share, Denoise, as it
+        would a start image. Below that it stops partway and Disco carries on from that point. Returns the new
+        start and skip. `size` is the size painted when there is no start."""
         pull["set"], pull["to"] = False, None
         if handing is None or not hand_start:
             return start, skip
         release()
-        begins = float(diffusion.alphas_cumprod[diffusion.num_timesteps - skip - 1])
+        # The checkpoint repaints Start denoise of a start, or with that at 0, the share Disco itself would.
+        own = float(cfg.get("handoff_start_denoise") or 0) / 100
+        repaints = own or (diffusion.num_timesteps - skip) / diffusion.num_timesteps
         picture = None if start is None else to_image(start)
         resting = [model, secondary_model, lpips_model, *(m.visual for m in clip_models),
                    experiment.partner if experiment else None]
         with handoff.Parked(handing, resting, device, *size):
-            made = handing.paint(picture, begins, n, *size, noise_seed)
+            made = handing.paint(picture, repaints, n, *size, noise_seed)
         if made is None:
             return start, skip
         image, alpha = made
         if keep_as:
             image.save(keep_as)
         pull["set"], pull["to"] = True, start
-        repaint = float(cfg["handoff_denoise"] or 0)
-        if repaint > 0:  # Disco repaints its own share of the handoff picture, like Denoise for a start image
-            skip = min(max(cfg["steps"] - round(cfg["steps"] * repaint / 100), 0), cfg["steps"] - 1)
-        else:  # it carries on from the point on its own path where the handoff model stopped
+        if float(cfg["handoff_share"]) < 100:  # it carries on from the point on its own path where the checkpoint stopped
             skip = handoff.disco_skip(diffusion.alphas_cumprod, alpha, skip)
         hooks.status(f"Disco carries on from step {skip + 1} of {cfg['steps']}")
         return TF.to_tensor(image).unsqueeze(0).mul(2).sub(1).to(device), skip

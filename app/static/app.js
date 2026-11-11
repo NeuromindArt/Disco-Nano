@@ -9,7 +9,7 @@ const QUICK = ["steps", "skip_steps", "clip_guidance_scale", "n_batches", "set_s
   "use_secondary_model", "exact_repeat", "init_scale", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view",
   "time_travel", "prompt_graft", "live_ghost", "depth_target", "two_painters", "borrow_attention", "detail_bands", "shaped_guidance", "gradient_momentum", "evidence_map", "layout_critic", "robust_critic", "one_subject", "correct_steps", "route_prompts", ...CLIPS.map((c) => c[0]),
   "animation_mode", "max_frames", "fps", "in_between", "loop_mode", "frames_skip_steps", "video_init_path", "extract_nth_frame", "video_blend",
-  "color_hold", "turbo_mode", "turbo_steps", "frame_ghost", "handoff_file", "handoff_share", "handoff_denoise", "handoff_finish",
+  "color_hold", "turbo_mode", "turbo_steps", "frame_ghost", "handoff_file", "handoff_share", "handoff_start_denoise", "handoff_finish",
   "small_first", "small_denoise", "image_prompts", "image_prompt_weight", "edge_control", "depth_control", "pose_control", "person_control", "face_control", "face_shape", "face_detail"];
 // Camera moves in the Animation section: the modes each one works in, and its slider's range.
 const MOTION = {
@@ -38,19 +38,20 @@ const CARD_FIELDS = {
   // Model
   checkers: ["RN101", "RN50x4", "RN50x16", "RN50x64"],
   // Handoff
-  checkpoint: ["handoff_steps", "handoff_guidance", "handoff_few_steps", "handoff_negative", "handoff_keep"],
+  checkpoint: ["handoff_steps", "handoff_guidance", "handoff_sampler", "handoff_karras", "handoff_clip_skip", "handoff_few_steps", "handoff_negative", "handoff_keep"],
   small_first: ["small_hold", "small_side"],
   small_hold: ["small_hold_curve"],
   // Tiles
   tile_scale: ["tile_overlap"],
   // Animation
   prompt_changes: ["prompt_fade"],
-  extract_nth_frame: ["video_init_seed_continuity"],
+  clip_style: ["video_init_seed_continuity"],
   video_blend: ["video_flow"],
   loop_mode: ["loop_frames"],
   fps: ["save_mp4", "save_webp", "save_gif"],
-  frames_skip_steps: ["frame_skip_keys", "frames_scale"],
-  camera: ["interp_spline", "fov", "padding_mode", "sampling_mode", "frame_sharpen"],
+  // Keyframe shape shapes Frame skip keyframes in every clip mode, and the camera's curves, whose editor has it too.
+  frames_skip_steps: ["frame_skip_keys", "interp_spline", "frames_scale"],
+  camera: ["fov", "padding_mode", "sampling_mode", "frame_sharpen"],
   // Guide images
   ghost_image: ["ghost_lowfreq", "ghost_structure", "ghost_crops", "ghost_curve"],
   style_image: ["style_strength"],
@@ -86,11 +87,11 @@ const ROUND_SECONDS = 0.25;  // measured: each View round past the first, per st
 /* A look sets how the prompt shapes the picture, apart from its size. Settings it leaves out go back to
    their defaults. Each was compared with the others on the same prompts and seeds. */
 const LOOKS = {
-  balanced: { label: "Shapes, then detail", hint: "40% of the steps lay out the scene's shapes, with the prompt checkers looking at the whole picture and wide close-ups, and 60% paint detail with closer and closer close-ups. Strong single subjects. The default.", values: {} },
-  detail: { label: "Mostly detail", hint: "10% of the steps lay out shapes and 90% paint detail. Crisp textures and busy scenes, and a start image keeps more of its own shapes.", values: { views_shapes: 10 } },
-  shapes: { label: "Mostly shapes", hint: "80% of the steps lay out shapes and 20% paint detail. Bold, simple scenes with softer detail.", values: { views_shapes: 80 } },
+  balanced: { label: "Shapes, then detail", hint: "The first 40% of the steps lay out the scene, and the rest paint detail. Strong single subjects. The default.", values: {} },
+  detail: { label: "Mostly detail", hint: "Most steps paint detail. Crisp textures and busy scenes, and a start image keeps more of its shapes.", values: { views_shapes: 10 } },
+  shapes: { label: "Mostly shapes", hint: "Most steps lay out shapes. Bold, simple scenes with softer detail.", values: { views_shapes: 80 } },
   classic: {
-    label: "Classic 2022", hint: "Settings from 2022 Disco renders: a gentler prompt, no smoothing, five rounds of {cuts_lower} and the {use_secondary_model}. Dreamy and loose. About twice as long.",
+    label: "Classic 2022", hint: "Settings from 2022 Disco renders. Dreamy and loose, and about twice as long.",
     values: { clip_guidance_scale: 5000, use_secondary_model: true, tv_scale: 0, sat_scale: 0, cutn_batches: 5, clamp_max: 0.05, cut_ic_pow: "[1]*1000" },
   },
 };
@@ -102,15 +103,15 @@ const LOOK_KEYS = [...new Set(["cut_overview", "cut_innercut", ...Object.values(
    Custom. */
 const CLIP_STYLES = {
   paint: {
-    label: "Paint over", hint: "Each frame keeps the video's shapes and Disco paints over them, carrying on the views schedules from Frame skip, so with the default Look its painted steps go to detail. Abstract and painterly, and every frame is new, so it flickers as Disco does.",
+    label: "Paint over", hint: "Keeps the video's shapes and paints over them. Abstract and painterly, with Disco's flicker.",
     values: { frames_skip_steps: 40, video_blend: 0, views_fit: "Start images" },
   },
   reimagine: {
-    label: "Reimagine", hint: "Fits the views to each frame, so its painted steps get the Look's own split of shapes and detail, so the prompt can turn what is in the video into what it describes. Looser, and further from the video.",
+    label: "Reimagine", hint: "Lets the prompt turn what's in the video into what it describes. Looser, and further from the video.",
     values: { frames_skip_steps: 40, video_blend: 0, views_fit: "Start images and clip frames" },
   },
   build: {
-    label: "Build up", hint: "Keeps more of each video frame and carries some of the last painting into the next, so the painting builds up over the clip and changes less from frame to frame. Closer to the video.",
+    label: "Build up", hint: "Carries some of each painted frame into the next, so the clip changes less from frame to frame. Closer to the video.",
     values: { frames_skip_steps: 55, video_blend: 0.3, views_fit: "Start images" },
   },
 };
@@ -128,7 +129,16 @@ let previewRev = -1;
 function load() {
   try { Object.assign(state, JSON.parse(localStorage.getItem(STORE)) || {}); } catch { /* start fresh */ }
 }
-function save() { localStorage.setItem(STORE, JSON.stringify(state)); }
+/* The handoff checkpoint's own settings, which each checkpoint keeps: choosing it again brings them back. */
+const HANDOFF_MODEL_KEYS = ["handoff_steps", "handoff_guidance", "handoff_sampler", "handoff_karras", "handoff_clip_skip", "handoff_few_steps", "handoff_negative"];
+
+function save() {
+  if (state.handoff_file && fields.length) {
+    const own = Object.fromEntries(HANDOFF_MODEL_KEYS.filter((n) => byName[n]).map((n) => [n, lookValue(n)]));
+    state.handoff_models = { ...state.handoff_models, [state.handoff_file]: own };
+  }
+  localStorage.setItem(STORE, JSON.stringify(state));
+}
 
 /* The main panel's values are saved in the browser, so a new default would never reach anyone who has opened
    Nano before. A value still at the default it was saved under moves to the new default, and one changed by
@@ -259,6 +269,11 @@ function buildAccents() {
   custom.append(pick);
   box.append(custom);
   applyAccent(state.accent || ACCENTS[0][0]);
+  // The grid behind the picture, or plain gray. Set here, with the accent, so the page never shows the wrong one.
+  const grid = $("canvasGrid");
+  grid.checked = !state.no_grid;
+  document.body.classList.toggle("no-grid", !!state.no_grid);
+  grid.addEventListener("change", () => { state.no_grid = !grid.checked; document.body.classList.toggle("no-grid", state.no_grid); save(); });
 }
 
 /* The setting a label names: the control it is for, or the one inside it. */
@@ -330,21 +345,52 @@ function helpTable(list) {
   return table;
 }
 
+/* Every setting, listed under the card it's in, in the cards' order, then the Settings window's. */
 function buildHelpSettings() {
-  const sections = new Map([["Main", [
+  const cards = [...document.querySelectorAll(".controls [data-card]")];
+  const TOP = "Prompt and start image";  // above the cards
+  const sections = new Map([[TOP, []], ...cards.map((c) => [c.querySelector(".card-title").textContent.trim(), []])]);
+  sections.get("Size")?.push(
     { label: "Width", kind: "number", low: 256, default: 768, high: 1280, help: "Image width in pixels, in steps of 64." },
-    { label: "Height", kind: "number", low: 256, default: 512, high: 1280, help: "Image height in pixels, in steps of 64." },
-  ]]]);
+    { label: "Height", kind: "number", low: 256, default: 512, high: 1280, help: "Image height in pixels, in steps of 64." });
+  sections.set("Settings", []);
+  const other = [];
   for (const f of fields) {
-    if (!sections.has(f.section)) sections.set(f.section, []);
-    sections.get(f.section).push(f);
+    const el = (MOTION[f.name] && $("motionRows")) || $(f.name) || document.querySelector(`.adv-field[data-name="${f.name.toLowerCase()}"]`)
+      || document.querySelector(`[data-drop="${f.name}"]`) || (f.name === "prompt_fade" ? $("addPromptChange") : null);
+    const card = el?.closest("[data-card]");
+    const where = card ? card.querySelector(".card-title").textContent.trim() : !el ? null : el.closest("#advanced") ? "Settings" : TOP;
+    (where && sections.has(where) ? sections.get(where) : other).push(f);
   }
+  if (other.length) sections.set("Not shown in the app", other);
   const box = $("helpSettings");
   for (const [title, list] of sections) {
+    if (!list.length) continue;
     const heading = document.createElement("h4");
-    withWords(heading, `{${title}}`);
+    heading.textContent = title;
     box.append(heading, helpTable(list));
   }
+}
+
+/* Settings that do nothing with the others as they are: grayed, with the reason on hover. */
+const IDLE_WHEN = [
+  ["color_hold", () => state.animation_mode === "Video Input" && !Number(state.video_blend), "With Video Input it holds only the paint {video_blend} carries over, so at 0 it does nothing."],
+  ["eta", () => lookValue("diffusion_sampling_mode") === "plms", "plms doesn't use it. It's for ddim."],
+  ["transformation_percent", () => !lookValue("use_horizontal_symmetry") && !lookValue("use_vertical_symmetry"), "Only with a mirror on."],
+  ["sketch_steps", () => lookValue("live_ghost") !== "Sketch first", "Only with {live_ghost} set to Sketch first."],
+  ["fov", () => state.animation_mode !== "3D", "3D only."],
+];
+function showIdle() {
+  for (const [name, idle, why] of IDLE_WHEN) {
+    const row = document.querySelector(`.controls .adv-field[data-name="${name.toLowerCase()}"]`);
+    if (!row) continue;
+    const off = idle();
+    row.classList.toggle("unused", off);
+    row.title = off ? worded(why) : "";
+  }
+  const hold = $("color_hold").closest(".slider-row"), holdIdle = IDLE_WHEN[0][1]();
+  hold.classList.toggle("unused", holdIdle);
+  hold.title = holdIdle ? worded(IDLE_WHEN[0][2]) : "";
 }
 
 // ---- main panel ----
@@ -579,23 +625,31 @@ function frameSkip(steps) {
   return Math.round(later.reduce((s, v) => s + toSteps(v), 0) / later.length);
 }
 
-/* Where Disco carries on after a handoff model paints the start from step `skip`. With Handoff denoise, Disco
-   repaints its own share of the steps; otherwise it carries on from where the checkpoint stopped, measured with
-   200 steps: 30% left 98 of 200, 50% left 69. */
+/* Where Disco starts after a handoff checkpoint paints from step `skip`. At Handoff 100% the checkpoint finishes its
+   picture and Disco repaints Denoise of it, so Disco starts at its own skip. Lower, the checkpoint stops partway and
+   Disco carries on from there: from noise, measured with 200 steps, 30% left 98 of 200 and 50% left 69; from a
+   start, roughly, as the two noise schedules differ. */
 function afterHandoffSkip(skip) {
   const steps = Math.max(Number(state.steps) || 1, 1);
-  if (!handingOff() || !(Number(state.handoff_share) > 0)) return skip;
-  const repaint = Number(state.handoff_denoise) || 0;
-  if (repaint > 0) return Math.min(Math.max(steps - pyRound((steps * repaint) / 100), 0), steps - 1);
+  if (!handingStart()) return skip;
   const share = Math.min(Math.max(Number(state.handoff_share) / 100, 0), 1);
+  if (share >= 1) return skip;
+  if (skip > 0) {
+    const repaints = (Number(state.handoff_start_denoise) || 0) / 100 || (steps - skip) / steps;
+    return Math.min(Math.max(skip, steps - Math.round(steps * repaints * (1 - share))), steps - 1);
+  }
   const points = [[0, 1], [0.3, 0.49], [0.5, 0.345], [1, 0.005]];
   let left = points.at(-1)[1];
   for (let i = 1; i < points.length; i++) {
     const [x0, y0] = points[i - 1], [x1, y1] = points[i];
     if (share <= x1) { left = y0 + ((share - x0) / (x1 - x0)) * (y1 - y0); break; }
   }
-  return Math.min(steps - Math.round((steps - skip) * left), steps - 1);
+  return Math.min(steps - Math.round(steps * left), steps - 1);
 }
+
+/* The checkpoint paints the start of every image or frame. */
+function handingStart() { return !!state.handoff_file && Number(state.handoff_share) > 0; }
+
 function currentLook() { return currentPreset(LOOKS, LOOK_KEYS); }
 
 /* Which steps lay out shapes and which paint detail, worked out as the renderer does. A start image, or a clip's
@@ -629,7 +683,8 @@ function viewPlan() {
   const shape = shapePoints();
   const kinds = [];
   for (let j = 0; j < steps; j++) {
-    if (j < disco) kinds.push(j < skip ? "skip" : "handoff");  // the checkpoint's steps, before Disco carries on
+    // Before Disco starts: kept from a start image, or from the checkpoint's picture when one paints the start.
+    if (j < disco) kinds.push(handingStart() || j >= skip ? "handoff" : "skip");
     else kinds.push(shape[Math.min(Math.floor(viewAt(Math.floor((1000 * j) / steps))), 999)] ? "shape" : "detail");
   }
   const shaping = kinds.filter((k) => k === "shape").length;
@@ -655,7 +710,7 @@ function showViews() {
   const count = (kind) => kinds.filter((k) => k === kind).length;
   const skip = count("skip"), handoff = count("handoff"), shaping = count("shape"), detail = count("detail");
   const span = (a, n) => (n === 1 ? `Step ${a}` : `Steps ${a}–${a + n - 1}`);
-  const LABELS = { skip: "Skipped", handoff: "Handoff", shape: "Shapes", detail: "Detail" };
+  const LABELS = { skip: "Skipped", handoff: "Checkpoint", shape: "Shapes", detail: "Detail" };
   const runs = [];
   kinds.forEach((kind, j) => {
     if (runs.length && runs.at(-1).kind === kind) runs.at(-1).n++;
@@ -761,7 +816,12 @@ function onControlChange(e) {
   if (e.target.id === "animation_mode") {
     // A video wants more repainting than a camera move, so each keeps its own tested default.
     const video = state.animation_mode === "Video Input";
-    if (video && state.frames_skip_steps === CAMERA_SKIP) state.frames_skip_steps = VIDEO_SKIP;
+    if (video && state.frames_skip_steps === CAMERA_SKIP) {
+      state.frames_skip_steps = VIDEO_SKIP;
+      // with the default blend too, so a new clip starts as Build up rather than Custom
+      if (Number(state.video_blend) === byName.video_blend.default) state.video_blend = CLIP_STYLES.build.values.video_blend;
+      $("video_blend").value = state.video_blend;
+    }
     if (!video && state.frames_skip_steps === VIDEO_SKIP) state.frames_skip_steps = CAMERA_SKIP;
     $("frames_skip_steps").value = state.frames_skip_steps;
     startSkip(video);
@@ -847,18 +907,24 @@ function showSummaries() {
     tiles: state.tile_scale === "Off" ? "Off" : `${String(state.tile_scale).split(",")[0]}, ${finalSize(state.width, state.height).join("×")}`,
     lab: on ? `${on} on` : "Off",
     controls: controlsOn() ? `${controlsOn()} on` : "Off",
-    handoff: [handingOff() && [Number(state.handoff_share) > 0 && `${state.handoff_share}%`, Number(state.handoff_finish) > 0 && `reverse ${state.handoff_finish}%`,
+    handoff: [handingOff() && [Number(state.handoff_share) > 0 && `${state.handoff_share}%`, Number(state.handoff_finish) > 0 && !animating() && `finish ${state.handoff_finish}%`,
       baseName(state.handoff_file).replace(/\.safetensors$/i, "")].filter(Boolean).join(", "),
       smallFirstOn() && `small first ${state.small_first}%`].filter(Boolean).join("; ") || "Off",
-    cutouts: changedIn("cutouts") ? `${changedIn("cutouts")} changed` : "Close-up ramp",
+    cutouts: changedIn("cutouts") ? `${changedIn("cutouts")} changed` : model?.cuts ? "The model's own" : "Close-up ramp",
     guidance: changedIn("guidance") ? `${changedIn("guidance")} changed` : "Default",
   };
   for (const [name, text] of Object.entries(sums)) $(`sum-${name}`).textContent = text;
-  for (const id of ["handoff_share", "handoff_denoise", "handoff_finish"]) $(id).closest(".slider-row").hidden = !state.handoff_file;
+  for (const id of ["handoff_share", "handoff_start_denoise", "handoff_finish"]) $(id).closest(".slider-row").hidden = !state.handoff_file;
+  // Start denoise sets where the checkpoint starts on a start image or a clip's frames, so from noise it does nothing.
+  const fromStart = !!state.init_image || animating();
+  const startRow = $("handoff_start_denoise").closest(".slider-row");
+  startRow.classList.toggle("unused", !fromStart || !(Number(state.handoff_share) > 0));
+  startRow.title = !fromStart ? "Only with a start image or on a clip's frames." : !(Number(state.handoff_share) > 0) ? worded("Only with {handoff_share} above 0.") : "";
   document.querySelectorAll(".handoff-part").forEach((el) => { el.hidden = !state.handoff_file; });
-  // Small first is Disco's handoff to itself, so a checkpoint's handoff takes its place.
-  $("smallLabel").hidden = !!state.handoff_file;
-  ($("small_first").closest(".opt") || $("small_first").closest(".slider-row")).hidden = !!state.handoff_file;
+  // Small first is Disco's handoff to itself, so a checkpoint's handoff takes its place: grayed, saying why.
+  const smallRow = $("small_first").closest(".slider-row");
+  smallRow.classList.toggle("unused", !!state.handoff_file);
+  smallRow.title = state.handoff_file ? "A handoff checkpoint already paints the start at its own size, so Small first is off while one is chosen." : "";
   const small = smallFrame(), where = $("smallWhere");
   where.hidden = !smallFirstOn() || tileGrid() > 1;
   // Small first paints only the steps before small_steps that aren't skipped: Denoise, then a clip's Frame skip.
@@ -1275,11 +1341,14 @@ function showTiles() {
   // A video's frames all use Frame skip, and Denoise only paints Build up's first pass of the first frame.
   const tiledStart = grid > 1 && !!(state.init_image || video);
   const frameSkipOnly = video && !Number(state.video_blend);
+  // Below Handoff 100%, Disco carries on from where the checkpoint stopped, so there's no share left to choose.
+  const carryOn = handingStart() && Number(state.handoff_share) < 100;
   for (const id of ["denoise", "skip_steps"]) {
     const row = $(id).closest(".slider-row");
-    row.classList.toggle("unused", tiledStart || frameSkipOnly);
+    row.classList.toggle("unused", tiledStart || frameSkipOnly || carryOn);
     row.title = tiledStart ? worded("Tiles use Tile denoise for the start image, so {skip_steps} isn't used.")
-      : frameSkipOnly ? worded("Every video frame uses {frames_skip_steps}, so {skip_steps} isn't used.") : "";
+      : frameSkipOnly ? worded("Every video frame uses {frames_skip_steps}, so {skip_steps} isn't used.")
+      : carryOn ? worded("With {handoff_share} below 100, Disco carries on from where the checkpoint stopped, so {skip_steps} isn't used.") : "";
   }
 }
 
@@ -1306,6 +1375,7 @@ function matchFrame() {
 
 function updateFit() {
   showTiles();
+  showIdle();
   showSummaries();
   showOpts();
   showImagePrompts();
@@ -1345,7 +1415,8 @@ function showTime() {
     const steps = Math.max(Number(state.steps) || 1, 1);
     // A handoff paints the start of every frame. The checkpoint paints at least 512×512 and at most 768×768.
     const handArea = Math.min(Math.max(state.width * state.height, 512 * 512), 768 * 768) / (512 * 512);
-    const hand = handingOff() && Number(state.handoff_share) > 0 ? HANDOFF_FRAME_SECONDS * handArea : 0;
+    // measured at Handoff 30%; at a higher share the checkpoint paints more of each frame's steps
+    const hand = handingStart() ? HANDOFF_FRAME_SECONDS * handArea * Math.max(Number(state.handoff_share) / 30, 1) : 0;
     const perFrame = paintSeconds(afterHandoffSkip(frameSkip(steps)), perStep, smallPer) * costs + hand;
     note.textContent = `About ${fmtTime(perFrame)} a frame, ${fmtTime(seconds + perFrame * (paintedFrames() - 1))} in all`;
   } else {
@@ -1435,26 +1506,14 @@ function showMemory() {
   const s = lastStatus;
   const busy = !!s?.task?.active && s.task.kind === "render";
   if (!busy) renderPlan = null;
-  // A plan worked out while the last render was still running has its memory in "other", so it waits for a new one.
+  // The meters show only what is in use now. What the next render needs stays in their hover text, so a meter
+  // never shows memory that isn't used yet.
+  let ahead = "";
   if (!busy && plan?.vram && plan.idle) {
-    const { vram, ram } = plan;
-    const moved = movedOf(plan);
-    const discoVram = vram.parts.map((p) => ({ ...p, kind: "vram", plan: true, label: `Next render: ${p.label}` }));
-    const used = drawTrack($("vramPlan"), vram.total, [{ kind: "other", label: "Other apps and the desktop", gb: vram.other }, ...discoVram], vram.keep);
-    $("vramPlan").setAttribute("aria-label", `${gb(vram.other)} of VRAM in use. The next render needs ${gb(used - vram.other)} more`);
-    $("vramText").textContent = `${vram.other.toFixed(1)} / ${vram.total.toFixed(0)} GB`;
-    $("vramText").classList.toggle("over", !!plan.too_big);
-    const discoRam = ram.parts.filter((p) => p.kind !== "offloaded").map((p) => ({ ...p, kind: "ram", plan: true, label: `Next render: ${p.label}` }));
-    const movedPart = moved ? [{ kind: "moved", plan: true, label: "Offloaded from VRAM, so it fits: the render runs slower", gb: moved }] : [];
-    const ramUsed = drawTrack($("ramPlan"), ram.total, [{ kind: "other", label: "Other apps", gb: ram.other }, ...discoRam, ...movedPart]);
-    $("ramPlan").setAttribute("aria-label", `${gb(ram.other)} of RAM in use. The next render takes ${gb(ramUsed - ram.other)} more${moved ? `, ${gb(moved)} of it offloaded from VRAM` : ""}`);
-    $("ramText").textContent = `${ram.other.toFixed(0)} / ${ram.total.toFixed(0)} GB`;
-    $("ramText").classList.toggle("over", ramUsed > ram.total);
-    const next = `In use now: ${gb(vram.other)}. The outline is what the next render adds, about ${gb(used - vram.other)}.`;
-    $("memPlan").title = plan.too_big ? "The next render is too big for this GPU even with offloading. Lower the size or use fewer prompt checkers."
-      : moved ? `${next} It doesn't all fit in VRAM, so part of the working data moves to RAM, outlined green there. Slower, but it works.` : next;
-    $("ramMeter").title = `In use now: ${gb(ram.other)}. The outline is what the next render adds, about ${gb(ramUsed - ram.other)}.`;
-    return;
+    const needs = plan.vram.parts.reduce((t, p) => t + p.gb, 0), ramNeeds = plan.ram.parts.reduce((t, p) => t + p.gb, 0);
+    ahead = plan.too_big ? "The next render is too big for this GPU even with offloading. Lower the size or use fewer prompt checkers."
+      : `The next render needs about ${gb(needs)} of VRAM${plan.offload ? ", with part of its working data offloaded to RAM, which is slower" : ""}, and about ${gb(ramNeeds)} of RAM.`
+        + (plan.ram.other + ramNeeds > plan.ram.total ? " That's more RAM than is free, so Windows will use the page file: it still runs, but slower." : "");
   }
   if (busy && !renderPlan) renderPlan = plan;
   const idle = s?.idle || {};
@@ -1477,7 +1536,7 @@ function showMemory() {
     $("ramText").textContent = `${s.ram.used_gb.toFixed(0)} / ${s.ram.total_gb.toFixed(0)} GB`;
     $("ramText").classList.remove("over");
   }
-  $("memPlan").title = $("ramMeter").title = busy ? "What Disco uses now, after what the rest of the PC used before it started." : "";
+  $("memPlan").title = $("ramMeter").title = busy ? "What Disco uses now, after what the rest of the PC used before it started." : ahead;
 }
 
 /* The images' drive: Disco Nano's own files in color (its environment, models, inputs and images), the rest gray. */
@@ -1545,7 +1604,7 @@ function showBlocked() {
 }
 
 // ---- all settings ----
-/* The Settings window holds every setting, and how the app behaves. The ones that shape the picture are also in the cards. */
+/* The Settings window holds how the app behaves, with its folders, models and network. Settings that shape the picture are in the cards. */
 const APP_FIELDS = ["keep_models_loaded", "cpu_threads", "display_rate", "save_progress_video"];
 
 function buildAdvanced() {
@@ -1602,9 +1661,11 @@ const OPT_ON = {
   face_control: () => isOn("face_control"),
   face_shape: () => isOn("face_shape"),
   loop_mode: () => isOn("loop_mode"),
-  ghost_image: () => !!state.advanced.ghost_image,
+  // The ghost's settings shape any ghost: a Ghost image, Live ghost's sketch, or a clip's last frame.
+  ghost_image: () => !!state.advanced.ghost_image || isOn("live_ghost") || (animating() && !!state.frame_ghost),
   style_image: () => !!state.advanced.style_image,
-  partner: () => !!usesPartner(),
+  // Also open while the partner is set away from Tiny SD, so a missing SD 1.5 file can be fixed from here.
+  partner: () => !!usesPartner() || lookValue("partner_model") !== byName.partner_model?.default || !!lookValue("partner_file"),
   clamp_grad: () => isOn("clamp_grad"),
   fuzzy_prompt: () => isOn("fuzzy_prompt"),
   ...Object.fromEntries(["time_travel", "prompt_graft", "live_ghost", "two_painters", "borrow_attention", "detail_bands", "shaped_guidance",
@@ -1641,6 +1702,9 @@ function wrapOptions(root) {
     fields.dataset.fields = key;
     // Rows marked data-in="key" belong to this option, such as Full-size denoise to Small first, so they move into its section.
     body.append(...document.querySelectorAll(`[data-in="${key}"]`), fields);
+    // A slot among them puts the option's own settings there instead of last, as the checkpoint's settings go before
+    // the two directions of a handoff that both use them.
+    body.querySelector(":scope > .fields-slot")?.replaceWith(fields);
     toggle.setAttribute("aria-controls", body.id);
     toggle.setAttribute("aria-label", toggle.dataset.label);
     const flip = () => { state.opts = { ...state.opts, [key]: !optOpen(key) }; save(); showOpt(opt); };
@@ -1984,6 +2048,8 @@ function makeSwitches(root = document) {
   });
 }
 
+const LONG_TEXT = new Set(["handoff_negative"]);  // prompts, shown as a box under the name in the cards
+
 function advField(f, compact = false) {
   const wrap = document.createElement("div");
   wrap.className = compact ? "adv-field card-field" : "adv-field";
@@ -2030,6 +2096,12 @@ function advField(f, compact = false) {
     row.className = "adv-slider";
     row.append(range, input);
     wrap.append(name, row);
+  } else if (compact && LONG_TEXT.has(f.name)) {
+    // Prompts get a box under their name, wide enough to read, as the main prompt has.
+    input = document.createElement("textarea");
+    Object.assign(input, { rows: 2, spellcheck: false, value: current ?? "" });
+    wrap.classList.add("stacked");
+    wrap.append(name, input);
   } else {
     input = document.createElement("input");
     input.type = f.kind === "number" ? "number" : "text";
@@ -2125,9 +2197,10 @@ function resetAdvanced() {
 function filterAdvanced() {
   const q = $("advSearch").value.trim().toLowerCase();
   $("namesBox").hidden = !!q && !"setting names plain official".includes(q);
-  $("lookBox").hidden = !!q && !"accent color colour theme".includes(q);
+  $("lookBox").hidden = !!q && !"accent color colour theme grid background".includes(q);
   $("foldersBox").hidden = !!q && !"save images folders upscalers".includes(q);
   $("modelsBox").hidden = !!q && !"models downloads upscalers".includes(q);
+  $("networkBox").hidden = !!q && !"network share this pc render on another pc remote address code".includes(q);
   document.querySelectorAll(".app-fields").forEach((sec) => {
     let any = false;
     sec.querySelectorAll(".adv-field").forEach((row) => {
@@ -2137,6 +2210,8 @@ function filterAdvanced() {
     });
     sec.hidden = !any;
   });
+  const boxes = ["namesBox", "lookBox", "foldersBox", "modelsBox", "networkBox"].map((id) => $(id));
+  $("advNone").hidden = !q || boxes.some((b) => !b.hidden) || [...document.querySelectorAll(".app-fields")].some((s) => !s.hidden);
 }
 
 // ---- folders ----
@@ -2647,7 +2722,7 @@ function showLabImages() {
     if (path && !known) previewOf(path).then((p) => { if (p) showLabImages(); });
   }
   showImagePrompts();
-  if (state.image_prompts) count += 1;
+  if (state.image_prompts && Number(lookValue("image_prompt_weight"))) count += 1;  // weight 0 turns them off
   $("sum-guides").textContent = count ? `${count} on` : "None";
   showOpts();
 }
@@ -2767,8 +2842,25 @@ function showCheckpoints() {
 }
 
 function pickCheckpoint(path) {
+  const first = path && !state.handoff_file;
+  if (first && !Number(state.handoff_share)) $("handoff_share").value = state.handoff_share = 100;
+  // From noise, Denoise is 100%, which would repaint all of the checkpoint's picture, so a handoff starts at 60%.
+  if (first && !state.init_image && !Number(state.skip_steps)) {
+    $("skip_steps").value = state.skip_steps = skipFor(60, state.steps);
+    $("denoise").value = denoiseOf(state.skip_steps, state.steps);
+  }
+  // A checkpoint chosen before comes back with its own steps, CFG, sampler and the rest.
+  const own = path && state.handoff_models?.[path];
+  if (own) {
+    for (const [name, value] of Object.entries(own)) {
+      if (!byName[name]) continue;
+      if (JSON.stringify(value) === JSON.stringify(byName[name].default)) delete state.advanced[name];
+      else state.advanced[name] = value;
+    }
+  }
   $("handoff_file").value = path;
   $("handoff_file").dispatchEvent(new Event("change", { bubbles: true }));
+  if (own) { resetAdvancedPanel(); fillControls(); }
   showCheckpoints();
 }
 
@@ -2786,7 +2878,6 @@ async function browseCheckpoint() {
     const path = await chooseCheckpoint(state.handoff_file);
     if (!path) return;
     await loadCheckpoints();
-    if (!state.handoff_share) { state.handoff_share = 30; $("handoff_share").value = 30; }
     pickCheckpoint(path);
     loadFolders();
   } catch (e) { formError(e.message); }
@@ -2796,6 +2887,7 @@ async function browseCheckpoint() {
 function formError(msg) {
   $("formError").textContent = msg || "";
   $("formError").hidden = !msg;
+  if (msg && state.controls_closed) { state.controls_closed = false; showControlsPanel(); save(); }  // so the reason shows
 }
 
 async function startRender() {
@@ -2847,8 +2939,10 @@ function renderTask(t) {
   const active = !!t?.active;
   showRegionsTask(t);
   $("renderBtn").disabled = active;
+  $("renderMini").hidden = active;
   $("upscaleBtn").disabled = active;
   $("stopBtn").hidden = !active;
+  $("stopMini").hidden = !active;
   $("progress").hidden = !active;
   if (!t) return;
 
@@ -2986,6 +3080,16 @@ function showRemote(s) {
     $("remoteBadge").textContent = `Rendering on ${s.machine || location.hostname}`;
     $("remoteBadge").title = `This page runs on ${s.machine || location.hostname} at ${location.host}. Renders use its GPU, and images are saved there.`;
   }
+}
+
+/* The settings panel folds to a strip, which keeps Render and Stop, so the picture and images get the room. */
+const STACKED = matchMedia("(max-width: 720px)");  // the panels stack, so the settings can't fold
+function showControlsPanel() {
+  const closed = !!state.controls_closed && !STACKED.matches;
+  document.querySelector(".workspace").classList.toggle("controls-closed", closed);
+  $("controlsToggle").title = closed ? "Show settings" : "Hide settings";
+  $("controlsToggle").setAttribute("aria-label", $("controlsToggle").title);
+  $("controlsToggle").setAttribute("aria-expanded", String(!closed));
 }
 
 // ---- gallery ----
@@ -3319,18 +3423,20 @@ async function init() {
   load();
   buildAccents();  // first, so the page never shows the wrong color
   ({ fields, terms } = await api("/api/schema"));
-  buildHelpSettings();
   byName = Object.fromEntries(fields.map((f) => [f.name, f]));
   followNewDefaults();
   buildControls();
   makeSwitches();
   buildAdvanced();
   buildCardFields();
+  buildHelpSettings();  // after the cards, so each setting is listed under the card it's in
   showSchedulePreviews();
   applyNames();
   for (const name of ["tile_scale", "tile_start", "live_ghost", "animation_mode", "robust_critic", "route_prompts", "loop_mode"]) byName[name].options.forEach((o) => $(name).append(option(o)));
   await loadModels();
   showGalleryPanel();
+  showControlsPanel();
+  STACKED.addEventListener("change", showControlsPanel);
   // Saved settings with no orientation start in landscape.
   if (!state.orientation) { state.orientation = "landscape"; followSize(); }
   delete state.preset;  // an unused key from older saved settings
@@ -3349,6 +3455,13 @@ async function init() {
     btn.addEventListener("click", () => setOrientation(btn.dataset.orientation)));
   $("renderBtn").addEventListener("click", startRender);
   $("stopBtn").addEventListener("click", () => post("/api/stop"));
+  $("renderMini").addEventListener("click", startRender);
+  $("stopMini").addEventListener("click", () => post("/api/stop"));
+  $("controlsToggle").addEventListener("click", () => {
+    state.controls_closed = !state.controls_closed;
+    showControlsPanel();
+    save();
+  });
   setUpRegions();
   $("advancedBtn").addEventListener("click", () => $("advanced").showModal());
   document.querySelectorAll("[data-names]").forEach((btn) =>
@@ -3406,7 +3519,6 @@ async function init() {
   showCards();
   $("handoffBrowse").addEventListener("click", browseCheckpoint);
   $("handoffPick").addEventListener("change", (e) => {
-    if (e.target.value && !Number(state.handoff_share)) { $("handoff_share").value = 30; }
     pickCheckpoint(e.target.value);
   });
   $("addPromptChange").addEventListener("click", addPromptChange);

@@ -104,7 +104,19 @@ code { font-family: var(--font-mono); font-size: 11px; color: var(--ink-body); }
   gap: 2px; background: var(--divider);
 }
 .workspace.gallery-closed { grid-template-columns: 330px minmax(0, 1fr) 32px; }
-.gallery-closed .gallery .panel-tab, .gallery-closed #openFolder, .gallery-closed #galleryBody { display: none; }
+.gallery-closed .gallery .panel-tab, .gallery-closed #openFolder, .gallery-closed #newFolder, .gallery-closed #galleryBody { display: none; }
+.workspace.controls-closed { grid-template-columns: 40px minmax(0, 1fr) 300px; }
+.workspace.controls-closed.gallery-closed { grid-template-columns: 40px minmax(0, 1fr) 32px; }
+.controls-closed .controls .panel-body, .controls-closed .controls .mode-toggle, .controls-closed .controls .panel-foot > :not(.mini-actions) { display: none; }
+.controls-closed .controls .panel-top { padding: 2px 0 0; justify-content: center; }  /* level with the Images strip's arrow */
+.controls-closed .controls .panel-foot { margin-top: auto; padding: 8px 0; border-top: 0; }
+.controls-closed #controlsToggle svg { rotate: 180deg; }
+.panel-top { display: flex; align-items: center; gap: 6px; }
+.panel-top .mode-toggle { flex: 1; }
+.mini-actions { display: none; }
+.controls-closed .mini-actions { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.mini-actions .icon-button { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; }
+.mini-actions svg { width: 14px; height: 14px; }
 .gallery-closed .gallery .panel-tabs { justify-content: center; padding: 0; }
 .gallery-closed #galleryToggle svg { rotate: 180deg; }
 .dock { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
@@ -246,6 +258,11 @@ body:not(.animating) .anim-only, body.animating .image-only { display: none !imp
 .pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: center; }
 .times { color: var(--ink-label); }
 .group-label { margin-top: 4px; color: var(--ink-label); font-weight: 600; }
+/* A heading that starts a new part of a card, or of an option's settings, gets room and a hairline above it. */
+.card-body > .group-label:not(:first-child), .opt-body > .group-label:not(:first-child) {
+  margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line);
+}
+.opt-body > .group-label:first-child { margin-top: 2px; }
 .model-about .link { display: inline; height: auto; color: var(--accent); }
 
 button, .button {
@@ -354,6 +371,7 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
     linear-gradient(to right, rgb(255 255 255 / .015) 1px, transparent 1px),
     linear-gradient(to bottom, rgb(255 255 255 / .015) 1px, transparent 1px);
 }
+body.no-grid .canvas { background-image: none; }  /* Settings: Grid behind the picture, off */
 .canvas img, .canvas video { max-width: 100%; max-height: 100%; object-fit: contain; display: block; box-shadow: 0 16px 40px rgb(0 0 0 / .6); }
 .empty { color: var(--ink-label); font-size: 14px; text-align: center; }
 
@@ -464,7 +482,7 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
 .new-folder { margin-bottom: 8px; }
 .new-folder input { width: 100%; }
 .motion { margin: 4px 0 8px; }
-.motion-row { display: grid; grid-template-columns: 116px minmax(0, 1fr) 92px 22px; gap: 6px; align-items: center; margin: 4px 0; }
+.motion-row { display: grid; grid-template-columns: 116px minmax(0, 1fr) 76px 22px; gap: 6px; align-items: center; margin: 4px 0; padding-left: 20px; }  /* in line with the card's other rows */
 
 .motion-row.keyed input[type="range"] { opacity: .35; }
 .motion-row .keys { font: 11px var(--font-mono); padding: 0 4px; }
@@ -482,8 +500,7 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
 .statusbar .sep { width: 1px; height: 14px; background: var(--line-strong); }
 .statusbar .value { color: var(--ink-muted); }
 .statusbar .low { color: var(--warning); }
-#statusState.ready { color: var(--accent); }
-#statusState.not-ready { color: var(--danger); }
+#statusState { color: var(--accent); }  /* the same while busy: red would read as an error */
 .spacer { flex: 1; }
 .meter { display: flex; align-items: center; gap: 8px; }
 
@@ -553,10 +570,13 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
 .adv-slider { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 10px; align-items: center; }
 
 .adv-field.changed .readout { color: var(--accent) !important; }
-.slider-row.unused { opacity: .45; }
+.slider-row.unused, .adv-field.unused { opacity: .45; }
 
 /* Settings inside a card: the same rows as Settings, sized for the panel, help on hover. */
-.card-fields { display: flex; flex-direction: column; gap: 2px; }
+.card-fields { display: flex; flex-direction: column; gap: 4px; }
+.opt > .opt-body { gap: 4px; }
+.card-fields .adv-field.stacked { grid-template-columns: minmax(0, 1fr); gap: 5px; align-items: stretch; }
+.card-fields .adv-field.stacked textarea { width: 100%; min-height: 44px; resize: vertical; }
 .card-fields .adv-field { grid-template-columns: 116px minmax(0, 1fr); gap: 10px; padding: 2px 0; align-items: center; }
 .card-fields .field-name { line-height: 1.25; overflow-wrap: anywhere; }  /* long names wrap to a second line rather than being cut off */
 .hover-help .controls label.field-name[title], .hover-help .controls .field-name[title] { cursor: help; }
@@ -576,6 +596,8 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
 .card-fields:has(> .opt) > .adv-field,
 .opt-body:has(> .card-fields > .opt) > :not(.card-fields) { padding-left: 20px; }
 .opt > .add-change.opt-main { justify-self: start; }
+/* Size's own rows keep their full width: Small first's arrow beside them would squeeze the size menus. */
+.card[data-card="size"] .card-body > .line { padding-left: 0; }
 .opt > .group-label.opt-main { cursor: pointer; }
 .opt > .group-label.opt-main:hover { color: var(--ink); }
 .opt-toggle {
@@ -632,6 +654,7 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
 @media (max-width: 1100px) {
   .workspace, .workspace.gallery-closed { grid-template-columns: 330px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 180px; }
   .workspace.gallery-closed { grid-template-rows: minmax(0, 1fr) 28px; }
+  .workspace.controls-closed, .workspace.controls-closed.gallery-closed { grid-template-columns: 40px minmax(0, 1fr); }
   .gallery-closed .gallery .panel-tabs { justify-content: flex-end; padding-right: 4px; }
   #galleryToggle svg { rotate: 90deg; }
   .gallery-closed #galleryToggle svg { rotate: -90deg; }
@@ -645,6 +668,7 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
   .canvas { min-height: 320px; }
   .adv-field { grid-template-columns: 1fr; }
   .mem-track { width: 90px; }
+  #controlsToggle { display: none; }  /* the panels stack here, so there's nothing to fold */
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

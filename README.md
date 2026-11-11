@@ -229,7 +229,7 @@ the folders in the list.
 Like other local image generators, Nano can render on the PC with the GPU while you use it from
 another one.
 
-1. On the PC with the GPU, open **Settings**, and under **Network** turn on **Share this PC**.
+1. On the PC with the GPU, open **Settings** and turn on **Share this PC**.
    It shows an address, such as `http://192.168.1.20:7861`, and a code. Windows may ask once whether
    Python can use private networks. Choose Allow.
 2. On the other PC, open that address in any browser, or type it into **Render on another PC** in
@@ -352,7 +352,8 @@ start image, and the examples are under [What each option does](#starting-points
   its own colors and paint. **Ghost light and dark** sets how much of its broad light and dark carries
   over, 0.3 by default. **Ghost shapes** copies its shapes rather than its look, and **Ghost areas** asks
   each area to match the same area of the ghost as the prompt checkers see it. **Ghost curve** sets when
-  it counts, the first 70% of the render by default. They are under Experimental in Settings.
+  it counts, the first 70% of the render by default. They are under **Ghost settings** in the Guide images
+  card, which also shape Live ghost and Last frame as ghost.
 - **Style image** lends its texture and palette, at **Style strength**, 1 by default.
 - **Image prompts** take a whole set of images, described below.
 
@@ -425,29 +426,40 @@ graph marks where shapes end, and shades what a start image or Frame skip skips.
 
 ## Handoff
 
-**Handoff** lets a Stable Diffusion checkpoint you already have, SD 1.5 or SDXL, start every image or
-frame. It isn't a start image. The checkpoint takes its share of the steps from pure noise, and
-Disco carries on from the exact point where it stopped, while the scene is still blurry. The checkpoint decides the layout and subject, and Disco paints it.
+**Handoff** lets a Stable Diffusion checkpoint you already have, SD 1.5 or SDXL, paint first, and Disco
+then repaints its picture: the checkpoint decides the layout and subject, and Disco paints it. It can
+also run the other way round, with the checkpoint finishing Disco's image, or both in one render.
 
 - **Handoff model** lists the SD 1.5 and SDXL checkpoints in your checkpoint folders, grouped by
-  subfolder. **Browse** picks one anywhere on the PC
-  and adds its folder. Checkpoints are read where they are.
-- **Handoff %** is the checkpoint's share of the path from noise to picture. 0% is Disco alone.
-  About 30% keeps Disco's look on a sturdier layout, 50% keeps more of the checkpoint, and 100%
-  leaves Disco only the finishing touch.
-- **Disco denoise %** is how much of the checkpoint's picture Disco repaints, like Denoise for a start
-  image. At 0 Disco carries on from exactly where the checkpoint stopped. With Handoff % at 60, 75
-  here has Disco repaint with 150 of 200 steps.
-- **Reverse handoff %** works the other way round, like Denoise for the checkpoint after Disco is done: it
-  repaints that much of the finished image. 0 is off, about 20 to 35 tidies details and keeps
-  Disco's look, and 100 replaces Disco's image. It works with Handoff % at 0, so
-  the checkpoint only finishes, and on still images only. Keep the handoff picture also saves
-  Disco's own image beside it.
-- With a start image, or on any frame of a 2D, 3D or Video Input clip, the checkpoint starts where
-  Disco would have started and takes its share of what is left. Every painted frame gets it.
-- Handoff steps, its prompt strength, its negative prompt, and spacing for few-step models such as
-  Lightning are in the Handoff model section, which opens once a checkpoint is chosen. Prompt lines with a negative weight become part of
-  its negative prompt.
+  subfolder. **Browse** picks one anywhere on the PC and adds its folder. Checkpoints are read where
+  they are.
+- **The checkpoint's settings**, at the top of the section once one is chosen, are its **steps**,
+  **CFG** (how closely it follows the prompt), **sampler** (Euler, Euler a, DPM++ 2M, DPM++ 2M SDE,
+  DDIM, UniPC or LCM), the **Karras schedule**, **Clip skip** (2 for many anime, Pony and Illustrious
+  checkpoints), spacing for few-step models such as Lightning, and its negative prompt. Prompt lines
+  with a negative weight become part of its negative prompt. Each checkpoint remembers its own, so
+  choosing it again brings them back.
+
+**Checkpoint, then Disco**
+
+- **Handoff %** is how much of its picture the checkpoint paints. At 100, the default, it finishes its
+  picture, and Disco repaints **Denoise** of it, in the Render card, as it would a start image. Choosing
+  a checkpoint sets Denoise to 60% if it was at 100%, since 100% would repaint all of the checkpoint's
+  picture. Below 100, the checkpoint hands over a picture still forming, and Disco carries on from
+  exactly that point, so Denoise isn't used: about 30% keeps Disco's look on a sturdier layout. 0 turns
+  this part off.
+- With a start image, or on any frame of a 2D, 3D or Video Input clip, the checkpoint starts from it.
+  **Start denoise %** is how much of it the checkpoint repaints, so lower lets more of your start image
+  through. At 0 it uses the same share as Denoise. With a start image, Start denoise 40%, Handoff 100%
+  and Denoise 70%, the checkpoint repaints your image in its own style, and Disco then repaints 70% of
+  that, with a pass of shapes before the detail. Lower Denoise keeps more of the checkpoint's layout.
+
+**Disco, then checkpoint**
+
+- **Finish %** is the reverse handoff: after Disco is done, the checkpoint repaints that much of the
+  finished image, like Denoise. 0 is off, about 20 to 35 tidies details and keeps Disco's look, and 100
+  replaces Disco's image. It works with Handoff % at 0, so the checkpoint only finishes, and on still
+  images only. **Save its picture** also saves Disco's own image beside it.
 
 The checkpoint waits in RAM and comes to the GPU only for its own steps. On cards under 12GB, SDXL's
 UNet is stored in 8 bits, which halves it to 2.6GB, and Disco repaints what follows, which hides the
@@ -470,14 +482,14 @@ the frame, where 768×512 gives one. Disco's model learned at about 512 pixels, 
 judge small views of the picture, so on a large frame each area tends to grow a subject of its own.
 The layout is decided in the first steps, while the picture is mostly noise.
 
-**Small first** is a handoff from Disco to itself, in the Handoff card. It needs no checkpoint. Disco
+**Small first** is a handoff from Disco to itself, in the Size card. It needs no checkpoint. Disco
 paints the start of each image at a smaller size in the frame's shape, stops while the picture is still
 blurry, enlarges it, and carries on at full size from the same point on its path. The small start lays
 out one scene and the full size paints the detail.
 
 - **Small first %** is the small share of the steps. 0 is off. About 25% suits 1280×768: with 200
   steps, steps 1 to 50 are painted at 640×384 and steps 51 to 200 at 1280×768.
-- **Full-size denoise %** works like Disco denoise %. At 0 the full size carries on from exactly where
+- **Full-size denoise %** works like Denoise. At 0 the full size carries on from exactly where
   the small start stopped. Higher repaints more of it, which gives the full size more say over the
   layout: 85 with Small first at 25 starts the full size at step 31 of 200.
 - **Hold the small layout**, in the Small first section, keeps the full size's broad shapes and colors
@@ -488,8 +500,8 @@ out one scene and the full size paints the detail.
   as possible. Frames no larger than this aren't changed.
 
 The small steps are quicker, so a render also takes a little less time. Small first works on still
-images and on the first frame of a clip, and after a checkpoint's handoff if it reaches further than the
-checkpoint did. It isn't for Tiles, which have their own small start in Render first, or for the
+images, and on any frame of a clip whose skipped steps leave some of its small share to paint. It's
+off while a Handoff checkpoint is chosen, which already paints the start at its own size. It isn't for Tiles, which have their own small start in Render first, or for the
 experiments that are sized to the frame: the partner model's, the ghost and style images, and Depth target.
 
 ## Regional prompts
@@ -563,7 +575,7 @@ Tiles.
 
 ## Experiments
 
-The **Experimental** section in Settings holds ideas that change how the image forms. They're new,
+The **Experiments** card holds ideas that change how the image forms. They're new,
 so results vary a lot from seed to seed. They can't run with Tiles, symmetry, plms or the secondary
 model: whichever you choose first grays out the other, and hovering says why. Each one is shown on the
 same lighthouse under [What each option does](#experiments).
