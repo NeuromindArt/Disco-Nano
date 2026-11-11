@@ -418,8 +418,10 @@ which suits a restyle. Video Input and the frames of a 2D or 3D clip do the same
   render.
 
 The bar at the top of the Views card counts this for the settings you have: which steps are skipped,
-which lay out shapes and which paint detail. Each schedule's graph marks where shapes end, and shades
-what a start image or Frame skip skips.
+which a Handoff checkpoint paints, which lay out shapes and which paint detail. With Tiles it counts
+from Tile denoise, and with Frame skip keyframes it shows a frame on average. It reads the schedules too: a step lays out shapes while
+Whole-image views at least match Close-up views, so editing those two moves the split. Each schedule's
+graph marks where shapes end, and shades what a start image or Frame skip skips.
 
 ## Handoff
 

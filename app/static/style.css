@@ -671,6 +671,7 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
 .views-skip { background: repeating-linear-gradient(135deg, var(--line-strong) 0 3px, transparent 3px 6px); }
 .views-shape { background: var(--accent); }
 .views-detail { background: var(--accent-soft); }
+.views-handoff { background: var(--ink-disabled); }
 .views-bar { height: 10px; }
 .views-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 12px; color: var(--ink-muted); }
 .views-key { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }

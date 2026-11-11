@@ -81,19 +81,6 @@ const EXACT_REPEAT_COST = 1.28;  // measured: 0.84 to 1.08 seconds per step at 5
 const TIME_TRAVEL_COST = 1.35;  // measured at 512×512 with the default curve
 const BORROW_SECONDS = 20;  // measured with Tiny SD at 512×512, loading included
 const HANDOFF_SECONDS = 20;  // loading an SD 1.5 checkpoint and its own steps, at 512×512
-/* The share of Disco's steps left after a handoff, measured with 200 steps: 30% left 98 of 200, 50% left 69. */
-function afterHandoff() {
-  if (!handingOff() || !(Number(state.handoff_share) > 0)) return 1;
-  if (Number(state.handoff_denoise) > 0) return Math.min(Number(state.handoff_denoise) / 100, 1);  // Disco repaints its own share
-  const share = Math.min(Math.max(Number(state.handoff_share) / 100, 0), 1);
-  const points = [[0, 1], [0.3, 0.49], [0.5, 0.345], [1, 0.005]];
-  for (let i = 1; i < points.length; i++) {
-    const [x0, y0] = points[i - 1], [x1, y1] = points[i];
-    if (share <= x1) return y0 + ((share - x0) / (x1 - x0)) * (y1 - y0);
-  }
-  return points[points.length - 1][1];
-}
-
 /* A look sets how the prompt shapes the picture, apart from its size. Settings it leaves out go back to
    their defaults. Each was compared with the others on the same prompts and seeds. */
 const LOOKS = {
@@ -105,14 +92,15 @@ const LOOKS = {
     values: { clip_guidance_scale: 5000, use_secondary_model: true, tv_scale: 0, sat_scale: 0, cutn_batches: 5, clamp_max: 0.05, cut_ic_pow: "[1]*1000" },
   },
 };
-const LOOK_KEYS = [...new Set(Object.values(LOOKS).flatMap((l) => Object.keys(l.values)))];
+// The two views schedules that set where shapes give way to detail belong to every look, so a look's hint holds.
+const LOOK_KEYS = [...new Set(["cut_overview", "cut_innercut", ...Object.values(LOOKS).flatMap((l) => Object.keys(l.values))])];
 
 /* A clip style sets how a Video Input clip is repainted: how much of each frame is painted, how much of the last
    frame carries over, and how the views spread over the painted steps. Like a look, one changed by hand shows as
    Custom. */
 const CLIP_STYLES = {
   paint: {
-    label: "Paint over", hint: "Each frame keeps the video's shapes and Disco paints over them, so its painted steps go to detail. Abstract and painterly, and every frame is new, so it flickers as Disco does.",
+    label: "Paint over", hint: "Each frame keeps the video's shapes and Disco paints over them, carrying on the views schedules from Frame skip, so with the default Look its painted steps go to detail. Abstract and painterly, and every frame is new, so it flickers as Disco does.",
     values: { frames_skip_steps: 40, video_blend: 0, views_fit: "Start images" },
   },
   reimagine: {
@@ -420,6 +408,7 @@ function fillControls() {
     else el.value = value ?? "";
   }
   showLook();
+  showSchedulePreviews();  // a start image's skip shades the views schedules
   showInit();
   showAnimation();
   showPromptChanges();
@@ -530,31 +519,103 @@ function addPromptChange() {
 }
 
 // ---- looks ----
-function lookValue(name) {
-  if (HANDLED.has(name)) return state[name] ?? byName[name]?.default;
-  return name in state.advanced ? state.advanced[name] : byName[name]?.default;
+/* A setting's default for the chosen model. The pixel art and watercolor models bring views schedules of their
+   own, which the renderer uses for any it isn't given. */
+function defaultOf(name) {
+  const own = catalog.find((m) => m.name === state.diffusion_model)?.cuts;
+  return own && name in own ? own[name] : byName[name]?.default;
 }
 
-/* The look whose settings all match, so a look changed by hand shows as Custom. */
+function lookValue(name) {
+  if (HANDLED.has(name)) return state[name] ?? defaultOf(name);
+  return name in state.advanced ? state.advanced[name] : defaultOf(name);
+}
+
+/* The look whose settings all match, so a look changed by hand shows as Custom. The views schedules count too:
+   a look's split of shapes and detail holds only for the schedules as they come. */
 const sameValue = (a, b) => JSON.stringify(typeof b === "number" ? Number(a) : a) === JSON.stringify(b);
 
 function currentPreset(presets, keys) {
   const match = Object.entries(presets).find(([, l]) =>
-    keys.every((name) => byName[name] && sameValue(lookValue(name), l.values[name] ?? byName[name].default)));
+    keys.every((name) => byName[name] && sameValue(lookValue(name), l.values[name] ?? defaultOf(name))));
   return match ? match[0] : "custom";
+}
+
+/* Python's round, which takes halves to the even side, so step counts match the renderer's. */
+function pyRound(x) {
+  const r = Math.round(x);
+  return Math.abs(x - Math.trunc(x)) === 0.5 && r % 2 ? r - 1 : r;
+}
+
+/* Frame skip % for every frame of a clip when Frame skip keyframes are set, as the server works them out, or null.
+   The first call for new keyframes asks the server and redraws what depends on them when it answers. */
+let skipKeys = { key: "", values: null };
+function keyedSkips() {
+  const text = String(lookValue("frame_skip_keys") || "").trim();
+  if (!animating() || !text) return null;
+  const frames = Math.max(Number(state.max_frames) || 1, 1);
+  const key = `${text}|${frames}|${curveShape()}`;
+  if (skipKeys.key !== key) {
+    skipKeys = { key, values: null };
+    api(`/api/curve?text=${encodeURIComponent(text)}&frames=${frames}&shape=${encodeURIComponent(curveShape())}`).then((r) => {
+      if (skipKeys.key !== key || r.error) return;
+      skipKeys.values = r.values.map((v) => Math.min(Math.max(v, 0), 99));
+      showLook();
+      showSchedulePreviews();
+      showTime();
+    }).catch(() => {});
+  }
+  return skipKeys.values;
+}
+
+/* Frame skip as steps for a clip's frames after the first, averaged when keyframes set it frame by frame. */
+function frameSkip(steps) {
+  const toSteps = (share) => Math.min(pyRound((steps * share) / 100), steps - 1);
+  const keyed = keyedSkips();
+  if (!keyed?.length) return toSteps(Number(state.frames_skip_steps));
+  const later = keyed.length > 1 ? keyed.slice(1) : keyed;
+  return Math.round(later.reduce((s, v) => s + toSteps(v), 0) / later.length);
+}
+
+/* Where Disco carries on after a handoff model paints the start from step `skip`. With Handoff denoise, Disco
+   repaints its own share of the steps; otherwise it carries on from where the checkpoint stopped, measured with
+   200 steps: 30% left 98 of 200, 50% left 69. */
+function afterHandoffSkip(skip) {
+  const steps = Math.max(Number(state.steps) || 1, 1);
+  if (!handingOff() || !(Number(state.handoff_share) > 0)) return skip;
+  const repaint = Number(state.handoff_denoise) || 0;
+  if (repaint > 0) return Math.min(Math.max(steps - pyRound((steps * repaint) / 100), 0), steps - 1);
+  const share = Math.min(Math.max(Number(state.handoff_share) / 100, 0), 1);
+  const points = [[0, 1], [0.3, 0.49], [0.5, 0.345], [1, 0.005]];
+  let left = points.at(-1)[1];
+  for (let i = 1; i < points.length; i++) {
+    const [x0, y0] = points[i - 1], [x1, y1] = points[i];
+    if (share <= x1) { left = y0 + ((share - x0) / (x1 - x0)) * (y1 - y0); break; }
+  }
+  return Math.min(steps - Math.round((steps - skip) * left), steps - 1);
 }
 function currentLook() { return currentPreset(LOOKS, LOOK_KEYS); }
 
 /* Which steps lay out shapes and which paint detail, worked out as the renderer does. A start image, or a clip's
-   Frame skip, skips the first steps. The views schedules' first 400 of 1000 points lay out shapes, and Fit views
-   and Shapes share move which steps that covers. */
+   Frame skip, skips the first steps. Shapes share spreads the views schedules' first 400 of 1000 points over its
+   share of the steps, and Fit views over only the painted ones. Whether a step lays out shapes or paints detail
+   then comes from the schedules themselves, so editing them moves the split too. */
 const VIEW_SCHEDULES = ["cut_overview", "cut_innercut", "cut_ic_pow", "cut_icgray_p"];
 const SHAPES_END = 400;
 
 function viewPlan() {
   const steps = Math.max(Number(state.steps) || 0, 1);
   const clip = animating();
-  const skip = clip ? Math.min(Math.round((steps * Number(state.frames_skip_steps)) / 100), steps - 1) : Math.min(Number(state.skip_steps) || 0, steps - 1);
+  const keyed = clip && keyedSkips()?.length;
+  // With tiles, a still's start image is painted from Tile denoise, which takes the place of Denoise.
+  const tiledStart = !clip && tileGrid() > 1 && !!state.init_image;
+  const skip = clip ? frameSkip(steps)
+    : tiledStart ? Math.min(pyRound(steps * (1 - Number(state.tile_denoise))), steps - 1)
+    : Math.min(Number(state.skip_steps) || 0, steps - 1);
+  // A handoff model paints the start after the views are fitted, so Disco's own steps begin later still.
+  const disco = afterHandoffSkip(skip);
+  const why = keyed ? "Frame skip keyframes, on average" : clip ? `Frame skip ${state.frames_skip_steps}%`
+    : tiledStart ? `Tile denoise ${Math.round(100 * Number(state.tile_denoise))}%` : `Denoise ${denoiseOf(skip, steps)}%`;
   const mode = lookValue("views_fit");
   const fit = mode === true || mode === "Start images and clip frames" || (!clip && mode === "Start images");
   const shapes = Math.min(Math.max(Number(lookValue("views_shapes") ?? 40) / 100, 0), 1);
@@ -563,26 +624,51 @@ function viewPlan() {
     const done = Math.min(Math.max((at - begin) / (1000 - begin), 0), 1);
     return done < shapes ? (done / shapes) * SHAPES_END : SHAPES_END + ((done - shapes) / Math.max(1 - shapes, 1e-6)) * (1000 - SHAPES_END);
   };
-  let shaping = 0;
-  for (let j = skip; j < steps; j++) if (viewAt(Math.floor((1000 * j) / steps)) < SHAPES_END) shaping++;
-  return { steps, skip, shaping, fit, clip, viewAt, why: clip ? `Frame skip ${state.frames_skip_steps}%` : `Denoise ${denoiseOf(skip, steps)}%` };
+  const shape = shapePoints();
+  const kinds = [];
+  for (let j = 0; j < steps; j++) {
+    if (j < disco) kinds.push(j < skip ? "skip" : "handoff");  // the checkpoint's steps, before Disco carries on
+    else kinds.push(shape[Math.min(Math.floor(viewAt(Math.floor((1000 * j) / steps))), 999)] ? "shape" : "detail");
+  }
+  const shaping = kinds.filter((k) => k === "shape").length;
+  const renderFirst = !clip && tileGrid() > 1 && !state.init_image && state.tile_start === "Render first";
+  return { steps, skip, disco, shaping, kinds, fit, clip, keyed, renderFirst, viewAt, why };
+}
+
+/* Each of the 1000 points of the views schedules, as drawn: true where it lays out shapes, which is while
+   whole-image views at least match close-ups, and false where close-ups outnumber them and paint detail. */
+function shapePoints() {
+  const points = (name) => {
+    const levels = parseSchedule(lookValue(name)) || parseSchedule(defaultOf(name)) || [{ v: 0, n: 1000 }];
+    return levels.flatMap((l) => Array(l.n).fill(l.v));
+  };
+  const whole = points("cut_overview"), close = points("cut_innercut");
+  return whole.map((w, i) => w > 0 && w >= close[i]);
 }
 
 function showViews() {
   const box = $("viewsSplit");
   if (!box || !byName.views_fit) return;
-  const { steps, skip, shaping, fit, clip } = viewPlan();
-  const detail = steps - skip - shaping;
+  const { steps, kinds, fit, clip, keyed, renderFirst } = viewPlan();
+  const count = (kind) => kinds.filter((k) => k === kind).length;
+  const skip = count("skip"), handoff = count("handoff"), shaping = count("shape"), detail = count("detail");
   const span = (a, n) => (n === 1 ? `Step ${a}` : `Steps ${a}–${a + n - 1}`);
-  const parts = [
-    { kind: "skip", label: "Skipped", n: skip, from: 1 },
-    { kind: "shape", label: "Shapes", n: shaping, from: skip + 1 },
-    { kind: "detail", label: "Detail", n: detail, from: skip + shaping + 1 },
-  ].filter((p) => p.n > 0);
-  const bar = parts.map((p) => `<span class="views-${p.kind}" style="width:${((100 * p.n) / steps).toFixed(2)}%" title="${span(p.from, p.n)}"></span>`).join("");
-  const keys = parts.map((p) => `<span class="views-key"><i class="views-${p.kind}"></i>${p.label} ${p.n}</span>`).join("");
-  const tip = skip && !shaping && !fit ? `<span class="views-tip">Fit views adds shapes</span>` : "";
-  box.innerHTML = `<div class="views-bar" aria-hidden="true">${bar}</div><div class="views-legend">${clip ? '<span class="views-key views-each">Each frame</span>' : ""}${keys}${tip}</div>`;
+  const LABELS = { skip: "Skipped", handoff: "Handoff", shape: "Shapes", detail: "Detail" };
+  const runs = [];
+  kinds.forEach((kind, j) => {
+    if (runs.length && runs.at(-1).kind === kind) runs.at(-1).n++;
+    else runs.push({ kind, n: 1, from: j + 1 });
+  });
+  const bar = runs.map((p) => `<span class="views-${p.kind}" style="width:${((100 * p.n) / steps).toFixed(2)}%" title="${LABELS[p.kind]}: ${span(p.from, p.n)}"></span>`).join("");
+  const parts = [{ kind: "skip", n: skip }, { kind: "handoff", n: handoff }, { kind: "shape", n: shaping }, { kind: "detail", n: detail }].filter((p) => p.n > 0);
+  const keys = parts.map((p) => `<span class="views-key"><i class="views-${p.kind}"></i>${LABELS[p.kind]} ${p.n}</span>`).join("");
+  const tips = [];
+  if (skip && !shaping && !fit) tips.push("Fit views adds shapes");
+  if (keyed) tips.push("Frame skip keyframes, on average");
+  if (renderFirst) tips.push("The whole frame first; the tiles then use Tile denoise");
+  const tip = tips.map((t) => `<span class="views-tip">${t}</span>`).join("");
+  const each = clip ? `<span class="views-key views-each">${keyed ? "A frame" : "Each frame"}</span>` : "";
+  box.innerHTML = `<div class="views-bar" aria-hidden="true">${bar}</div><div class="views-legend">${each}${keys}${tip}</div>`;
 }
 
 function showLook() {
@@ -599,9 +685,9 @@ function applyPreset(preset, keys) {
   if (!preset) return;
   for (const name of keys) {
     if (!byName[name]) continue;  // a server from before this setting
-    const value = preset.values[name] ?? byName[name].default;
+    const value = preset.values[name] ?? defaultOf(name);
     if (HANDLED.has(name)) state[name] = value;
-    else if (JSON.stringify(value) === JSON.stringify(byName[name].default)) delete state.advanced[name];
+    else if (JSON.stringify(value) === JSON.stringify(defaultOf(name))) delete state.advanced[name];
     else state.advanced[name] = value;
   }
   resetAdvancedPanel();
@@ -669,6 +755,7 @@ function onControlChange(e) {
   readControls();
   followSize();
   if (e.target.id === "tile_scale") { matchFrame(); $("width").value = state.width; $("height").value = state.height; }
+  if (e.target.id === "max_frames") showPromptChanges();  // a change after the last frame says so
   if (e.target.id === "animation_mode") {
     // A video wants more repainting than a camera move, so each keeps its own tested default.
     const video = state.animation_mode === "Video Input";
@@ -772,8 +859,21 @@ function showSummaries() {
   ($("small_first").closest(".opt") || $("small_first").closest(".slider-row")).hidden = !!state.handoff_file;
   const small = smallFrame(), where = $("smallWhere");
   where.hidden = !smallFirstOn() || tileGrid() > 1;
-  where.textContent = small ? `Paints ${small.width} × ${small.height} first, for ${small.steps} of ${state.steps} steps.`
-    : `Does nothing at ${state.width} × ${state.height}: the frame is no larger than Small first size, ${smallSide()}.`;
+  // Small first paints only the steps before small_steps that aren't skipped: Denoise, then a clip's Frame skip.
+  const smallFor = (skip) => (small ? Math.max(small.steps - skip, 0) : 0);
+  const first = smallFor(Math.min(Number(state.skip_steps) || 0, state.steps - 1));
+  const later = animating() ? smallFor(frameSkip(Math.max(Number(state.steps) || 1, 1))) : first;
+  const video = animating() && state.animation_mode === "Video Input";
+  const opening = video ? later : first;  // a video's first frame uses Frame skip too
+  const size = `Paints ${small?.width} × ${small?.height} first`;
+  let text;
+  if (!small) text = `Does nothing at ${state.width} × ${state.height}: the frame is no larger than Small first size, ${smallSide()}.`;
+  else if (!opening && !later) text = `Does nothing here: the skipped steps already cover its first ${small.steps} of ${state.steps}.`;
+  else if (!animating()) text = `${size}, for ${first} of ${state.steps} steps.`;
+  else if (opening === later) text = `${size}, for ${later} of ${state.steps} steps a frame.`;
+  else if (!later) text = `${size} on the first frame only, for ${opening} of ${state.steps} steps.`;
+  else text = `${size}, for ${opening} of ${state.steps} steps on the first frame and ${later} on each after it.`;
+  where.textContent = text;
   $("controlWhere").textContent = controlSource();
   if (model) setHelp($("diffusion_model"), model.about);
 }
@@ -964,6 +1064,19 @@ function drawCurve() {
     g.strokeStyle = color("--ink-disabled");
     g.setLineDash([4, 4]); g.beginPath(); g.moveTo(left, y); g.lineTo(w - right, y); g.stroke(); g.setLineDash([]);
   }
+  // Ping-pong goes out on the first half's moves and comes back on the same ones, so the rest aren't used.
+  if (lookValue("loop_mode") === "Ping-pong" && ["2D", "3D"].includes(state.animation_mode)) {
+    const half = Math.floor((Number(state.max_frames) || frames) / 2);
+    if (half < frames - 1) {
+      const [x0] = toCanvas(half + 0.5, lo);
+      g.fillStyle = color("--app");
+      g.globalAlpha = 0.65;
+      g.fillRect(x0, top, w - right - x0, h - top - bottom);
+      g.globalAlpha = 1;
+      g.fillStyle = color("--ink-label");
+      g.fillText("Ping-pong plays the first half back", Math.min(x0 + 6, w - right - 200), top + 12);
+    }
+  }
   g.strokeStyle = color("--accent");
   g.lineWidth = 2;
   g.beginPath();
@@ -1104,14 +1217,49 @@ function finalSize(width, height) {
   return [width + (width - overlap) * extra, height + (height - overlap) * extra];
 }
 
-/* Steps the GPU runs, counting each tile's turn at a step as one. */
-function stepsRun() {
-  const grid = tileGrid();
-  const free = Math.max(state.steps - state.skip_steps, 0);
-  if (grid === 1) return free;
-  const painted = Math.round(state.steps * state.tile_denoise) * grid * grid;
-  if (state.init_image || (animating() && state.animation_mode === "Video Input")) return painted;
-  return state.tile_start === "Render first" ? free + painted : free * grid * grid;
+/* The step Tile denoise starts a tiled start image or video frame from. */
+function tileSkip() {
+  const steps = Math.max(Number(state.steps) || 1, 1);
+  return Math.min(pyRound(steps * (1 - Number(state.tile_denoise))), steps - 1);
+}
+
+/* Seconds of steps for one picture that Disco paints from step `from`, as the renderer runs it: at the frame
+   size with Small first, or once for each tile. `perStep` and `smallPer` are the measured speeds. */
+function paintSeconds(from, perStep, smallPer) {
+  const steps = Math.max(Number(state.steps) || 1, 1), grid = tileGrid();
+  const run = Math.max(steps - from, 0);
+  if (grid > 1) return run * grid * grid * perStep;
+  const small = smallFrame();
+  const smallRun = small ? Math.min(Math.max(small.steps - from, 0), run) : 0;
+  const repaint = Number(state.small_denoise) || 0;  // Full-size denoise repaints some small steps at full size
+  const redone = smallRun && repaint > 0 ? Math.min(Math.max(small.steps - (steps - pyRound((steps * repaint) / 100)), 0), smallRun) : 0;
+  return (run - smallRun + redone) * perStep + smallRun * smallPer;
+}
+
+/* Seconds of steps for a still, or a clip's first frame, from where it starts. */
+function firstSeconds(perStep, smallPer) {
+  const steps = Math.max(Number(state.steps) || 1, 1), grid = tileGrid();
+  const video = animating() && state.animation_mode === "Video Input";
+  const skip = Math.min(Number(state.skip_steps) || 0, steps - 1);
+  const at = (from) => paintSeconds(afterHandoffSkip(from), perStep, smallPer);
+  if (video) {
+    // Every video frame uses Frame skip; Build up's carried paint first needs a pass of the frame from Denoise.
+    const start = grid > 1 ? tileSkip() : skip;
+    return at(frameSkip(steps)) + (Number(state.video_blend) ? at(start) : 0);
+  }
+  if (grid > 1 && state.init_image) return at(tileSkip());
+  if (grid > 1 && state.tile_start === "Render first") {
+    const whole = Math.max(steps - afterHandoffSkip(skip), 0) * perStep;  // the frame at tile size, then the tiles
+    return whole + paintSeconds(tileSkip(), perStep, smallPer);
+  }
+  return at(skip);
+}
+
+/* Frames a clip paints. With Turbo, a 2D or 3D clip paints every Turbo steps-th frame and the last one. */
+function paintedFrames() {
+  const frames = Math.max(Number(state.max_frames) || 1, 1);
+  const turbo = state.turbo_mode && state.animation_mode !== "Video Input" ? Math.max(Number(state.turbo_steps) || 1, 1) : 1;
+  return Math.ceil(frames / turbo) + ((frames - 1) % turbo ? 1 : 0);
 }
 
 function showTiles() {
@@ -1122,11 +1270,14 @@ function showTiles() {
   $("tile_denoise").disabled = grid === 1 || !(state.init_image || renderFirst || video);
   $("tile_start").disabled = !!state.init_image || video;
   // With tiles, a start image is repainted by Tile denoise, so the start image's own Denoise has no say.
+  // A video's frames all use Frame skip, and Denoise only paints Build up's first pass of the first frame.
   const tiledStart = grid > 1 && !!(state.init_image || video);
+  const frameSkipOnly = video && !Number(state.video_blend);
   for (const id of ["denoise", "skip_steps"]) {
     const row = $(id).closest(".slider-row");
-    row.classList.toggle("unused", tiledStart);
-    row.title = tiledStart ? worded("Tiles use Tile denoise for the start image, so {skip_steps} isn't used.") : "";
+    row.classList.toggle("unused", tiledStart || frameSkipOnly);
+    row.title = tiledStart ? worded("Tiles use Tile denoise for the start image, so {skip_steps} isn't used.")
+      : frameSkipOnly ? worded("Every video frame uses {frames_skip_steps}, so {skip_steps} isn't used.") : "";
   }
 }
 
@@ -1165,11 +1316,11 @@ function updateFit() {
 function criticCost() {
   const share = (text) => (parseSchedule(text) || []).reduce((s, l) => s + (l.v > 0 ? l.n : 0), 0) / 1000;
   let cost = 1;
-  if (Number(state.layout_critic)) cost *= state.layout_cuts === "All" ? 1.15 : 1.12;
+  if (Number(state.layout_critic)) cost *= lookValue("layout_cuts") === "All" ? 1.15 : 1.12;
   if (String(state.robust_critic).includes("L/14")) cost *= 1.7;
   else if (state.robust_critic && state.robust_critic !== "Off") cost *= 1.07;
   if (Number(state.one_subject)) cost *= 1.04;
-  if (Number(state.correct_steps)) cost *= 1 + Number(state.correct_steps) * share(state.correct_curve) * (state.correct_clip ? 1.25 : 0.6);
+  if (Number(state.correct_steps)) cost *= 1 + Number(state.correct_steps) * share(lookValue("correct_curve")) * (lookValue("correct_clip") ? 1.25 : 0.6);
   return cost;
 }
 
@@ -1181,19 +1332,15 @@ function showTime() {
   const { perStep } = fitFor(mpx, !!plan?.offload);
   const LOADING_SECONDS = 45;
   // Small first paints the start of what is left after a handoff at its own size and speed.
-  const run = stepsRun() * afterHandoff(), small = smallFrame();
-  const smallRun = small ? Math.min(Math.max(small.steps - (state.steps - run), 0), run) : 0;
+  const small = smallFrame();
   const smallPer = small ? fitFor((small.width * small.height) / 1e6, !!plan?.offload).perStep : perStep;
-  const repaint = Number(state.small_denoise) || 0;  // Full-size denoise repaints some small steps at full size
-  const redone = smallRun && repaint > 0 ? Math.min(Math.max(small.steps - (state.steps - Math.round((state.steps * repaint) / 100)), 0), smallRun) : 0;
-  const seconds = ((run - smallRun + redone) * perStep + smallRun * smallPer) * (state.exact_repeat ? EXACT_REPEAT_COST : 1) * (state.time_travel ? TIME_TRAVEL_COST : 1) * criticCost()
+  const costs = (state.exact_repeat ? EXACT_REPEAT_COST : 1) * (state.time_travel ? TIME_TRAVEL_COST : 1) * criticCost();
+  const seconds = firstSeconds(perStep, smallPer) * costs
     + LOADING_SECONDS + (usesPartner() ? BORROW_SECONDS : 0) + (handingOff() ? HANDOFF_SECONDS : 0);
   if (animating()) {
-    const later = Math.max(state.steps - Math.round((state.steps * state.frames_skip_steps) / 100), 1);
-    const frames = Number(state.max_frames) || 1;
-    const painted = state.turbo_mode && state.animation_mode !== "Video Input" ? Math.ceil(frames / Math.max(state.turbo_steps, 2)) : frames;
-    const perFrame = (seconds - LOADING_SECONDS - (handingOff() ? HANDOFF_SECONDS : 0)) * ((later * tileGrid() ** 2) / Math.max(stepsRun(), 1));
-    note.textContent = `About ${fmtTime(perFrame)} a frame, ${fmtTime(seconds + perFrame * (painted - 1))} in all`;
+    const steps = Math.max(Number(state.steps) || 1, 1);
+    const perFrame = paintSeconds(afterHandoffSkip(frameSkip(steps)), perStep, smallPer) * costs;
+    note.textContent = `About ${fmtTime(perFrame)} a frame, ${fmtTime(seconds + perFrame * (paintedFrames() - 1))} in all`;
   } else {
     note.textContent = `About ${fmtTime(seconds)} an image`;
   }
@@ -1544,9 +1691,13 @@ function schedulePicture(name, text) {
   let marks = "";
   if (VIEW_SCHEDULES.includes(name) && byName.views_fit) {
     const plan = viewPlan();
-    const skipped = plan.skip && !plan.fit ? (plan.viewAt(Math.floor((1000 * plan.skip) / plan.steps)) / 1000) * W : 0;
+    // Up to where Disco's own steps begin: after a skip, and after a handoff model's steps.
+    const skipped = plan.disco ? (plan.viewAt(Math.floor((1000 * plan.disco) / plan.steps)) / 1000) * W : 0;
     if (skipped) marks += `<rect class="sched-skip" x="0" y="0" width="${skipped.toFixed(1)}" height="${H}"/>`;
-    marks += `<line class="sched-split" x1="${(SHAPES_END / 1000) * W}" x2="${(SHAPES_END / 1000) * W}" y1="0" y2="${H}"/>`;
+    const shape = shapePoints();
+    for (let i = 1; i < 1000; i++) {
+      if (shape[i] !== shape[i - 1]) marks += `<line class="sched-split" x1="${((i / 1000) * W).toFixed(1)}" x2="${((i / 1000) * W).toFixed(1)}" y1="0" y2="${H}"/>`;
+    }
   }
   return { svg: `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><path class="sched-fill" d="${line}L${W} ${H}L0 ${H}Z"/><path class="sched-line" d="${line}"/>${marks}</svg>`, sum };
 }
@@ -1555,7 +1706,7 @@ function schedulePicture(name, text) {
 function showSchedulePreviews() {
   document.querySelectorAll(".sched-preview[data-field]").forEach((button) => {
     const name = button.dataset.field;
-    const text = name in state.advanced ? state.advanced[name] : byName[name]?.default;
+    const text = name in state.advanced ? state.advanced[name] : defaultOf(name);
     const { svg, sum } = schedulePicture(name, text);
     button.innerHTML = `${svg}<span class="sched-sum">${sum}</span>`;
     button.title = `${text}. Click to change it.`;
@@ -1600,8 +1751,8 @@ function scheduleText(levels) {
 
 function openSchedule(name) {
   const f = byName[name];
-  const current = name in state.advanced ? state.advanced[name] : f.default;
-  sched = { name, spec: { low: 0, ...SCHEDULES[name] }, levels: parseSchedule(current) || parseSchedule(f.default), drag: null };
+  const current = name in state.advanced ? state.advanced[name] : defaultOf(name);
+  sched = { name, spec: { low: 0, ...SCHEDULES[name] }, levels: parseSchedule(current) || parseSchedule(defaultOf(name)), drag: null };
   withWords($("scheduleTitle"), `{${name}}`);
   setHelp($("scheduleTitle"), f.help);
   $("scheduleError").hidden = true;
@@ -1617,7 +1768,7 @@ function showSchedule() {
 function commitSchedule() {
   const f = byName[sched.name];
   const text = scheduleText(sched.levels);
-  if (text === scheduleText(parseSchedule(f.default))) delete state.advanced[sched.name];
+  if (text === scheduleText(parseSchedule(defaultOf(sched.name)))) delete state.advanced[sched.name];
   else state.advanced[sched.name] = text;
   const input = $(`adv-${sched.name}`);
   if (input) {
@@ -3300,7 +3451,7 @@ async function init() {
   $("scheduleText").addEventListener("change", schedTyped);
   $("scheduleDone").addEventListener("click", () => { $("scheduleDialog").close(); sched = null; });
   $("scheduleDialog").addEventListener("close", () => { sched = null; });
-  $("scheduleReset").addEventListener("click", () => { sched.levels = parseSchedule(byName[sched.name].default); commitSchedule(); showSchedule(); });
+  $("scheduleReset").addEventListener("click", () => { sched.levels = parseSchedule(defaultOf(sched.name)); commitSchedule(); showSchedule(); });
   $("advSearch").addEventListener("input", filterAdvanced);
   document.querySelectorAll("[data-init-fit]").forEach((btn) => btn.addEventListener("click", () => {
     state.init_fit = btn.dataset.initFit;

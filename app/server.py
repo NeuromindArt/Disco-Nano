@@ -691,7 +691,7 @@ def model_list():
             return "partner"
         return "upscaler" if name == models.UPSCALER else "helper" if name == "secondary" else "diffusion"
     return {"models": [{"name": n, "label": models.LABELS.get(n, n), "kind": kind(n), "about": models.ABOUT[n],
-                        "size_gb": models.FILES[n]["size_gb"],
+                        "size_gb": models.FILES[n]["size_gb"], "cuts": models.CUT_SCHEDULES.get(models.cut_style(n)),
                         "downloaded": os.path.exists(models.path_of(n))} for n in models.FILES]}
 
 
