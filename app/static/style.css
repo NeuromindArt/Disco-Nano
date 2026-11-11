@@ -504,6 +504,7 @@ button:disabled { color: var(--ink-disabled); cursor: not-allowed; }
 .folder-row { display: flex; gap: 8px; align-items: flex-start; }
 .folder-row button { flex: none; }
 .folder-row textarea { resize: vertical; white-space: pre; overflow-x: auto; }
+.folder-actions { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-top: 6px; }
 .folders .error { margin: 4px 0 0; }
 .folders h3 { margin: 0 0 4px; font-weight: 400; }
 .model-row { display: flex; align-items: center; gap: 12px; min-height: 36px; padding: 4px 0; border-bottom: 1px solid var(--line-faint); }

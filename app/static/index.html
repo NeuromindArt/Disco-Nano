@@ -465,10 +465,14 @@
         </div>
       </div>
       <div class="folder-field">
-        <label class="adv-name" for="checkpointDirs" data-help="One folder per line. Stable Diffusion 1.5 and SDXL checkpoints here show in the Handoff list. They're read where they are, never copied.">Checkpoint folders</label>
+        <label class="adv-name" for="checkpointDirs" data-help="One folder per line. Stable Diffusion 1.5 and SDXL checkpoints here show in the Handoff list. They're read where they are, never copied. Find in other apps adds the checkpoint folders of ComfyUI or a Stable Diffusion web UI on this PC.">Checkpoint folders</label>
         <div class="folder-row">
           <textarea id="checkpointDirs" rows="2" spellcheck="false"></textarea>
           <button type="button" id="checkpointBrowse" class="default">Add folder</button>
+        </div>
+        <div class="folder-actions">
+          <button type="button" id="checkpointFind" class="default">Find in other apps</button>
+          <span id="checkpointFound" class="hint" role="status"></span>
         </div>
       </div>
       <p id="folderError" class="error" role="alert" hidden></p>
@@ -548,7 +552,7 @@
     <p><b>Reverse handoff: Disco first, then the checkpoint.</b> Disco paints the whole image, and then the checkpoint repaints part of it, like Denoise in img2img. Reverse handoff % is how much: 0 is off, 20 to 35% tidies details such as faces and edges and keeps Disco's look, and 100% replaces Disco's image. It works with Handoff % at 0, for still images only. Keep the handoff picture also saves Disco's own image beside the result.</p>
     <p><b>Small first: Disco small, then Disco full size.</b> Disco's model learned at about 512 pixels, and its prompt checkers look at small views of the picture, so on a large frame such as 1280×768 different areas can each grow their own subject. Small first paints the start of each image at a smaller size in the frame's shape, while the layout is decided, then enlarges its still blurry picture and carries on at full size, where the detail is painted. Small first % is the small share: 0 is off and about 25% suits 1280×768. Full-size denoise % works like Disco denoise %: 0 carries on from exactly where the small start stopped, and higher has the full size repaint more of it, which gives it more say over the layout. Hold the small layout, also in that section, keeps the full size's broad shapes and colors close to the small picture while the detail is added, so a second subject can't grow in the empty areas; about 0.5 is a good start. Small first size is the small start's longer side, 768 by default, and Small first does nothing on frames no larger than that. The small steps are faster, so a render also takes a little less time. It works on stills and on the first frame of a clip, but not with Tiles, which have their own Render first, or with the experiments that are sized to the frame.</p>
     <p>The checkpoint waits in RAM and comes to the GPU only for its own steps. SD 1.5 fits beside Disco. SDXL is stored in 8 bits on cards under 12GB, which halves its memory, and takes a minute or two to load the first time; after that it stays loaded between renders. Handoff steps, prompt strength, the negative prompt and few-step models such as Lightning are in the Handoff model section, which opens once a checkpoint is chosen.</p>
-    <p>The Handoff list shows the SD 1.5 and SDXL checkpoints in your checkpoint folders and in ComfyUI or a Stable Diffusion web UI on the PC that renders, grouped by subfolder. Browse picks a file anywhere on the PC that renders and adds its folder.</p>
+    <p>The Handoff list shows the SD 1.5 and SDXL checkpoints in your checkpoint folders on the PC that renders, grouped by subfolder. The welcome screen fills in the folders of ComfyUI or a Stable Diffusion web UI it finds, and Find in other apps, beside Checkpoint folders in All settings, looks again. Browse picks a file anywhere on the PC that renders and adds its folder.</p>
     <h3>Controls</h3>
     <p>ControlNet's idea, done through guidance, since Disco's model has nowhere to plug a ControlNet in. At every step the render is compared with a control picture and nudged closer, beside the prompt. A still follows the Control image, or else its start image. A clip needs none: a Video Input clip follows each frame of the video as it is before any painting, so the subject stays where it really is, and a 2D or 3D clip follows the frame each repaint starts from. Edge control holds its outlines, and only asks for an outline where it has one. Depth control holds its near and far. Pose control finds each person's skeleton and holds a body in that stance. Person control cuts out each person and holds their silhouette, clothes and broad colors, while everything around them is painted freely; it is the strongest for keeping someone in a clip. Face control finds each face and holds its features while the layout forms, where the eyes, nose and mouth are and their light and dark, then lets the paint finish them; a head turned to the side can still be painted facing forward; Face shape holds more of a turn. Face shape holds each face's outline and its near and far, measured close up, so the face keeps its own shape and a turned head keeps more of its turn, most of all with a Control image; it pushes beside the prompt as Edge and Depth do, so the face is still painted freely. Face detail gives every face close-ups of its own at each step, so faces are painted with more care; with no control picture it finds faces in the render itself, so it works with text alone. About 0.5 is a good start, and Person control holds well at 0.3. Each one has its own curve, in its section, which sets when it counts: Face lets go at 50% of the render, Depth at 60%, Pose, Person and Face shape at 70%, and Edge at 80%. They don't work with Tiles.</p>
     <h3>Experiments</h3>
@@ -599,6 +603,12 @@
       <button type="button" id="welcomeUpscalersBrowse" class="default">Add folder</button>
     </div>
     <div class="adv-help">Already have upscalers? Add their folders here, one per line, or leave this empty.</div>
+    <h3>Checkpoints</h3>
+    <div class="folder-row">
+      <textarea id="welcomeCheckpoints" rows="2" spellcheck="false" aria-label="Checkpoint folders"></textarea>
+      <button type="button" id="welcomeCheckpointsBrowse" class="default">Add folder</button>
+    </div>
+    <div class="adv-help" id="welcomeCheckpointsHelp">Stable Diffusion 1.5 and SDXL checkpoints in these folders show in the Handoff list, read where they are. Folders of ComfyUI or a Stable Diffusion web UI on this PC are filled in for you.</div>
     <h3>Models</h3>
     <div id="welcomeModels"></div>
   </div>

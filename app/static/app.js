@@ -2243,6 +2243,8 @@ async function openWelcome() {
   const f = await api("/api/folders");
   $("welcomeOutput").value = f.output_dir;
   $("welcomeUpscalers").value = f.upscale_dirs.join("\n");
+  $("welcomeCheckpoints").value = f.checkpoint_dirs.join("\n");
+  findCheckpointFolders($("welcomeCheckpoints"), $("welcomeCheckpointsHelp")).catch(() => {});
   const main = byName.diffusion_model.default;
   $("welcomeUpscaler").replaceChildren(...catalog.filter((m) => m.kind === "upscaler").map((m) => welcomeRow(m, true)));
   $("welcomeModels").replaceChildren(...catalog.filter((m) => m.kind !== "upscaler").map((m) => welcomeRow(m, m.name === main || m.kind === "helper")));
@@ -2250,11 +2252,29 @@ async function openWelcome() {
   $("welcome").showModal();
 }
 
+/* Looks once for the checkpoint folders of ComfyUI and the web UIs, and adds any it finds to a folder list. It
+   runs only when asked: when the welcome screen opens, and from Find in other apps. Returns how many it added. */
+async function findCheckpointFolders(box, note) {
+  const before = note.textContent;
+  note.textContent = "Looking for ComfyUI and Stable Diffusion web UI folders…";
+  try {
+    const { found } = await api("/api/find-checkpoint-folders");
+    const have = new Set(box.value.split("\n").map((d) => d.trim().toLowerCase()).filter(Boolean));
+    const added = found.filter((d) => !have.has(d.toLowerCase()));
+    if (added.length) box.value = [box.value.trim(), ...added].filter(Boolean).join("\n");
+    note.textContent = added.length ? `Found ${added.length} folder${added.length > 1 ? "s" : ""} in other apps.` : before;
+    return added.length;
+  } catch (e) {
+    note.textContent = before;
+    throw e;
+  }
+}
+
 async function finishWelcome() {
   const shown = (message) => { $("welcomeError").textContent = message; $("welcomeError").hidden = !message; };
   shown("");
   try {
-    await applyFolders($("welcomeOutput").value, $("welcomeUpscalers").value.split("\n"));
+    await applyFolders($("welcomeOutput").value, $("welcomeUpscalers").value.split("\n"), $("welcomeCheckpoints").value.split("\n"));
     const names = welcomeTicked().map((box) => box.dataset.model);
     if (names.length) await post("/api/downloads", { names });
     await post("/api/first-run");
@@ -3186,6 +3206,10 @@ async function init() {
     const path = await browseFolder("Save images to", $("welcomeOutput").value);
     if (path) $("welcomeOutput").value = path;
   });
+  $("welcomeCheckpointsBrowse").addEventListener("click", async () => {
+    const path = await browseFolder("Add a checkpoint folder", "", "checkpoint-folder");
+    if (path) $("welcomeCheckpoints").value = [$("welcomeCheckpoints").value.trim(), path].filter(Boolean).join("\n");
+  });
   $("welcomeUpscalersBrowse").addEventListener("click", async () => {
     const path = await browseFolder("Add an upscaler folder", "");
     if (path) $("welcomeUpscalers").value = [$("welcomeUpscalers").value.trim(), path].filter(Boolean).join("\n");
@@ -3240,6 +3264,17 @@ async function init() {
   }
   wireDrop(document.querySelector('[data-drop="image_prompts"]'), { input: $("image_promptsFile"), onFiles: uploadPromptImages, onClear: () => setImagePrompts("") });
   $("checkpointDirs").addEventListener("change", saveFolders);
+  $("checkpointFind").addEventListener("click", async () => {
+    const button = $("checkpointFind");
+    button.disabled = true;
+    $("checkpointFound").textContent = "";
+    try {
+      const added = await findCheckpointFolders($("checkpointDirs"), $("checkpointFound"));
+      if (added) await saveFolders();
+      else $("checkpointFound").textContent = "No other folders found.";
+    } catch (e) { folderError(e.message); }
+    button.disabled = false;
+  });
   $("checkpointBrowse").addEventListener("click", async () => {
     const path = await browseFolder("Add a checkpoint folder", "", "checkpoint-folder");
     if (path) { $("checkpointDirs").value = [$("checkpointDirs").value.trim(), path].filter(Boolean).join("\n"); saveFolders(); }

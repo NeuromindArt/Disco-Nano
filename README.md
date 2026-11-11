@@ -217,10 +217,12 @@ You can also clone this repository instead of downloading a release, and update 
 ### Folders
 
 **All settings** sets where images are saved and which folders hold your upscalers and Stable
-Diffusion checkpoints. A welcome screen asks about the first two the first time you open the app.
+Diffusion checkpoints. A welcome screen asks about all three the first time you open the app.
 Point Nano at any folder of ESRGAN, DAT or HAT models, or download Real-ESRGAN x4plus from the app.
-Nano also looks in `models/upscale_models` and `models/checkpoints` in the data folder, and finds the
-checkpoints of ComfyUI and the Stable Diffusion web UIs on its own, grouped by their subfolders.
+Nano also looks in `models/upscale_models` and `models/checkpoints` in the data folder. The welcome
+screen fills in the checkpoint folders of ComfyUI or a Stable Diffusion web UI if it finds one on the
+PC, and **Find in other apps**, beside Checkpoint folders, looks again. After that, Nano only reads
+the folders in the list.
 
 ### Rendering on another PC
 
@@ -425,8 +427,8 @@ what a start image or Frame skip skips.
 frame. It isn't a start image. The checkpoint takes its share of the steps from pure noise, and
 Disco carries on from the exact point where it stopped, while the scene is still blurry. The checkpoint decides the layout and subject, and Disco paints it.
 
-- **Handoff model** lists the SD 1.5 and SDXL checkpoints in your checkpoint folders and in ComfyUI or
-  a Stable Diffusion web UI on the PC, grouped by subfolder. **Browse** picks one anywhere on the PC
+- **Handoff model** lists the SD 1.5 and SDXL checkpoints in your checkpoint folders, grouped by
+  subfolder. **Browse** picks one anywhere on the PC
   and adds its folder. Checkpoints are read where they are.
 - **Handoff %** is the checkpoint's share of the path from noise to picture. 0% is Disco alone.
   About 30% keeps Disco's look on a sturdier layout, 50% keeps more of the checkpoint, and 100%

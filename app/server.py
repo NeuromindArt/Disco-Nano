@@ -728,7 +728,7 @@ def first_run(request: Request):
 @app.post("/api/first-run")
 def first_run_done(request: Request):
     local_only(request)
-    paths.save_local_settings({"welcome_done": True})
+    paths.save_local_settings({"welcome_done": True, "checkpoint_search_done": True})
     return {"show": False}
 
 
@@ -1242,25 +1242,41 @@ OTHER_APPS = ("comfyui", "stable-diffusion-webui", "sd-webui", "sd.webui", "webu
 APP_CHECKPOINTS = (("models", "checkpoints"), ("models", "Stable-diffusion"), ("Models", "Stable-Diffusion"))
 SKIP_FOLDERS = {"windows", "program files", "program files (x86)", "programdata", "appdata", "node_modules", "$recycle.bin",
                 "system volume information", "steam", "steamapps", "recovery"}
-_other_apps = {"at": 0.0, "dirs": [], "busy": False}
-_other_apps_lock = threading.Lock()  # two first requests at once start one search, not two
+_search_lock = threading.Lock()  # one search at a time
+_upgrade = {"thread": None}  # the one search for a PC updated from a version that searched on every visit
 
 
-def other_app_checkpoint_dirs():
-    """Checkpoint folders of ComfyUI and the Stable Diffusion web UIs on this PC, so their models show in the
-    Handoff list with nothing to set up. It looks beside the upscaler folders, and up to three folders deep on
-    each drive. The search runs on a thread at most every 10 minutes, and the list uses what it last found."""
-    with _other_apps_lock:
-        if not _other_apps["busy"] and time.time() - _other_apps["at"] > 600:
-            _other_apps["busy"] = True
-            _other_apps["thread"] = threading.Thread(target=find_other_apps, daemon=True)
-            _other_apps["thread"].start()
-    if not _other_apps["at"]:  # the first search, at startup: worth a short wait so the list isn't empty
-        _other_apps["thread"].join(timeout=15)
-    return _other_apps["dirs"]
+def update_from_searching():
+    """Versions before 1.1.1 searched the drives every time the Handoff list was asked for. On the first start after
+    an update, that search runs once more, and what it finds is added to the checkpoint folders, where it can be
+    seen and removed. A new install asks on the welcome screen instead."""
+    if LOCAL.get("checkpoint_search_done") or not LOCAL.get("welcome_done"):
+        return
+
+    def run():
+        with _search_lock:
+            for folder in find_other_apps():
+                add_checkpoint_dir(folder)
+        paths.save_local_settings({"checkpoint_search_done": True})
+
+    _upgrade["thread"] = threading.Thread(target=run, daemon=True)
+    _upgrade["thread"].start()
+
+
+@app.get("/api/find-checkpoint-folders")
+def find_checkpoint_folders():
+    """Checkpoint folders of ComfyUI and the Stable Diffusion web UIs on this PC that aren't in the list yet. It runs
+    only when asked: by the welcome screen, and by Find in other apps in All settings. The page adds what it wants."""
+    with _search_lock:
+        found = find_other_apps()
+    known = {os.path.normcase(os.path.normpath(d)) for d in CHECKPOINT_DIRS}
+    return {"found": [d for d in found if os.path.normcase(os.path.normpath(d)) not in known]}
 
 
 def find_other_apps():
+    """Where ComfyUI and the Stable Diffusion web UIs keep their checkpoints: beside the upscaler folders, and in any
+    install folder up to three folders deep on each drive. It reads folder names only, skips system folders, and
+    stops after 50,000 of them."""
     found = []
 
     def add(*parts):
@@ -1297,19 +1313,20 @@ def find_other_apps():
                                 add(entry.path, *parts)
                         deeper.append(entry.path)
                 level = deeper if looked < 50000 else []
-    finally:
-        _other_apps["dirs"], _other_apps["at"], _other_apps["busy"] = found, time.time(), False
+    except OSError:
+        pass
+    return found
 
 
 @app.get("/api/checkpoints")
 def checkpoints():
-    """Stable Diffusion checkpoints for the Handoff list: in the checkpoint folders and the folders of other
-    Stable Diffusion apps on this PC, subfolders included. Like the upscalers, they are read where they are,
+    """Stable Diffusion checkpoints for the Handoff list: in the checkpoint folders, subfolders included. Like the upscalers, they are read where they are,
     so a browser on another PC picks from the files on this one. A file found twice, such as in a backup, shows
     once. Models Handoff can't use, such as Flux or SD 3, are left out. Each one's group is its subfolder."""
+    if _upgrade["thread"] is not None:  # the first list after an update waits for its one search
+        _upgrade["thread"].join(timeout=15)
     found, seen = [], set()
-    folders = CHECKPOINT_DIRS + [d for d in other_app_checkpoint_dirs() if d not in CHECKPOINT_DIRS]
-    for top in folders:
+    for top in list(CHECKPOINT_DIRS):
         if not os.path.isdir(top):
             continue  # a drive that is unplugged for now
         for folder, subfolders, names in os.walk(top):
@@ -1570,6 +1587,7 @@ if __name__ == "__main__":
         webbrowser.open(URL)
         sys.exit(0)
     print("Starting the server", flush=True)
+    update_from_searching()
     threading.Thread(target=open_when_ready, daemon=True).start()
     import atexit
     atexit.register(close_worker)  # the worker also ends by itself when this process's end closes its stdin
