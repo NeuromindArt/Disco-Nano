@@ -25,6 +25,8 @@ def mix(before, after, share):
     for a, b in zip(before, after):
         out.append({"model": a["model"], "embeds": torch.cat([a["embeds"], b["embeds"]]),
                     "weights": torch.cat([a["weights"] * (1 - share), b["weights"] * share])})
+        if "roles" in a and "roles" in b:  # Prompt routing's kind for each line, so it keeps routing during a fade
+            out[-1]["roles"] = torch.cat([a["roles"], b["roles"]])
     return out
 
 

@@ -163,6 +163,7 @@ _lpips_pixels = {}
 
 
 def lpips_pixels(pixels):
+    """How many pixels LPIPS compares at, worked out once per render: the next render may load other models."""
     if pixels not in _lpips_pixels:
         if torch.cuda.get_device_properties(0).total_memory <= LPIPS_FIXED_UP_TO_GB * 2**30:
             _lpips_pixels[pixels] = min(pixels, LPIPS_FLOOR_PIXELS)
@@ -306,13 +307,16 @@ class SecondaryDiffusionImageNet2(nn.Module):
 # ---- models kept between renders ----
 # The render worker stays open between renders, and keeps the models it loaded in RAM for the next one. Each
 # render brings what it needs to the GPU, and put_away sends it all back to RAM when the render ends, so a
-# waiting worker holds no VRAM beyond its CUDA context. Closing the app ends the worker and frees it all.
+# waiting worker holds no VRAM beyond its CUDA context. Closing the app ends the worker and frees it all. Models the
+# last render didn't use are let go, so switching checkpoints or settings doesn't pile up copies in RAM.
 _kept = {}
+_used = set()  # keys asked for during this render
 _after_render = []  # undoes what a render changed in kept models or shared code, such as hooks
 
 
 def kept(key, build):
     """The model kept under key, built the first time it is asked for."""
+    _used.add(key)
     if key not in _kept:
         _kept[key] = build()
     return _kept[key]
@@ -324,6 +328,9 @@ def put_away():
             _after_render.pop()()
         except Exception:
             pass
+    for key in [k for k in _kept if k not in _used]:
+        del _kept[key]
+    _used.clear()
     for item in _kept.values():
         for module in (item.parts() if hasattr(item, "parts") else [item]):
             module.to("cpu")
@@ -528,6 +535,7 @@ def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_
 
 def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     cfg = {**DEFAULTS, **job_settings}
+    _lpips_pixels.clear()
     style = models.cut_style(cfg["diffusion_model"])
     if style:
         cfg.update({k: v for k, v in models.CUT_SCHEDULES[style].items() if k not in job_settings})

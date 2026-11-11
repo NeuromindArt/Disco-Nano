@@ -127,6 +127,8 @@ class Ghost:
         self.structure, self.crops, self.lowfreq = cfg["ghost_structure"], cfg["ghost_crops"], cfg["ghost_lowfreq"]
         self.style_strength = cfg["style_strength"]
         self.ghost = ghost  # 0 to 1
+        # The robust checker is an open_clip model, whose layers are laid out differently from OpenAI's CLIP.
+        clip_models = [m for m in clip_models if not getattr(m, "robust", False)]
         vits = [m for m in clip_models if hasattr(m.visual, "transformer")]
         nets = [m for m in clip_models if hasattr(m.visual, "layer1")]
         self.vit = min(vits, key=lambda m: m.visual.conv1.kernel_size[0], default=None)  # the finest one

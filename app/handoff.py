@@ -213,7 +213,8 @@ class Handoff:
                     raise KeyboardInterrupt
                 return values
 
-            out = self.image_pipe(image=latent, strength=min(max(strength, 0.01), 1.0), num_inference_steps=self.steps,
+            # diffusers runs int(steps * strength) steps; half a step more makes that `run`, never 0 with few steps
+            out = self.image_pipe(image=latent, strength=min((run + 0.5) / self.steps, 1.0), num_inference_steps=self.steps,
                                   guidance_scale=self.guidance, generator=generator, output_type="latent",
                                   callback_on_step_end=check, **embeds)
             self.unet.to("cpu")

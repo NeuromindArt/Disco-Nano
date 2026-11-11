@@ -14,7 +14,7 @@ own choices there, such as output_dir and upscale_dirs. For example:
 import json
 import os
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(APP_DIR)
 

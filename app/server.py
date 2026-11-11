@@ -106,6 +106,8 @@ class Worker:
 
     def __init__(self, sig):
         self.sig, self.task, self.log = sig, None, None
+        self.ending = False  # closing, or about to exit after a failed render: it takes no more jobs
+        self.pid = None  # the Python process itself, which a venv's launcher starts as a child of proc
         env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT,
                    NANO_EXACT="1" if sig["exact_repeat"] else "0", NANO_LARGE="1" if sig["large"] else "0")
         # Below normal priority: a render still gets every idle cycle, but Windows serves the desktop first,
@@ -117,17 +119,23 @@ class Worker:
         threading.Thread(target=self.read, daemon=True).start()
 
     def alive(self):
-        return self.proc.poll() is None
+        return self.proc.poll() is None and not self.ending
 
     def run(self, task):
-        self.task = task
+        # the log first: the reader writes to it as soon as it sees a task
         self.log = open(os.path.join(task.job_dir, "run.log"), "a", encoding="utf-8", errors="replace")
+        self.task = task
         self.proc.stdin.write(task.job_dir + "\n")
         self.proc.stdin.flush()
 
     def read(self):
         for raw in self.proc.stdout:
             line = raw.rstrip("\r\n")
+            if line.startswith("@@EVT ") and '"ready"' in line:
+                try:
+                    self.pid = int(json.loads(line[6:]).get("pid") or 0) or None
+                except (ValueError, AttributeError):
+                    pass
             task, log = self.task, self.log
             if task is None:
                 continue  # between renders, such as its ready line
@@ -164,11 +172,14 @@ class Worker:
         if self.log:
             self.log.close()
             self.log = None
+        if task.state in ("oom", "error"):
+            self.ending = True  # renderer.py stops serving after a failed render, so this process is on its way out
         if not task.keep_models:
             self.close()
 
     def close(self):
         """Ends the worker. Closing stdin lets it finish cleanly; one still busy loading is ended outright."""
+        self.ending = True
         try:
             self.proc.stdin.close()
         except OSError:
@@ -373,10 +384,50 @@ def take_idle_reading():
     _idle["ram"] = ram_info() or _idle["ram"]
 
 
+def process_ram_gb(pid):
+    """The RAM a process has in use, from Windows, or 0 when it can't be read."""
+    if os.name != "nt":
+        return 0.0
+    import ctypes
+    from ctypes import wintypes
+
+    class Counters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+            (name, ctypes.c_size_t) for name in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                                 "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage",
+                                                 "PagefileUsage", "PeakPagefileUsage")]
+    kernel = ctypes.windll.kernel32
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    ctypes.windll.psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD]
+    handle = kernel.OpenProcess(0x1000 | 0x0010, False, pid)  # query limited information, read memory
+    if not handle:
+        return 0.0
+    try:
+        counters = Counters(cb=ctypes.sizeof(Counters))
+        if not ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            return 0.0
+        return counters.WorkingSetSize / 2**30
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def worker_held():
+    """The VRAM and RAM the waiting render worker holds: its CUDA context and the models it kept. The next render
+    either reuses it or replaces it, so none of it belongs to other apps, and the plan already counts a context."""
+    worker = _worker
+    if worker is None or not worker.alive() or worker.task is not None:
+        return 0.0, 0.0
+    return budget.CONTEXT_GB, process_ram_gb(worker.pid or worker.proc.pid)
+
+
 def memory_plan(settings):
     gpu, ram = idle_memory()
     if not gpu or not ram:
         return {}
+    vram_held, ram_held = worker_held()
+    gpu = {**gpu, "used_gb": max(gpu["used_gb"] - vram_held, 0.0)}
+    ram = {**ram, "used_gb": max(ram["used_gb"] - ram_held, 0.0)}
     return budget.plan(settings, gpu, ram)
 
 
@@ -1023,6 +1074,7 @@ async def set_folders(request: Request):
             if d not in UPSCALE_DIRS and not os.path.isdir(d):  # a known drive may just be unplugged
                 raise HTTPException(400, f"Folder not found: {d}")
         checkpoint_dirs = [d.strip() for d in body.get("checkpoint_dirs", CHECKPOINT_DIRS) if isinstance(d, str) and d.strip()]
+        no_network_paths(request, *[d for d in dirs + checkpoint_dirs if d not in UPSCALE_DIRS + CHECKPOINT_DIRS])
         for d in checkpoint_dirs:
             if d not in CHECKPOINT_DIRS and not os.path.isdir(d):
                 raise HTTPException(400, f"Folder not found: {d}")
@@ -1091,6 +1143,13 @@ def local_only(request: Request):
         raise HTTPException(403, "Choose this on the PC that renders. From here, drop files onto the page instead.")
 
 
+def no_network_paths(request: Request, *chosen):
+    """A browser on another PC can choose folders on this one, but not network paths, a shared folder on another
+    PC: opening one makes Windows connect to that PC and offer this PC's login."""
+    if not is_local(request) and any(str(p).strip().replace("/", "\\").startswith("\\\\") for p in chosen):
+        raise HTTPException(403, "Choose network folders on the PC that renders.")
+
+
 @app.post("/api/pick-folder")
 def pick_folder(body: dict, request: Request):
     """Opens Windows' folder picker. A browser page can't read a real path from its own."""
@@ -1137,9 +1196,10 @@ BROWSE_KINDS = {"checkpoint": (".safetensors",), "checkpoint-folder": (".safeten
 
 
 @app.get("/api/browse")
-def browse(path: str = "", kind: str = "folder"):
+def browse(request: Request, path: str = "", kind: str = "folder"):
     """Folders, and the model files a kind wants, on the PC that renders. A browser on another PC can't open
     Windows' file dialogs here, so the page draws its own from this."""
+    no_network_paths(request, path)
     wanted = BROWSE_KINDS.get(kind, ())
     machine = socket.gethostname()
     if not path:
@@ -1165,8 +1225,9 @@ def browse(path: str = "", kind: str = "folder"):
 
 
 @app.post("/api/add-checkpoint")
-def add_checkpoint(body: dict):
+def add_checkpoint(body: dict, request: Request):
     """A checkpoint chosen in the page's own browser. Its folder joins the checkpoint folders, as with Browse."""
+    no_network_paths(request, body.get("path", ""))
     path = os.path.abspath(str(body.get("path", "")))
     if not path.lower().endswith(".safetensors") or not os.path.isfile(path):
         raise HTTPException(400, "Choose a .safetensors checkpoint.")
@@ -1182,16 +1243,18 @@ APP_CHECKPOINTS = (("models", "checkpoints"), ("models", "Stable-diffusion"), ("
 SKIP_FOLDERS = {"windows", "program files", "program files (x86)", "programdata", "appdata", "node_modules", "$recycle.bin",
                 "system volume information", "steam", "steamapps", "recovery"}
 _other_apps = {"at": 0.0, "dirs": [], "busy": False}
+_other_apps_lock = threading.Lock()  # two first requests at once start one search, not two
 
 
 def other_app_checkpoint_dirs():
     """Checkpoint folders of ComfyUI and the Stable Diffusion web UIs on this PC, so their models show in the
     Handoff list with nothing to set up. It looks beside the upscaler folders, and up to three folders deep on
     each drive. The search runs on a thread at most every 10 minutes, and the list uses what it last found."""
-    if not _other_apps["busy"] and time.time() - _other_apps["at"] > 600:
-        _other_apps["busy"] = True
-        _other_apps["thread"] = threading.Thread(target=find_other_apps, daemon=True)
-        _other_apps["thread"].start()
+    with _other_apps_lock:
+        if not _other_apps["busy"] and time.time() - _other_apps["at"] > 600:
+            _other_apps["busy"] = True
+            _other_apps["thread"] = threading.Thread(target=find_other_apps, daemon=True)
+            _other_apps["thread"].start()
     if not _other_apps["at"]:  # the first search, at startup: worth a short wait so the list isn't empty
         _other_apps["thread"].join(timeout=15)
     return _other_apps["dirs"]

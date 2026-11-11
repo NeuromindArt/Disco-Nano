@@ -191,7 +191,7 @@ def serve():
     it loaded wait in RAM for the next render. It ends when the app closes its stdin, and after a render that
     failed, so the next one starts from a clean process."""
     set_up_process({"exact_repeat": os.environ.get("NANO_EXACT") == "1", "large": os.environ.get("NANO_LARGE") == "1"})
-    emit("ready")
+    emit("ready", pid=os.getpid())  # a venv's python.exe is a launcher, so the server can't see this process's own id
     for line in sys.stdin:
         job_dir = line.strip()
         if not job_dir:
