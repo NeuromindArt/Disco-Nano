@@ -568,7 +568,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     if hand_start or hand_finish:
         import handoff  # loaded before Disco, so its text encoders can use the GPU and leave
         path = cfg["handoff_file"]
-        handing = kept(("handoff", path, os.path.getmtime(path)), lambda: handoff.Handoff(path, hooks.status, device))
+        handing = kept(("handoff", path, os.path.getmtime(path)), lambda: handoff.load(path, hooks.status, device))
         handing.prepare(cfg, sets, hooks.status, getattr(hooks, "stopped", lambda: False), hooks.preview)
     torch.backends.cudnn.benchmark = False  # same speed here, but its cached workspaces cost VRAM
 
@@ -1078,7 +1078,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             image.save(keep_as)  # Disco's own picture, before the finish
         resting = [model, secondary_model, lpips_model, *(m.visual for m in clip_models),
                    experiment.partner if experiment else None]
-        with handoff.Parked(handing, resting, device, *handoff.finish_size(*image.size), painted=True):
+        with handoff.Parked(handing, resting, device, *handing.finish_size(*image.size), painted=True):
             return handing.finish(image, float(cfg["handoff_finish"]) / 100, n, seed_value)
 
     def save_sketch(sketch):

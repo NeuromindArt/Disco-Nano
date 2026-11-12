@@ -33,7 +33,7 @@ RTX 3070 8GB.
 - Drop a start image, a video, or guide images straight onto the page
 - Render on another PC: share the PC with the GPU and use Nano from any browser on your network
 - One switch between plain names, such as Denoise %, and Disco Diffusion's official names
-- Handoff: a Stable Diffusion 1.5 or SDXL checkpoint you already have lays out the scene, and Disco paints it
+- Handoff: an SD 1.5, SDXL, Z-Image, Flux.1 or Flux.2 Klein model you already have lays out the scene, and Disco paints it
 - Small first: Disco lays out large frames at a small size, then paints the detail at full size, so the
   subject isn't repeated across the frame
 - Controls: hold a picture's outlines, depth, pose, people or faces while Disco paints,
@@ -426,13 +426,24 @@ graph marks where shapes end, and shades what a start image or Frame skip skips.
 
 ## Handoff
 
-**Handoff** lets a Stable Diffusion checkpoint you already have, SD 1.5 or SDXL, paint first, and Disco
+**Handoff** lets a model you already have, SD 1.5, SDXL, Z-Image, Flux.1 or Flux.2 Klein, paint first, and Disco
 then repaints its picture: the checkpoint decides the layout and subject, and Disco paints it. It can
 also run the other way round, with the checkpoint finishing Disco's image, or both in one render.
 
-- **Handoff model** lists the SD 1.5 and SDXL checkpoints in your checkpoint folders, grouped by
-  subfolder. **Browse** picks one anywhere on the PC and adds its folder. Checkpoints are read where
-  they are.
+- **Handoff model** lists the SD 1.5 and SDXL checkpoints in your checkpoint folders, and the Z-Image,
+  Flux.1 and Flux.2 Klein models in the `unet` and `diffusion_models` folders beside them, grouped by subfolder.
+  **Browse** picks one anywhere on the PC and adds its folder. Models are read where they are.
+- **Z-Image, Flux.1 and Flux.2 Klein** can be `.safetensors` (bf16 or fp8, including ComfyUI's scaled
+  and mixed fp8) or `.gguf`. As in ComfyUI, they come as separate files: Z-Image needs its Qwen3-4B text
+  encoder and Flux needs T5-XXL and CLIP-L, both with Flux's autoencoder, `ae.safetensors`. Klein 4B needs
+  Qwen3-4B and Klein 9B Qwen3-8B, both with Flux.2's own autoencoder, `flux2-vae.safetensors`. Nano finds them in
+  the models folder the model is in, subfolders included, by what is inside each file, so names don't
+  matter. A Flux file with everything inside works too. Choosing one sets the steps and CFG it was made
+  for: Z-Image Turbo 8 steps at CFG 1, Z-Image 25 at 4, Flux dev 20 at 3.5, Flux schnell 4, Klein 4 and
+  Klein Base 20 at 5. Sampler,
+  Karras, Clip skip and few-step spacing are for SD 1.5 and SDXL, and gray out. Flux doesn't read a
+  negative prompt, nor do the distilled Kleins, and Z-Image and Klein Base read one only with CFG
+  above 1. Flux.2 dev, SD 3, Chroma and Nunchaku files aren't supported.
 - **The checkpoint's settings**, at the top of the section once one is chosen, are its **steps**,
   **CFG** (how closely it follows the prompt), **sampler** (Euler, Euler a, DPM++ 2M, DPM++ 2M SDE,
   DDIM, UniPC or LCM), the **Karras schedule**, **Clip skip** (2 for many anime, Pony and Illustrious
@@ -461,12 +472,19 @@ also run the other way round, with the checkpoint finishing Disco's image, or bo
   replaces Disco's image. It works with Handoff % at 0, so the checkpoint only finishes, and on still
   images only. **Save its picture** also saves Disco's own image beside it.
 
-The checkpoint waits in RAM and comes to the GPU only for its own steps. On cards under 12GB, SDXL's
+The checkpoint waits in RAM and comes to the GPU only for its own steps. Z-Image and Flux keep their big
+weights in 8 bits, or as stored in a GGUF, and on cards where they don't fit beside their working memory
+they stream: each block comes to the GPU just before it runs. Their text encoders run once per render,
+before Disco loads, and wait in RAM after; one too big for the GPU streams there a layer at a time.
+Measured at 1280×768 on 8GB, Z-Image Turbo (Q5 GGUF) adds about 12GB of RAM, Flux dev (Q4 GGUF) about
+15GB, Klein 4B (Q8 GGUF) about 10GB and Klein Base 9B (Q4 GGUF) about 17.5GB, and all stayed within the
+6GB Nano allows a render on that card. On cards under 12GB, SDXL's
 UNet is stored in 8 bits, which halves it to 2.6GB, and Disco repaints what follows, which hides the
 small loss. If the checkpoint and Disco still don't fit together, Nano moves Disco's models to RAM
 while the checkpoint paints. Loading an SDXL file takes a minute or two the first time; after that it
-waits in RAM for the next render (see Keep models loaded below). Whatever the frame size, the checkpoint paints at 512 to
-768 pixels a side, in the frame's shape. The first use downloads a few small configuration files from Hugging Face.
+waits in RAM for the next render (see Keep models loaded below). Whatever the frame size, SD 1.5 and SDXL paint at 512 to
+768 pixels a side and the others at 512 to 1024, in the frame's shape. The first use downloads a few small configuration
+and tokenizer files from Hugging Face.
 
 ![The same prompt and seed with Handoff off, at 30% and at 50%](docs/handoff.jpg)
 

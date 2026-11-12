@@ -151,6 +151,35 @@ HELPERS = {
     f"{DEPTH}/config.json": {"sha256": "c56698d3643dde1f83ea2212759e6b31a22b8f827246a36dd007ee8a22b3ff75", "folder": DEPTH,
                              "urls": [DEPTH_URL + "config.json"]},
 }
+# Configs and tokenizers for Z-Image and Flux handoff models, pinned. Flux's own repos are gated, so its configs are
+# written by flow.py, and its tokenizers come from the open repos they were made from: CLIP's vocabulary from LAION
+# (MIT), and T5's from t5-base (Apache 2.0), whose spiece.model is the same file as T5 v1.1-XXL's.
+ZIMAGE_URL = "https://huggingface.co/Tongyi-MAI/Z-Image-Turbo/resolve/f332072aa78be7aecdf3ee76d5c247082da564a6/"
+FLOW_FILES = {
+    "zimage": {
+        ZIMAGE_URL + "transformer/config.json": ("transformer", "06d49d1ae533f825c4704cc616fc8bc7826e9d449dde292cc7a95163c69af24a"),
+        ZIMAGE_URL + "text_encoder/config.json": ("text_encoder", "8ba006f74fecfaaeb392872a60f4a480e7ec9860153d2e1b769ec81f9a147f8a"),
+        ZIMAGE_URL + "scheduler/scheduler_config.json": ("scheduler", "3b979ab0956e4f5e8d02ec409ac6a4ece1555191d15bd10788fdc85fea5d13fc"),
+        ZIMAGE_URL + "tokenizer/tokenizer.json": ("tokenizer", "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"),
+        ZIMAGE_URL + "tokenizer/tokenizer_config.json": ("tokenizer", "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101"),
+        ZIMAGE_URL + "tokenizer/vocab.json": ("tokenizer", "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"),
+        ZIMAGE_URL + "tokenizer/merges.txt": ("tokenizer", "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"),
+    },
+    "flux": {
+        "https://huggingface.co/laion/CLIP-ViT-bigG-14-laion2B-39B-b160k/resolve/743c27bd53dfe508a0ade0f50698f99b39d03bec/vocab.json":
+            ("tokenizer", "5047b556ce86ccaf6aa22b3ffccfc52d391ea4accdab9c2f2407da5b742d4363"),
+        "https://huggingface.co/laion/CLIP-ViT-bigG-14-laion2B-39B-b160k/resolve/743c27bd53dfe508a0ade0f50698f99b39d03bec/merges.txt":
+            ("tokenizer", "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a"),
+        "https://huggingface.co/google-t5/t5-base/resolve/a9723ea7f1b39c1eae772870f3b547bf6ef7e6c1/tokenizer.json":
+            ("tokenizer_2", "d2acde0d8d71dd30a711834b07781b9c89feaac33fd332f60507699282740066"),
+    },
+}
+FLOW_SUPPORT = {kind: [f"handoff-support/{kind}/{folder}/{url.rsplit('/', 1)[-1]}" for url, (folder, _) in files.items()]
+                for kind, files in FLOW_FILES.items()}
+FLOW_SUPPORT["flux2"] = [name for name in FLOW_SUPPORT["zimage"] if "/tokenizer/" in name]  # the same Qwen3 tokenizer
+HELPERS.update({f"handoff-support/{kind}/{folder}/{url.rsplit('/', 1)[-1]}":
+                {"sha256": sha256, "urls": [url], "folder": f"handoff-support/{kind}/{folder}"}
+                for kind, files in FLOW_FILES.items() for url, (folder, sha256) in files.items()})
 ALL_FILES = {**FILES, **HELPERS}
 
 # Plain names for the model list. The official names are the file names.

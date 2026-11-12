@@ -379,7 +379,19 @@ const IDLE_WHEN = [
   ["transformation_percent", () => !lookValue("use_horizontal_symmetry") && !lookValue("use_vertical_symmetry"), "Only with a mirror on."],
   ["sketch_steps", () => lookValue("live_ghost") !== "Sketch first", "Only with {live_ghost} set to Sketch first."],
   ["fov", () => state.animation_mode !== "3D", "3D only."],
+  ["handoff_sampler", () => flowModel(), "Z-Image and Flux use their own sampler."],
+  ["handoff_karras", () => flowModel(), "Z-Image and Flux use their own schedule."],
+  ["handoff_few_steps", () => flowModel(), "Z-Image and Flux use their own schedule."],
+  ["handoff_clip_skip", () => flowModel(), "For SD 1.5 and SDXL only."],
+  ["handoff_negative", () => flowModel() === "flux" || distilledKlein()
+     || (["zimage", "flux2"].includes(flowModel()) && Number(lookValue("handoff_guidance")) <= 1),
+   "Flux and the distilled Kleins don't read one, and Z-Image and Klein Base read it only with CFG above 1."],
+  ["handoff_guidance", () => (flowModel() === "flux" && checkpointNow()?.variant === "schnell") || distilledKlein(),
+   "Flux schnell and the distilled Kleins have no guidance."],
 ];
+function checkpointNow() { return checkpointList.find((c) => c.path === state.handoff_file); }
+function flowModel() { const kind = checkpointNow()?.kind; return ["zimage", "flux", "flux2"].includes(kind) ? kind : ""; }
+function distilledKlein() { return flowModel() === "flux2" && checkpointNow()?.variant === "klein"; }
 function showIdle() {
   for (const [name, idle, why] of IDLE_WHEN) {
     const row = document.querySelector(`.controls .adv-field[data-name="${name.toLowerCase()}"]`);
@@ -2818,6 +2830,7 @@ let checkpointList = [];
 async function loadCheckpoints() {
   try { checkpointList = (await api("/api/checkpoints")).checkpoints; } catch { checkpointList = []; }
   showCheckpoints();
+  showIdle();  // which handoff settings apply depends on the model's kind
 }
 
 function showCheckpoints() {
@@ -2827,14 +2840,14 @@ function showCheckpoints() {
   const options = [option("", "Off")];
   const groups = new Map();
   for (const c of checkpointList) {
-    const label = c.sdxl ? `${c.name} (SDXL)` : c.name;
+    const label = c.label ? `${c.name} (${c.label})` : c.sdxl ? `${c.name} (SDXL)` : c.name;
     if (!c.group) { options.push(option(c.path, label)); continue; }
     if (!groups.has(c.group)) groups.set(c.group, document.createElement("optgroup"));
     groups.get(c.group).label = c.group;
     groups.get(c.group).append(option(c.path, label));
   }
   options.push(...groups.values());
-  if (current && !checkpointList.some((c) => c.path === current)) options.push(option(current, baseName(current).replace(/\.safetensors$/i, "")));
+  if (current && !checkpointList.some((c) => c.path === current)) options.push(option(current, baseName(current).replace(/\.(safetensors|gguf)$/i, "")));
   select.replaceChildren(...options);
   select.value = current;
   $("handoffWhere").textContent = checkpointList.length ? ""
@@ -2849,8 +2862,9 @@ function pickCheckpoint(path) {
     $("skip_steps").value = state.skip_steps = skipFor(60, state.steps);
     $("denoise").value = denoiseOf(state.skip_steps, state.steps);
   }
-  // A checkpoint chosen before comes back with its own steps, CFG, sampler and the rest.
-  const own = path && state.handoff_models?.[path];
+  // A checkpoint chosen before comes back with its own steps, CFG, sampler and the rest. Z-Image and Flux start
+  // with the steps and CFG they were made for.
+  const own = path && (state.handoff_models?.[path] || checkpointList.find((c) => c.path === path)?.defaults);
   if (own) {
     for (const [name, value] of Object.entries(own)) {
       if (!byName[name]) continue;
@@ -2869,7 +2883,7 @@ function pickCheckpoint(path) {
 async function chooseCheckpoint(start) {
   if (isLocal()) return (await post("/api/pick-checkpoint", { start: start || "" })).path;
   const folder = start ? start.replace(/[\\/][^\\/]*$/, "") : $("checkpointDirs").value.split("\n")[0].trim();
-  const path = await browseRemote({ title: "Choose a Stable Diffusion 1.5 or SDXL checkpoint", kind: "checkpoint", start: folder });
+  const path = await browseRemote({ title: "Choose an SD 1.5, SDXL, Z-Image, Flux or Flux.2 Klein model", kind: "checkpoint", start: folder });
   return path ? (await post("/api/add-checkpoint", { path })).path : null;
 }
 

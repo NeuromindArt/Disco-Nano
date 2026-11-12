@@ -173,6 +173,15 @@ def run_job(job_dir):
         outcome = "oom" if is_oom else "error"
         detail = {"error": repr(e)[:600]}
         print(traceback.format_exc()[-1800:], flush=True)
+    # disco.render puts its models away in a finally, but after a Stop that runs while the stop is still on its way
+    # out, holding the render's last tensors. They are let go only now, so the GPU is given back here as well, or
+    # each stopped render would leave the next one with less room.
+    try:
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
     detail["cpu_seconds"] = round(time.process_time() - cpu_start, 1)
     try:
         detail["peak_vram_gb"] = round(torch.cuda.max_memory_reserved() / 2**30, 2)

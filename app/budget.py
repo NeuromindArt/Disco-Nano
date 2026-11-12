@@ -46,9 +46,14 @@ FACES_RAM_GB = 0.11
 # A handoff checkpoint waiting in RAM beside the render. Loading SDXL reads it in 32 bits before storing it in 8, which
 # peaks higher, but that comes before Disco's models load, so it only counts where it's more than the two together.
 # SDXL waiting was measured beside a 1280x768 render with Offload, which peaked at 28GB in all.
-HANDOFF_RAM_GB = {"sd15": 4.3, "sdxl": 12.0}
-HANDOFF_LOAD_GB = {"sd15": 4.3, "sdxl": 19.5}
-HANDOFF_VRAM_GB = {"sd15": 0.0, "sdxl": 0.16}
+# Z-Image Turbo Q5 GGUF, Flux dev Q4 GGUF, Flux.2 Klein 4B Q8 GGUF and Klein Base 9B Q4 GGUF with their fp8 encoders,
+# measured the same way: 28, 31, 25.6 and 33.4GB in all. They load as they are stored, with no higher peak, and stream
+# from RAM, so they add nothing on the GPU between steps.
+HANDOFF_RAM_GB = {"sd15": 4.3, "sdxl": 12.0, "zimage": 12.0, "flux": 15.0, "flux2": 10.0, "flux2_9b": 17.5}
+HANDOFF_LOAD_GB = {"sd15": 4.3, "sdxl": 19.5, "zimage": 12.0, "flux": 15.0, "flux2": 10.0, "flux2_9b": 17.5}
+HANDOFF_VRAM_GB = {"sd15": 0.0, "sdxl": 0.16, "zimage": 0.0, "flux": 0.0, "flux2": 0.0, "flux2_9b": 0.0}
+HANDOFF_NAMES = {"sd15": "SD 1.5", "sdxl": "SDXL", "zimage": "Z-Image", "flux": "Flux", "flux2": "Flux.2 Klein 4B",
+                 "flux2_9b": "Flux.2 Klein 9B"}
 
 
 def plan(settings, gpu, ram):
@@ -85,9 +90,11 @@ def plan(settings, gpu, ram):
         extras.append(("Control finders", 0, finders))
     hand = str(cfg.get("handoff_file") or "")
     if any(setting_list.handoff_parts(cfg)):
-        kind = "sdxl" if checkpoint_kind(hand) == "sdxl" else "sd15"
+        about = describe_checkpoint(hand) or {}
+        kind = about.get("kind") + ("_9b" if about.get("size") == "9b" else "") if about.get("kind") else "sd15"
+        kind = kind if kind in HANDOFF_RAM_GB else "sd15"
         extras.append(("Handoff model, between its steps", HANDOFF_VRAM_GB[kind], 0))
-        ram_extras.append({"kind": "extra", "label": f"Handoff model ({'SDXL' if kind == 'sdxl' else 'SD 1.5'}), waiting in RAM",
+        ram_extras.append({"kind": "extra", "label": f"Handoff model ({HANDOFF_NAMES[kind]}), waiting in RAM",
                            "gb": HANDOFF_RAM_GB[kind], "loading": HANDOFF_LOAD_GB[kind]})
     extra_parts = [{"kind": "extra", "label": name, "gb": gb} for name, gb, _ in extras if gb >= 0.05]
     extra_vram = sum(gb for _, gb, _ in extras)
@@ -132,23 +139,33 @@ _kinds = {}
 
 
 def checkpoint_kind(path):
-    """"sd15" or "sdxl" for a checkpoint Handoff can use, or None for anything else, such as Flux, SD 3 or SD 2.
-    It reads the names in the file's header, which is quick and needs no torch. File size can't tell: some
-    SD 1.5 files are over 5GB."""
+    """"sd15", "sdxl", "zimage" or "flux" for a model Handoff can use, or None for anything else, such as SD 3,
+    SD 2 or Flux.2. It reads the names in the file's header, which is quick and needs no torch. File size can't
+    tell: some SD 1.5 files are over 5GB."""
+    return (describe_checkpoint(path) or {}).get("kind")
+
+
+def describe_checkpoint(path):
+    """{kind, and for Z-Image and Flux their variant, label and defaults}, or None."""
+    import flowfiles
     try:
         stat = os.stat(path)
         key = (path, stat.st_mtime, stat.st_size)
         if key not in _kinds:
-            with open(path, "rb") as f:
-                length = int.from_bytes(f.read(8), "little")
-                names = json.loads(f.read(length)) if 0 < length < 200 * 2**20 else {}
-            unet = any(k.startswith("model.diffusion_model.input_blocks.") for k in names)
-            if unet and any(k.startswith("conditioner.embedders.1.") for k in names):
-                _kinds[key] = "sdxl"
-            elif unet and any(k.startswith("cond_stage_model.transformer.") for k in names):
-                _kinds[key] = "sd15"
+            _kinds[key] = None
+            if path.lower().endswith(".gguf"):
+                _kinds[key] = flowfiles.describe(path)
             else:
-                _kinds[key] = None
+                with open(path, "rb") as f:
+                    length = int.from_bytes(f.read(8), "little")
+                    names = json.loads(f.read(length)) if 0 < length < 200 * 2**20 else {}
+                unet = any(k.startswith("model.diffusion_model.input_blocks.") for k in names)
+                if unet and any(k.startswith("conditioner.embedders.1.") for k in names):
+                    _kinds[key] = {"kind": "sdxl"}
+                elif unet and any(k.startswith("cond_stage_model.transformer.") for k in names):
+                    _kinds[key] = {"kind": "sd15"}
+                else:
+                    _kinds[key] = flowfiles.describe(path)
         return _kinds[key]
     except (OSError, ValueError):
         return None

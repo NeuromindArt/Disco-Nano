@@ -1,5 +1,7 @@
 """Handoff: a Stable Diffusion checkpoint paints the first part of the path from noise, and Disco carries on.
 
+This file covers SD 1.5 and SDXL; Z-Image, Flux.1 and Flux.2 Klein work the same way in flow.py.
+
 The checkpoint (SD 1.5 or SDXL, one .safetensors file) denoises its own latent for its share of the
 steps. Its estimate of the finished picture at that point is decoded to pixels, and Disco starts from
 the point on its own schedule with the same share of signal, so the two models share one path. With a
@@ -19,6 +21,14 @@ from PIL import Image
 import memory
 
 GB = 2**30
+
+
+def load(path, status, device):
+    """The handoff model for a file: SD 1.5 and SDXL here, Z-Image and Flux in flow.py."""
+    import flow
+    if path.lower().endswith(".gguf") or flow.model_kind(path):
+        return flow.FlowHandoff(path, status, device)
+    return Handoff(path, status, device)
 
 
 def is_xl(path):
@@ -146,6 +156,9 @@ class Handoff:
             out = None
             gc.collect()
             torch.cuda.empty_cache()
+
+    def finish_size(self, width, height):
+        return finish_size(width, height)
 
     def needs_room(self, width, height, painted=False):
         """Bytes the checkpoint needs on the GPU, with its working memory, for a frame this size. painted means

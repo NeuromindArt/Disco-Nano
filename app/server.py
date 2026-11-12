@@ -28,6 +28,7 @@ from PIL import Image, ImageOps
 
 print("Checking folders", flush=True)
 import budget
+import flowfiles
 import keyframes
 import models
 import paths
@@ -789,10 +790,15 @@ async def render(request: Request):
                 raise HTTPException(400, "Choose a video file for Video Input.")
         handoff_file = str(settings.get("handoff_file") or "")
         if any(handoff_parts(settings)):
-            if not handoff_file.lower().endswith(".safetensors") or not os.path.isfile(handoff_file):
-                raise HTTPException(400, "The handoff model must be a .safetensors checkpoint that exists. Choose it again in Handoff.")
-            if not budget.checkpoint_kind(handoff_file):
-                raise HTTPException(400, "Handoff takes Stable Diffusion 1.5 and SDXL checkpoints, and this is another kind of model.")
+            if not handoff_file.lower().endswith(MODEL_FILES) or not os.path.isfile(handoff_file):
+                raise HTTPException(400, "The handoff model must be a .safetensors or .gguf file that exists. Choose it again in Handoff.")
+            kind = budget.checkpoint_kind(handoff_file)
+            if not kind:
+                raise HTTPException(400, HANDOFF_KINDS)
+            missing = flowfiles.missing_parts(handoff_file, kind) if kind in flowfiles.KINDS else []
+            if missing:
+                raise HTTPException(400, f"{flowfiles.KINDS[kind]} also needs its {' and '.join(missing)}. Nano looks for "
+                                         "them in the models folder the model is in, subfolders included, as ComfyUI keeps them.")
         for name in needed:
             if name in models.FILES and not os.path.exists(models.path_of(name)):
                 raise HTTPException(400, f"{name} isn't downloaded yet. Get it from Models in Settings.")
@@ -826,9 +832,12 @@ def stop():
         # A worker holding models from an earlier render ends cleanly at its next step, a handoff model's included,
         # so those models stay loaded. A first render that's still loading has nothing to keep, so it just ends.
         kept = current.worker is not None and current.worker.jobs > 1
-        if current.kind == "render" and (current.sampling_started or kept):
+        asked = os.path.exists(os.path.join(current.job_dir, "stop"))
+        # A second Stop ends it now, for a step that is taking too long, such as a prompt encoded on the CPU. Its
+        # models load again next time.
+        if current.kind == "render" and (current.sampling_started or kept) and not asked:
             open(os.path.join(current.job_dir, "stop"), "w").close()
-            current.message = "Stopping after this step"
+            current.message = "Stopping after this step. Stop again to end it now."
         else:
             current.proc.terminate()  # still loading, nothing to preserve; the next render starts a new worker
             current.state, current.message = "stopped", FRIENDLY["stopped"]
@@ -1182,10 +1191,16 @@ def pick_checkpoint(body: dict, request: Request):
     """Opens Windows' file picker for the handoff model. The checkpoint is read where it is, never copied, and
     its folder joins the checkpoint folders so the list finds its neighbours too."""
     local_only(request)
-    picked = pick_file(body.get("start", ""), "Choose a Stable Diffusion 1.5 or SDXL checkpoint", "Checkpoints|*.safetensors")
+    picked = pick_file(body.get("start", ""), "Choose an SD 1.5, SDXL, Z-Image, Flux or Flux.2 Klein model", "Models|*.safetensors;*.gguf")
     if picked["path"]:
+        if not budget.checkpoint_kind(picked["path"]):
+            raise HTTPException(400, HANDOFF_KINDS)
         add_checkpoint_dir(os.path.dirname(picked["path"]))
     return picked
+
+
+MODEL_FILES = (".safetensors", ".gguf")
+HANDOFF_KINDS = "Handoff takes SD 1.5, SDXL, Z-Image, Flux.1 and Flux.2 Klein models, and this is another kind of model."
 
 
 def add_checkpoint_dir(folder):
@@ -1197,7 +1212,8 @@ def add_checkpoint_dir(folder):
 
 HIDDEN_FOLDERS = {"$recycle.bin", "system volume information", "recovery", "config.msi"}
 # The files each kind of choice shows. A folder choice shows its models too, so you can tell the right folder.
-BROWSE_KINDS = {"checkpoint": (".safetensors",), "checkpoint-folder": (".safetensors",), "upscaler": (".pth", ".safetensors"), "folder": ()}
+BROWSE_KINDS = {"checkpoint": (".safetensors", ".gguf"), "checkpoint-folder": (".safetensors", ".gguf"),
+                "upscaler": (".pth", ".safetensors"), "folder": ()}
 
 
 @app.get("/api/browse")
@@ -1234,10 +1250,10 @@ def add_checkpoint(body: dict, request: Request):
     """A checkpoint chosen in the page's own browser. Its folder joins the checkpoint folders, as with Browse."""
     no_network_paths(request, body.get("path", ""))
     path = os.path.abspath(str(body.get("path", "")))
-    if not path.lower().endswith(".safetensors") or not os.path.isfile(path):
-        raise HTTPException(400, "Choose a .safetensors checkpoint.")
+    if not path.lower().endswith(MODEL_FILES) or not os.path.isfile(path):
+        raise HTTPException(400, "Choose a .safetensors or .gguf model.")
     if not budget.checkpoint_kind(path):
-        raise HTTPException(400, "Handoff takes Stable Diffusion 1.5 and SDXL checkpoints, and this is another kind of model.")
+        raise HTTPException(400, HANDOFF_KINDS)
     add_checkpoint_dir(os.path.dirname(path))
     return {"path": path}
 
@@ -1323,35 +1339,47 @@ def find_other_apps():
     return found
 
 
+def model_folders():
+    """The checkpoint folders, and beside a checkpoints folder, the unet and diffusion_models folders where ComfyUI
+    keeps Z-Image and Flux. Drives that are unplugged for now are skipped."""
+    folders = []
+    for top in list(CHECKPOINT_DIRS):
+        beside = [os.path.join(os.path.dirname(os.path.normpath(top)), n) for n in ("unet", "diffusion_models")] \
+            if os.path.basename(os.path.normpath(top)).lower() == "checkpoints" else []
+        for folder in [top, *beside]:
+            if os.path.isdir(folder) and os.path.normcase(folder) not in map(os.path.normcase, folders):
+                folders.append(folder)
+    return folders
+
+
 @app.get("/api/checkpoints")
 def checkpoints():
-    """Stable Diffusion checkpoints for the Handoff list: in the checkpoint folders, subfolders included. Like the upscalers, they are read where they are,
-    so a browser on another PC picks from the files on this one. A file found twice, such as in a backup, shows
-    once. Models Handoff can't use, such as Flux or SD 3, are left out. Each one's group is its subfolder."""
+    """Models for the Handoff list: SD 1.5, SDXL, Z-Image, Flux.1 and Flux.2 Klein, in the model folders, subfolders included.
+    Like the upscalers, they are read where they are, so a browser on another PC picks from the files on this one.
+    A file found twice, such as in a backup, shows once. Models Handoff can't use, such as SD 3 or Flux.2, are left
+    out. Each one's group is its subfolder."""
     if _upgrade["thread"] is not None:  # the first list after an update waits for its one search
         _upgrade["thread"].join(timeout=15)
     found, seen = [], set()
-    for top in list(CHECKPOINT_DIRS):
-        if not os.path.isdir(top):
-            continue  # a drive that is unplugged for now
+    for top in model_folders():
         for folder, subfolders, names in os.walk(top):
             subfolders[:] = sorted(s for s in subfolders if not s.startswith(".")) if folder.count(os.sep) - top.count(os.sep) < 3 else []
             for n in sorted(names, key=str.lower):
-                if not n.lower().endswith(".safetensors"):
+                if not n.lower().endswith(MODEL_FILES):
                     continue
                 path = os.path.join(folder, n)
                 try:
                     size = os.path.getsize(path)
                 except OSError:
                     continue
-                name = os.path.relpath(path, top)[:-12].replace(os.sep, "/")
+                name = os.path.splitext(os.path.relpath(path, top))[0].replace(os.sep, "/")
                 if (name.lower(), size) in seen:
                     continue
                 seen.add((name.lower(), size))
-                kind = budget.checkpoint_kind(path)
-                if kind:
+                about = budget.describe_checkpoint(path)
+                if about:
                     group, _, short = name.rpartition("/")
-                    found.append({"path": path, "name": short, "group": group, "sdxl": kind == "sdxl"})
+                    found.append({"path": path, "name": short, "group": group, "sdxl": about["kind"] == "sdxl", **about})
     found.sort(key=lambda f: (f["group"].lower(), f["name"].lower()))
     return {"checkpoints": found, "folders": CHECKPOINT_DIRS}
 

@@ -331,7 +331,9 @@ def limit_vram():
     """
     global cap_bytes
     free, total = torch.cuda.mem_get_info()
-    cap = free - int(VRAM_HEADROOM_GB * 2**30)
+    # What this worker already holds is its own to use, not another app's. Counted as taken, it was taken twice:
+    # once here and again in room(), which subtracts it from the cap.
+    cap = free + torch.cuda.memory_reserved() - int(VRAM_HEADROOM_GB * 2**30)
     cap_bytes = max(cap, 2**30)
     torch.cuda.set_per_process_memory_fraction(cap_bytes / total)
     return cap / 2**30
