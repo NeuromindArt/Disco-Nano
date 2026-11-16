@@ -49,6 +49,8 @@ import argparse
 import json
 import math
 import os
+import random
+import traceback
 
 import numpy as np
 import torch
@@ -172,11 +174,15 @@ def keep(picture, path):
 
 
 class Erase:
-    def __init__(self, job_dir, device, diffusion, status, inpainter=None):
+    def __init__(self, job_dir, device, diffusion, status, inpainter=None, tried=None):
         self.job_dir, self.path = job_dir, os.path.join(job_dir, "erase.json")
         self.device, self.diffusion, self.status = device, diffusion, status
-        # inpainter(picture, hard, soft, asked): the picture, 0 to 1, with the area repainted as the page asked
-        self.inpainter = inpainter
+        # inpainter(picture, hard, asked): the picture, 0 to 1, with the area repainted as the page asked, and the soft
+        # mask it went back in through. tried(**event) tells the page a try is ready.
+        self.inpainter, self.tried = inpainter, tried
+        self.shown = None  # the picture the page shows, -1 to 1, which a pause holds on and tries paint over
+        self.tries = {"id": None, "made": []}  # the inpaint tries painted for the page's latest ask, as (picture, soft mask)
+        self.tries_read = None
         self.read = None
         self.count = 0
         self.last = None  # the last fix's picture and soft mask, for cover()
@@ -200,6 +206,56 @@ class Erase:
         self.read = changed
         return asked
 
+    def try_paint(self, pausing):
+        """During a pause: paints the inpaint tries the page asked for in tries.json over the picture it shows, keeps
+        each, and saves it for the page to show in place. A new ask with the same id adds more tries; a new id starts
+        over. It stops early when the pause ends. An error is told to the page, and the render carries on."""
+        path = os.path.join(self.job_dir, "tries.json")
+        try:
+            changed = os.path.getmtime(path)
+            if changed == self.tries_read:
+                return
+            with open(path, encoding="utf-8") as f:
+                asked = json.load(f)
+            ask, count, inpainting = asked["id"], int(asked["count"]), asked["inpaint"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return  # none, or one being written
+        self.tries_read = changed
+        if self.shown is None or self.inpainter is None:
+            return
+        if ask != self.tries["id"]:
+            self.tries = {"id": ask, "made": []}
+        estimate = self.shown.detach().float()
+        h, w = estimate.shape[-2:]
+        picture = estimate.add(1).div(2).clamp(0, 1)
+        try:
+            hard, _ = masks(Image.open(inpainting["mask"]), w, h, estimate.device)
+            start = fill(picture, hard, self.device, self.status) if inpainting["mode"] == "remove" else picture
+            for _ in range(count):
+                if not pausing():
+                    return
+                painted, soft = self.inpainter(start, hard, {**inpainting, "seed": random.randrange(2**32)})
+                made = len(self.tries["made"])
+                self.tries["made"].append((painted.cpu(), soft.cpu()))
+                where = os.path.join(self.job_dir, f"try-{ask}-{made}.jpg")
+                Image.fromarray((painted[0].permute(1, 2, 0).clamp(0, 1).cpu().numpy() * 255).round().astype(np.uint8)).save(where, quality=92)
+                self.tried(id=ask, k=made, path=where)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as e:
+            traceback.print_exc()  # the whole of it in the job's log
+            reason = str(e).strip().splitlines()[0][:200] if str(e).strip() else type(e).__name__
+            self.tried(id=ask, error=f"Inpainting failed: {reason}")
+
+    def chosen(self, inpainting, like):
+        """The try the page chose, as (picture, soft mask) like `like`, or None if it isn't one painted here."""
+        pick = inpainting.get("chosen") or {}
+        made = self.tries["made"]
+        if pick.get("id") != self.tries["id"] or not isinstance(pick.get("k"), int) or not 0 <= pick["k"] < len(made):
+            return None
+        painted, soft = made[pick["k"]]
+        return painted.to(like.device, like.dtype), soft.to(like.device, like.dtype)
+
     def step(self, estimate):
         """Erases, inpaints and clones what the page asked for on the picture so far, `estimate`, and returns True, or False
         with nothing new. The caller covers what the render is held to, then calls restart()."""
@@ -221,14 +277,19 @@ class Erase:
         if inpainting:
             hard, soft = masks(Image.open(inpainting["mask"]), w, h, estimate.device)
             if hard.any():
-                start = fill(picture, hard, self.device, self.status) if inpainting["mode"] == "remove" else picture
+                picked = self.chosen(inpainting, picture)
+                start = picture if picked or inpainting["mode"] != "remove" else fill(picture, hard, self.device, self.status)
                 try:
-                    picture = self.inpainter(start, hard, soft, inpainting).to(picture.device, picture.dtype)
+                    painted, soft = picked or self.inpainter(start, hard, inpainting)
+                    # A try was painted over the picture the pause held on, and only its area and soft edge are used
+                    painted, soft = painted.to(picture.device, picture.dtype), soft.to(picture.device, picture.dtype)
+                    picture = picture * (1 - soft) + painted * soft
                     cloned = soft
                     back = back * (1 - soft)  # painted over an erase: the inpaint is what goes there
                 except (KeyboardInterrupt, SystemExit):
                     raise
                 except Exception as e:  # the render carries on: a Remove as an erase, the others as they were
+                    traceback.print_exc()  # the whole of it in the job's log
                     reason = str(e).strip().splitlines()[0][:200] if str(e).strip() else type(e).__name__
                     if inpainting["mode"] == "remove":
                         self.status(f"Inpainting failed, so the area was erased instead: {reason}")
@@ -332,9 +393,10 @@ def erase_image(image_path, mask_path, clones, out_path, device, status=print, i
                 picture = fill(picture, hard, device, status)
             unit = lambda m: Image.fromarray((m[0, 0].numpy() * 255).round().astype(np.uint8))
             model = handoff.load(inpainting["file"], status, device)
-            painted = inpaint.paint(model, inpaint.to_pil(picture), unit(hard), unit(soft), inpainting["prompt"],
+            painted, _ = inpaint.paint(model, inpaint.to_pil(picture), unit(hard), inpainting["prompt"],
                                     inpainting["strength"], inpainting["steps"], inpainting["guidance"],
-                                    random.randint(0, 2**32 - 1), status)
+                                    random.randint(0, 2**32 - 1), status, context=inpainting.get("context", inpaint.CONTEXT),
+                                    grow_by=inpainting.get("grow", inpaint.GROW), blend=inpainting.get("blend", inpaint.BLEND))
             picture = inpaint.from_pil(painted, picture)
     layers = read_clones(clones, image.width, image.height, "cpu")
     if layers:

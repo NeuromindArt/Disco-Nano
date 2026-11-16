@@ -31,6 +31,7 @@ class Hooks:
         # Regional prompts: boxes with prompts of their own. A pause can change them, which counts up the revision.
         self.regions, self.regions_rev, self.regions_read = regions, 0, None
         self.started = False
+        self.while_paused = None  # called over and over while a pause holds, for Fix's inpaint tries
         # While a keep_steps file is in Nano's data folder, every preview is kept in the job's steps folder, named by
         # the step it came after, to see afterward what a render did step by step.
         self.steps = os.path.join(job_dir, "steps") if os.path.exists(os.path.join(paths.HOME, "keep_steps")) else None
@@ -44,6 +45,10 @@ class Hooks:
 
     def stopped(self):
         return os.path.exists(self.stop_file)
+
+    def tried(self, **data):
+        """An inpaint try, painted during a pause, for the page to show."""
+        emit("tried", **data)
 
     def step(self, j, total, batch, n_batches, seed, can_hold=True, at=None):
         """Step j, counted from 0, of `total`. The page shows the steps done, from 1 to `total`. Tiles report each
@@ -74,6 +79,8 @@ class Hooks:
         while os.path.exists(self.pause_file):
             if os.path.exists(self.stop_file):
                 raise KeyboardInterrupt
+            if self.while_paused:
+                self.while_paused()
             time.sleep(0.2)
         emit("resumed")
 

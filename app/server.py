@@ -92,6 +92,7 @@ class Task:
         self.paused = False  # a status message came between steps
         self.holding = False  # paused by the page, for regions to be drawn or something erased
         self.pause_for = ""  # "regions" or "erase", so a page opened during the pause shows the right editor
+        self.tries = {"id": 0, "made": [], "asked": 0, "error": None}  # Fix's inpaint tries during this pause
         self.seed = None
         self.images = []
         self.preview_rev = 0
@@ -274,8 +275,11 @@ def handle_event(task, e):
     kind = e["type"]
     with lock:
         if kind == "status":
-            task.state, task.message = "loading", e["message"]
-            task.paused = True  # set by a status between steps, such as a handoff, and cleared at the next step
+            if task.holding:  # an inpaint try painting during a pause: the render is still paused
+                task.message = e["message"]
+            else:
+                task.state, task.message = "loading", e["message"]
+                task.paused = True  # set by a status between steps, such as a handoff, and cleared at the next step
         elif kind == "sampling":
             task.state, task.message = "rendering", "Upscaling" if task.kind == "upscale" else "Rendering"
             task.total, task.n_batches, task.seed = e["total_steps"], e["n_batches"], e.get("seed")
@@ -288,8 +292,17 @@ def handle_event(task, e):
         elif kind == "paused":
             task.state, task.holding = "paused", True
             task.message = "Paused. Paint over what to fix." if task.pause_for == "erase" else "Paused. Draw regions, then Continue."
+        elif kind == "tried":
+            if e.get("id") == task.tries["id"]:
+                if e.get("error"):
+                    task.tries["error"], task.tries["asked"] = e["error"], len(task.tries["made"])
+                else:
+                    task.tries["made"].append(e["k"])
+            if task.holding and task.tries["asked"] <= len(task.tries["made"]):
+                task.message = "Paused. Paint over what to fix."  # not the last try's step count
         elif kind == "resumed":
             task.state, task.message, task.holding = "rendering", "Rendering", False
+            task.tries.update(made=[], asked=0, error=None)  # a pause's tries are for its own picture
             task.step_times.clear()  # the wait isn't render time
         elif kind == "preview":
             task.preview_rev += 1
@@ -324,6 +337,8 @@ def task_json(task):
         "log": list(task.log)[-14:] if task.state in ("error", "oom") else [],
         "pausing": task.kind == "render" and os.path.exists(os.path.join(task.job_dir, "pause")),
         "pause_for": task.pause_for if task.kind == "render" else "",
+        "tries": {"id": task.tries["id"], "made": [f"/api/try/{task.job_id}/{task.tries['id']}/{k}" for k in task.tries["made"]],
+                  "painting": task.tries["asked"] > len(task.tries["made"]), "error": task.tries["error"]} if task.kind == "render" else None,
         "active": task.running(),
     }
 
@@ -700,6 +715,8 @@ def model_list():
     def kind(name):
         if name in (models.PARTNER, models.DEPTH, models.POSE, models.PERSON, models.FACES, models.RIFE, models.LAMA, *models.ROBUST):
             return "partner"
+        if name == models.FLUX_FILL:
+            return "inpaint"
         return "upscaler" if name == models.UPSCALER else "helper" if name == "secondary" else "diffusion"
     return {"models": [{"name": n, "label": models.LABELS.get(n, n), "kind": kind(n), "about": models.ABOUT[n],
                         "size_gb": models.FILES[n]["size_gb"], "cuts": models.CUT_SCHEDULES.get(models.cut_style(n)),
@@ -805,6 +822,8 @@ async def render(request: Request):
             kind = budget.checkpoint_kind(handoff_file)
             if not kind:
                 raise HTTPException(400, HANDOFF_KINDS)
+            if (budget.describe_checkpoint(handoff_file) or {}).get("inpaint_only"):
+                raise HTTPException(400, "That model is made for inpainting. Use it as the Inpaint model in Settings, and choose another for Handoff.")
             missing = flowfiles.missing_parts(handoff_file, kind) if kind in flowfiles.KINDS else []
             if missing:
                 raise HTTPException(400, f"{flowfiles.KINDS[kind]} also needs its {' and '.join(missing)}. Nano looks for "
@@ -1016,11 +1035,21 @@ def inpaint_from(asked):
                                    (guidance, 0, 30, "Inpaint guidance is 0 to 30.")):
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
             raise HTTPException(400, what)
+    shape = {"context": asked.get("context", inpaint.CONTEXT), "grow": asked.get("grow", inpaint.GROW), "blend": asked.get("blend", inpaint.BLEND)}
+    for value, low, high, what in ((shape["context"], 1, 4, "Inpaint context is 1 to 4."), (shape["grow"], 0, 200, "Inpaint grow is 0 to 200 pixels."),
+                                   (shape["blend"], 0, 200, "Inpaint blend is 0 to 200 pixels.")):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+            raise HTTPException(400, what)
     prompt = asked.get("prompt") or ""
     if not isinstance(prompt, str) or len(prompt) > 1000:
         raise HTTPException(400, "The inpaint prompt is text of up to 1000 characters.")
-    return {"mask": mask_from(asked.get("mask")), "prompt": prompt, "mode": mode, "strength": float(strength),
-            "file": path, "steps": int(steps), "guidance": float(guidance)}
+    chosen = asked.get("chosen")
+    if chosen is not None and not (isinstance(chosen, dict) and all(isinstance(chosen.get(k), int) and not isinstance(chosen.get(k), bool)
+                                                                     and chosen[k] >= 0 for k in ("id", "k"))):
+        raise HTTPException(400, "The chosen try isn't readable.")
+    return {"mask": mask_from(asked.get("mask")), "prompt": prompt, "mode": mode, "strength": float(strength), "chosen": chosen,
+            "file": path, "steps": int(steps), "guidance": float(guidance), "context": float(shape["context"]),
+            "grow": int(shape["grow"]), "blend": int(shape["blend"])}
 
 
 def fix_from(body):
@@ -1085,6 +1114,43 @@ def erase_mask(body: dict):
             json.dump({"mask": path, "clones": clones, "inpaint": inpainting, "n": n, "fresh": fresh}, f)
         os.replace(temp, os.path.join(current.job_dir, "erase.json"))  # whole before the worker reads it
     return {"ok": True}
+
+
+@app.post("/api/inpaint-tries")
+def inpaint_tries(body: dict):
+    """Paints `count` inpaint tries, 1 to 4, while a render is paused for Fix, for the page to choose from. `more`
+    adds them to the tries already painted for the same ask; otherwise they start over. Each shows in the status's
+    tries as it's ready, and Apply sends the chosen one with the fix."""
+    inpainting = inpaint_from(body.get("inpaint"))
+    count = body.get("count")
+    if inpainting is None or isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 4:
+        raise HTTPException(400, "Ask for 1 to 4 tries of an inpaint.")
+    with lock:
+        if not current or not current.running() or current.kind != "render" or not current.holding:
+            raise HTTPException(409, "Tries are painted while a render is paused for Fix.")
+        refuse_erase(current)
+        tries = current.tries
+        if not body.get("more"):
+            tries.update(id=tries["id"] + 1, made=[], asked=0)
+        tries["asked"], tries["error"] = len(tries["made"]) + count, None
+        inpainting["mask"].save(os.path.join(current.job_dir, f"tries-{tries['id']}.png"))
+        ask = {"id": tries["id"], "count": count, "inpaint": {**inpainting, "mask": os.path.join(current.job_dir, f"tries-{tries['id']}.png")}}
+        temp = os.path.join(current.job_dir, "tries.tmp")
+        with open(temp, "w", encoding="utf-8") as f:
+            json.dump(ask, f)
+        os.replace(temp, os.path.join(current.job_dir, "tries.json"))  # whole before the worker reads it
+        return {"id": tries["id"]}
+
+
+@app.get("/api/try/{job_id}/{ask}/{k}")
+def inpaint_try(job_id: str, ask: int, k: int):
+    """One inpaint try's picture, the size of the render."""
+    if not re.fullmatch(r"[0-9A-Za-z-]+", job_id):
+        raise HTTPException(400, "Bad job id.")
+    path = os.path.join(JOBS_DIR, job_id, f"try-{ask}-{k}.jpg")
+    if not os.path.isfile(path):
+        raise HTTPException(404, "No such try.")
+    return FileResponse(path, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/preview/{job_id}")

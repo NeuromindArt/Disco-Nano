@@ -51,8 +51,9 @@ def find_prefix(names, suffix, shape=None):
 
 
 def model_kind(path):
-    """"zimage", "flux" or "flux2" for a model Handoff can use, or None. Flux Fill, Canny and Depth take more
-    input channels, so those are left out, and of Flux.2 only Klein 4B and 9B fit."""
+    """"zimage", "flux" or "flux2" for a model Handoff or Inpaint can use, or None. Flux Fill takes the picture and
+    mask beside the noise, so more input channels, and is for Inpaint only. Canny and Depth are left out, and of
+    Flux.2 only Klein 4B and 9B fit."""
     try:
         names = header(path)
     except Exception:
@@ -66,7 +67,7 @@ def model_kind(path):
     if prefix is not None and find_prefix(names, "single_blocks.37.linear1.weight") is not None \
             and prefix + "vector_in.in_layer.weight" in names:
         size = names.get(prefix + "img_in.weight")
-        if size and sorted(size) == [64, 3072]:
+        if size and sorted(size) in ([64, 3072], [384, 3072]):
             return "flux"
     return None
 
@@ -92,13 +93,14 @@ DEFAULTS = {("zimage", "turbo"): {"handoff_steps": 8, "handoff_guidance": 1},
             ("zimage", "base"): {"handoff_steps": 25, "handoff_guidance": 4},
             ("flux", "dev"): {"handoff_steps": 20, "handoff_guidance": 3.5},
             ("flux", "schnell"): {"handoff_steps": 4, "handoff_guidance": 1},
+            ("flux", "fill"): {"handoff_steps": 30, "handoff_guidance": 30},
             ("flux2", "klein"): {"handoff_steps": 4, "handoff_guidance": 1},
             ("flux2", "base"): {"handoff_steps": 20, "handoff_guidance": 5}}
 
 
 def describe(path):
-    """{kind, variant, label, defaults, and for Klein its size} for the Handoff list, or None for a model it
-    can't use."""
+    """{kind, variant, label, defaults, for Klein its size, and inpaint_only for one made only to inpaint} for the
+    model lists, or None for a model they can't use."""
     kind = model_kind(path)
     if not kind:
         return None
@@ -109,6 +111,8 @@ def describe(path):
         about["label"] = "Z-Image Turbo" if which == "turbo" else "Z-Image"
     elif kind == "flux":
         about["label"] = f"Flux {which}"
+        if which == "fill":
+            about["inpaint_only"] = True
     else:
         about["size"] = klein_size(names)
         about["label"] = f"Flux.2 Klein{' Base' if which == 'base' else ''} {about['size'].upper()}"
@@ -117,13 +121,15 @@ def describe(path):
 
 def variant(path, kind, names):
     """Z-Image Turbo or Base, and Klein or Klein Base, from the file's or its folder's name, since the weights
-    look alike. Flux dev has a guidance embedding, which schnell lacks."""
+    look alike. Flux dev has a guidance embedding, which schnell lacks, and Fill takes more input channels."""
     # Only the file's own name and its folder's: folders further up are often sorted by family, such as ZImageBase.
     near = os.path.join(os.path.basename(os.path.dirname(path)), os.path.basename(path)).lower()
     if kind == "zimage":
         return "turbo" if "turbo" in near else "base"
     if kind == "flux2":
         return "base" if "base" in near else "klein"
+    if 384 in names.get(find_prefix(names, "double_blocks.0.img_attn.qkv.weight") + "img_in.weight", []):
+        return "fill"
     return "dev" if find_prefix(names, "guidance_in.in_layer.weight") is not None else "schnell"
 
 
@@ -177,19 +183,31 @@ PART_LABELS = {"qwen3_4b": "Qwen3-4B text encoder", "qwen3_8b": "Qwen3-8B text e
                "vae32": "Flux.2 autoencoder (flux2-vae.safetensors)"}
 
 
-def search_roots(path):
-    """Where a model's other parts may be: the nearest folder called models above it, as in ComfyUI and the
-    web UIs, or else the folder two above it."""
+def models_root(path):
+    """The nearest folder called models above a file, as in ComfyUI and the web UIs, or else the folder two above
+    it."""
     folder = os.path.dirname(os.path.abspath(path))
     here = folder
     for _ in range(6):
         if os.path.basename(here).lower() == "models":
-            return [here]
+            return here
         parent = os.path.dirname(here)
         if parent == here:
             break
         here = parent
-    return [os.path.dirname(os.path.dirname(folder)) or folder]
+    return os.path.dirname(os.path.dirname(folder)) or folder
+
+
+def search_roots(path):
+    """Where a model's other parts may be, nearest first: the models folder around it, then those around the
+    checkpoint folders set in Settings, so a model Nano downloaded into its own folder finds the parts ComfyUI
+    keeps."""
+    import paths
+    roots = []
+    for root in [models_root(path), *(models_root(os.path.join(d, "x")) for d in paths.local_settings().get("checkpoint_dirs") or [])]:
+        if os.path.isdir(root) and os.path.normcase(root) not in map(os.path.normcase, roots):
+            roots.append(root)
+    return roots
 
 
 _found = {}
@@ -209,25 +227,27 @@ def find_parts(path, kind):
         prefix = None if path.lower().endswith(".gguf") else part_prefix(path, names, part)
         if prefix is not None:
             found[part] = (path, prefix)
-    candidates = []
     for root in search_roots(path):
+        if all(part in found for part in wanted):
+            break
+        candidates = []
         for folder, subfolders, files in os.walk(root):
             depth = folder.count(os.sep) - root.count(os.sep)
             subfolders[:] = [s for s in subfolders if not s.startswith(".")] if depth < 5 else []
             candidates += [os.path.join(folder, f) for f in files if f.lower().endswith(".safetensors")]
-    for part in wanted:
-        if part in found:
-            continue
-        hinted = [c for c in candidates if any(h in os.path.basename(c).lower() for h in NAME_HINTS[part])]
-        # Smaller first: an fp8 encoder over its bf16 twin, which loads faster and ends up the same in memory.
-        for candidate in sorted(hinted, key=lambda c: os.path.getsize(c)):
-            try:
-                prefix = part_prefix(candidate, header(candidate), part)
-            except Exception:
+        for part in wanted:
+            if part in found:
                 continue
-            if prefix is not None:
-                found[part] = (candidate, prefix)
-                break
+            hinted = [c for c in candidates if any(h in os.path.basename(c).lower() for h in NAME_HINTS[part])]
+            # Smaller first: an fp8 encoder over its bf16 twin, which loads faster and ends up the same in memory.
+            for candidate in sorted(hinted, key=lambda c: os.path.getsize(c)):
+                try:
+                    prefix = part_prefix(candidate, header(candidate), part)
+                except Exception:
+                    continue
+                if prefix is not None:
+                    found[part] = (candidate, prefix)
+                    break
     _found[key] = found
     return found
 

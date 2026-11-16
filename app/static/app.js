@@ -1647,7 +1647,7 @@ function showBlocked() {
 /* The Settings window holds how the app behaves, with its folders, models and network. Settings that shape the picture are in the cards. */
 const APP_FIELDS = ["keep_models_loaded", "cpu_threads", "display_rate", "save_progress_video"];
 // Fix's Inpaint: the model it paints with and how. They shape no render, so they live here, not in a card.
-const INPAINT_FIELDS = ["inpaint_file", "inpaint_steps", "inpaint_guidance"];
+const INPAINT_FIELDS = ["inpaint_file", "inpaint_steps", "inpaint_guidance", "inpaint_context", "inpaint_grow", "inpaint_blend"];
 
 function buildAdvanced() {
   const body = $("advBody");
@@ -2124,7 +2124,7 @@ function advField(f, compact = false) {
     wrap.append(name, input);
   } else if (f.name === "inpaint_file") {
     input = document.createElement("select");
-    fillModelPick(input, current, "None");
+    fillModelPick(input, current, "None", true, true);
     wrap.append(name, input);
   } else if (f.kind === "number" && sliderRange(f)) {
     // A slider over the useful range, with a box for typing any value, including past either end.
@@ -2902,16 +2902,23 @@ async function loadCheckpoints() {
 /* Fills a model list: the checkpoints grouped by the subfolder each is in, as ComfyUI sorts them, with `current`
    kept even when it isn't in a checkpoint folder. `none` labels the empty choice, which `always` keeps; otherwise it
    shows only until a model is chosen. */
-function fillModelPick(select, current, none, always = true) {
+/* A model list from the checkpoints, grouped by folder. Models made only for inpainting, such as Flux Fill, are
+   left out of Handoff's list and come first in Inpaint's. */
+function fillModelPick(select, current, none, always = true, inpainting = false) {
   const options = always || !current ? [option("", none)] : [];
   const groups = new Map();
+  const made = document.createElement("optgroup");
+  made.label = "Made for inpainting";
   for (const c of checkpointList) {
+    if (c.inpaint_only && !inpainting) continue;
     const label = c.label ? `${c.name} (${c.label})` : c.sdxl ? `${c.name} (SDXL)` : c.name;
+    if (c.inpaint_only) { made.append(option(c.path, label)); continue; }
     if (!c.group) { options.push(option(c.path, label)); continue; }
     if (!groups.has(c.group)) groups.set(c.group, document.createElement("optgroup"));
     groups.get(c.group).label = c.group;
     groups.get(c.group).append(option(c.path, label));
   }
+  if (made.children.length) options.splice(options.length && !options[0].value ? 1 : 0, 0, made);
   options.push(...groups.values());
   if (current && !checkpointList.some((c) => c.path === current)) options.push(option(current, baseName(current).replace(/\.(safetensors|gguf)$/i, "")));
   select.replaceChildren(...options);
@@ -2936,7 +2943,7 @@ function showCheckpoints() {
   const current = state.handoff_file || state.handoff_last || "";
   fillModelPick(select, current, "Choose a model", false);
   const inpaint = $("adv-inpaint_file");
-  if (inpaint) fillModelPick(inpaint, lookValue("inpaint_file"), "None");
+  if (inpaint) fillModelPick(inpaint, lookValue("inpaint_file"), "None", true, true);
   $("handoffWhere").textContent = checkpointList.length ? ""
     : isLocal() ? "Browse to a checkpoint, or add checkpoint folders in Settings." : "Browse to a checkpoint on the PC that renders, or add checkpoint folders in Settings.";
 }

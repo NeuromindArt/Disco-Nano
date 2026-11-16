@@ -309,15 +309,18 @@ class SecondaryDiffusionImageNet2(nn.Module):
 # The render worker stays open between renders, and keeps the models it loaded in RAM for the next one. Each
 # render brings what it needs to the GPU, and put_away sends it all back to RAM when the render ends, so a
 # waiting worker holds no VRAM beyond its CUDA context. Closing the app ends the worker and frees it all. Models the
-# last render didn't use are let go, so switching checkpoints or settings doesn't pile up copies in RAM.
+# last render didn't use are let go, so switching checkpoints or settings doesn't pile up copies in RAM. A model only
+# Fix's Inpaint used is let go too: it's needed now and then, and holds many GB that the next render may want.
 _kept = {}
-_used = set()  # keys asked for during this render
+_used = set()  # keys asked for during this render, to keep for the next one
 _after_render = []  # undoes what a render changed in kept models or shared code, such as hooks
 
 
-def kept(key, build):
-    """The model kept under key, built the first time it is asked for."""
-    _used.add(key)
+def kept(key, build, brief=False):
+    """The model kept under key, built the first time it is asked for. A `brief` one is let go when the render ends,
+    unless the render also asked for it to keep."""
+    if not brief:
+        _used.add(key)
     if key not in _kept:
         _kept[key] = build()
     return _kept[key]
@@ -332,6 +335,7 @@ def put_away():
     for key in [k for k in _kept if k not in _used]:
         del _kept[key]
     _used.clear()
+    gc.collect()  # what was let go leaves RAM before the rest comes back to it from the GPU
     for item in _kept.values():
         for module in (item.parts() if hasattr(item, "parts") else [item]):
             module.to("cpu")
@@ -728,26 +732,31 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     hold = {"to": None}  # after Small first, the small picture the full size holds its broad shapes to
     hold_curve = schedule(cfg["small_hold_curve"]) if small and float(cfg["small_hold"] or 0) else None
     hold_size = max(8, min(side_x, side_y) // 24)  # shapes broader than this are held: 32 pixels at 1280x768
-    def inpainter(picture, hard, soft, asked):
-        """Fix's Inpaint: the picture, 0 to 1, with the area repainted by the Inpaint model the page chose. The model
-        is kept as the handoff model is, so a later inpaint, or a handoff with the same file, doesn't load it again,
-        and Disco waits in RAM while it paints if the two won't fit on the GPU together."""
+    def inpainter(picture, hard, asked):
+        """Fix's Inpaint: the picture, 0 to 1, with the area repainted by the Inpaint model the page chose, and the
+        soft mask it went back in through. The model is kept for the rest of the render, shared with a handoff that
+        uses the same file, so later inpaints and tries don't load it again, and let go when the render ends unless
+        the handoff uses it. Disco waits in RAM while it paints if the two won't fit on the GPU together."""
         import handoff
         import inpaint
         path = asked["file"]
-        painter = kept(("handoff", path, os.path.getmtime(path)), lambda: handoff.load(path, hooks.status, device))
+        painter = kept(("handoff", path, os.path.getmtime(path)), lambda: handoff.load(path, hooks.status, device), brief=True)
         image, size = inpaint.to_pil(picture), (picture.shape[-1], picture.shape[-2])
         unit = lambda m: Image.fromarray((m[0, 0].clamp(0, 1).cpu().numpy() * 255).round().astype(np.uint8))
         resting = [model, secondary_model, lpips_model, *(m.visual for m in clip_models), experiment.partner if experiment else None]
         release()
         with handoff.Parked(painter, resting, device, *painter.inpaint_size(*size), painted=True):
-            painted = inpaint.paint(painter, image, unit(hard), unit(soft), asked.get("prompt", ""), asked["strength"],
-                                    asked["steps"], asked["guidance"], seed + eraser.count, hooks.status,
-                                    getattr(hooks, "stopped", lambda: False))  # a new try paints anew
-        return inpaint.from_pil(painted, picture)
+            painted, paste = inpaint.paint(painter, image, unit(hard), asked.get("prompt", ""), asked["strength"],
+                                    asked["steps"], asked["guidance"], asked.get("seed", seed + eraser.count), hooks.status,
+                                    getattr(hooks, "stopped", lambda: False),  # a new try paints anew
+                                    asked.get("context", inpaint.CONTEXT), asked.get("grow", inpaint.GROW), asked.get("blend", inpaint.BLEND))
+        to_mask = lambda m: torch.from_numpy(np.asarray(m, dtype=np.float32) / 255)[None, None].to(picture.device)
+        return inpaint.from_pil(painted, picture), to_mask(paste)
 
     # Fix: what was painted over during a pause, erased, inpainted or cloned, and repainted by the steps left.
-    eraser = erase.Erase(hooks.job_dir, device, diffusion, hooks.status, inpainter) if getattr(hooks, "job_dir", None) else None
+    eraser = erase.Erase(hooks.job_dir, device, diffusion, hooks.status, inpainter, hooks.tried) if getattr(hooks, "job_dir", None) else None
+    if eraser:
+        hooks.while_paused = lambda: eraser.try_paint(hooks.pausing)  # inpaint tries, painted while the render waits
 
     def predict(x, t):
         """The model's own picture and noise for x at timestep t, without guidance, on x's device: for an erase."""
@@ -945,6 +954,8 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             last = progress["t"] == -1 or j + 1 == stop
             if j % cfg["display_rate"] == 0 or last or pausing():
                 hooks.preview(show(sample["pred_xstart"]))
+            if eraser:
+                eraser.shown = sample["pred_xstart"]
             hooks.step(j + before, total_steps, batch, n_batches, seed,  # after the preview, so a pause shows this step
                        at=1 - (progress["t"] + 1) / diffusion.num_timesteps)
             if j + 1 == stop:
@@ -998,6 +1009,8 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         image = torch.zeros_like(x)
         for j, i in enumerate(range(first, -1, -1)):
             progress["t"] = i
+            if eraser:
+                eraser.shown = image  # the last step's picture, which a pause here shows
             hooks.step(j + before, first + 1 + before, batch, n_batches, seed, at=1 - i / diffusion.num_timesteps)
             t = torch.tensor([i], device=device)
             at = min(int(1000 * (1 - (i + 1) / diffusion.num_timesteps)), 999)
@@ -1210,6 +1223,8 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             across = tiles.fades(final[0], side_x - overlap, grid, overlap)
             down = tiles.fades(final[1], side_y - overlap, grid, overlap)
             for number, (x, y) in enumerate(spots):
+                if eraser and not number:
+                    eraser.shown = latest
                 hooks.step(j * len(spots) + number, (first + 1) * len(spots), batch, n_batches, seed, can_hold=not number,
                            at=1 - i / diffusion.num_timesteps)
                 if eraser and not number and latest is not None and eraser.step(latest):

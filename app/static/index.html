@@ -382,6 +382,12 @@
                 <option value="remove" title="LaMa clears what's there first, then the model paints over its fill at Strength">Over a cleared area</option>
               </select>
               <label id="inpaintStrengthBox" class="region-strength" title="How much the model repaints. Lower keeps more of what it starts from.">Strength <input type="range" id="inpaintStrength" min="5" max="100" step="5"><span id="inpaintStrengthShown" class="brush-size"></span></label>
+              <label id="inpaintCountBox" class="region-strength" title="How many tries to paint at once, to choose from">Tries
+                <select id="inpaintCount"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+            </div>
+            <div id="inpaintTryRow" class="fix-row inpaint-tries" hidden>
+              <div id="inpaintTryList" class="try-list" role="listbox" aria-label="Inpaint tries"></div>
+              <button type="button" id="inpaintMore" class="default" title="Paint more tries to choose from">More tries</button>
             </div>
             <div class="fix-row fix-controls">
               <label class="region-strength" title="How wide the brush is. The [ and ] keys and the mouse wheel change it too.">Brush <input type="range" id="eraseBrush"><span id="eraseBrushSize" class="brush-size"></span></label>
@@ -570,7 +576,7 @@
     <h3>Fix</h3>
     <p>Press Fix beside Stop while a render runs and it pauses after the current step. Pick Erase, Clone or Inpaint, paint on the preview, then press Apply and continue. You can use all three in one pause. Fix works with Tiles, and is for stills.</p>
     <p>Erase removes what you paint over. LaMa fills the area from what is around it, and Disco repaints it over the steps left, so there's no seam. If it grows back, erase again later, or raise Noise beside Brush: it starts at the share of fresh noise that suits the step, and more keeps things from coming back, but too much late on leaves grain. Erase once you can see the thing, from about a third of the way through: before that, the change spreads to the rest of the picture. Past 80%, erased areas come out soft, as the steps left can't add detail to them.</p>
-    <p>Inpaint has a model of your own paint something into the area: choose it under Inpaint in Settings. Say what in the box beside it, or leave it empty for whatever fits around it. Fresh paints the area anew, Rework paints over what's there to change it, and Over a cleared area has LaMa clear it first. Strength sets how much Rework and Over a cleared area repaint.</p>
+    <p>Inpaint has a model of your own paint something into the area: choose it under Inpaint in Settings. Say what in the box beside it, or leave it empty for whatever fits around it. Fresh paints the area anew, Rework paints over what's there to change it, and Over a cleared area has LaMa clear it first. Strength sets how much Rework and Over a cleared area repaint. During a render, Inpaint paints a few tries first: the first shows on the picture, click any to see it in place, then Use this and continue. A model made for inpainting, such as Flux Fill, blends in best, and is listed first.</p>
     <p>Clone copies one part of the picture over another, at any step. Alt-click where to copy from, then paint: the source follows the brush, and Alt-click again for a new one. The copy's colors are matched to where it lands, and Disco carries on painting it. Late in a render, Clone and Inpaint keep detail where Erase can't.</p>
     <p>Something in the start image fixes best there, before the render. Press the brush on the start image, erase, inpaint or clone, and press Apply. The result is saved as a new image that replaces the start image, so the original is kept. The [ and ] keys and the mouse wheel change the brush size, E, C and I switch tools, and Ctrl+Z undoes a stroke.</p>
     <h3>Looks</h3>

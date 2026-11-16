@@ -146,7 +146,8 @@ def checkpoint_kind(path):
 
 
 def describe_checkpoint(path):
-    """{kind, and for Z-Image and Flux their variant, label and defaults}, or None."""
+    """{kind, inpaint_only for a model made only to inpaint, and for Z-Image and Flux their variant, label and
+    defaults}, or None."""
     import flowfiles
     try:
         stat = os.stat(path)
@@ -160,10 +161,12 @@ def describe_checkpoint(path):
                     length = int.from_bytes(f.read(8), "little")
                     names = json.loads(f.read(length)) if 0 < length < 200 * 2**20 else {}
                 unet = any(k.startswith("model.diffusion_model.input_blocks.") for k in names)
+                # An inpainting checkpoint's first layer takes the picture and mask beside the noise: 9 channels.
+                made = {"inpaint_only": True} if names.get("model.diffusion_model.input_blocks.0.0.weight", {}).get("shape", [0, 0])[1] == 9 else {}
                 if unet and any(k.startswith("conditioner.embedders.1.") for k in names):
-                    _kinds[key] = {"kind": "sdxl"}
+                    _kinds[key] = {"kind": "sdxl", **made}
                 elif unet and any(k.startswith("cond_stage_model.transformer.") for k in names):
-                    _kinds[key] = {"kind": "sd15"}
+                    _kinds[key] = {"kind": "sd15", **made}
                 else:
                     _kinds[key] = flowfiles.describe(path)
         return _kinds[key]

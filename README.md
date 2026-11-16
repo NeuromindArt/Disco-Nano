@@ -42,8 +42,8 @@ RTX 3070 8GB.
 - Regional prompts: draw boxes on the frame, each with a prompt of its own, before a render or by
   pausing one on its preview
 - Fix: pause a render and erase something you don't want, with Disco repainting the area so there's
-  no seam, inpaint it with a model of your own, or clone one part of the picture over another.
-  Inpaint and Clone keep their detail even late on
+  no seam, inpaint something new with a model of your own such as Flux Fill, choosing from a few tries,
+  or clone one part of the picture over another. Inpaint and Clone keep their detail even late on
 - Image prompts: a set of images guides the render alongside the text, like an embedding with no training
 - VRAM, RAM and disk bars that show what Disco uses next to the rest of the PC. Offloading to RAM
   turns on by itself when a render needs it
@@ -573,8 +573,8 @@ what it fixed would change partway through.
     <td width="60%"><img src="docs/fix/clone.jpg" width="100%" alt="Clone: sky and spray where the lighthouse was"></td>
   </tr>
   <tr>
-    <td width="40%" valign="top"><b>Inpaint at 60%</b><br><i>a small wooden sailboat</i>, painted in by Flux.2 Klein, then carried on by Disco, which works the surf over its bow. Painted in at 85%, the boat would stay closer to the model's own.<br><br><img src="docs/fix/inpaint_painted.jpg" width="120" alt="Where the boat goes, painted in violet"><br><sub>Where the boat goes</sub></td>
-    <td width="60%"><img src="docs/fix/inpaint.jpg" width="100%" alt="Inpaint: a wooden sailboat in the surf"></td>
+    <td width="40%" valign="top"><b>Inpaint at 60%</b><br><i>a small wooden sailboat</i>, painted in by Flux Fill, the second of two tries, then carried on by Disco, which works the sea over its hull and paints the boat in its own way.<br><br><img src="docs/fix/inpaint_painted.jpg" width="120" alt="Where the boat goes, painted in violet"><br><sub>Where the boat goes</sub><br><img src="docs/fix/inpaint_try.jpg" width="120" alt="Flux Fill's try: a wooden boat with a red sail"><br><sub>Flux Fill's try</sub></td>
+    <td width="60%"><img src="docs/fix/inpaint.jpg" width="100%" alt="Inpaint: a wooden boat with a red sail in the storm, painted in Disco's style"></td>
   </tr>
 </table>
 
@@ -603,23 +603,38 @@ back, but it doesn't go back to be drawn again, and Disco carries on painting it
 detailed as the picture, it keeps its detail late in a render, where an erase can't: tested at 85%, a
 piece of sky cloned over a lighthouse kept its detail to the end and blended in.
 
-**Inpaint** has a model of your own paint something into the picture: any model Handoff takes, SD 1.5,
-SDXL, Z-Image, Flux.1 or Flux.2 Klein. Choose it under **Inpaint** in Settings, where its steps and guidance
-fill in for the model's kind. Until one is chosen, Inpaint is greyed out. Paint where it should go, and
-say what in the box on the bar, such as *a small sailboat*. Left empty, the model paints whatever fits
-around the area. **Start** picks what it paints from:
+**Inpaint** has a model of your own paint something into the picture: a model made for inpainting, such
+as Flux Fill, or any model Handoff takes, SD 1.5, SDXL, Z-Image, Flux.1 or Flux.2 Klein. A model made for
+inpainting sees the area itself, so it paints what fits inside it and blends in best. Those come first in
+the list, and are left out of Handoff's. Flux Fill (6.3GB) is in Models in Settings, and uses the Flux text
+encoders and VAE in your model folders, as ComfyUI keeps them. Choose the model under **Inpaint** in
+Settings, where its steps and guidance fill in for it. Until one is chosen, Inpaint is greyed out. Paint
+where it should go, and say what in the box on the bar, such as *a small sailboat*. Left empty, the model
+paints whatever fits around the area. **Start** picks what it paints from:
 
 - **Fresh** (the default): the model paints the area anew.
 - **Rework**: the model paints over what's there, at **Strength**, to change it rather than replace it.
 - **Over a cleared area**: LaMa clears what's there first, then the model paints over its fill at Strength.
 
-The model paints a crop around the area, with as much again on each side to see what surrounds it,
-and diffusers' inpainting puts back the rest of the crop at every step, so the two meet without a seam.
-Like a clone, an inpaint is as detailed as the picture, so it keeps its detail late in a render. The
-model loads the first time it's used, which takes up to a minute, and stays in RAM for the rest of the
-render, and for the next one if it's used again. While it paints, Disco waits in RAM if the two won't
-fit on the GPU together. If an inpaint fails, the render carries on: an area it would have painted over a
-cleared area is erased instead, and the status line says why.
+During a render, pressing **Inpaint** paints a few tries first, two by default (**Tries** on the bar),
+while the render stays paused. The first shows on the picture as it would be used. Click another to see
+it in place, **Before** for the picture without it, or **More tries** for more, then **Use this and
+continue**. Inpainting is hit and miss, so a few tries usually give one that's right. A Flux Fill try
+takes about a minute.
+
+The model paints a crop around the area, as Crop and Stitch does in ComfyUI: the area with a fifth more
+around it, so what it paints fills the area rather than coming out small and cut off at the edge. It paints
+10 pixels past the area too, so what it adds can reach into its surroundings, and the result goes back
+through a soft edge 20 pixels wide that lies outside what it painted, so nothing it drew is faded out.
+**Inpaint context**, **Inpaint grow** and **Inpaint blend** in Settings change these. A model not made for
+inpainting has the rest of the crop put back at every step, so the two meet without a seam.
+
+Like a clone, an inpaint is as detailed as the picture, so it keeps its detail late in a render. From
+about 60%, Disco still has the steps to paint it in its own way, as in the boat above; later, it stays
+closer to the model's. The model loads the first time it's used, which takes up to a minute, and stays in
+RAM for the rest of the render, then is let go, unless Handoff uses the same file. While it paints, Disco
+waits in RAM if the two won't fit on the GPU together. If an inpaint fails, the render carries on: an area
+it would have painted over a cleared area is erased instead, and the status line says why.
 
 The **Noise** slider beside Brush shows how much fresh noise this fix gives the areas, and starts at the
 share that suits the step the render paused at. Each fix starts from that again, so you don't have to set
@@ -636,7 +651,7 @@ too few steps left to paint it out. Press the brush on the start image and it op
 inpaint or clone, then press **Apply**. The result is saved as a new image beside the start image, which it
 replaces, so the original is kept, and you can fix more before rendering. It runs on the GPU, or on the
 CPU while a render is running, and takes a few seconds. Inpaint runs on the GPU, so it waits for the
-render to end.
+render to end, and paints one try.
 
 The brush's size is on the bar, and the **[** and **]** keys and the mouse wheel change it. **E** and
 **C** and **I** switch between Erase, Clone and Inpaint. **Undo**, or Ctrl+Z, takes back the last stroke. Each fix during a

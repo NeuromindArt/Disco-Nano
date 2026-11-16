@@ -417,7 +417,7 @@ class FlowHandoff:
                              text_encoder(T5EncoderModel, os.path.join(folder, "text_encoder_2"), *parts["t5xxl"], "T5-XXL text encoder")]
             self.tokenizers = [CLIPTokenizer.from_pretrained(os.path.join(folder, "tokenizer")),
                                T5TokenizerFast.from_pretrained(os.path.join(folder, "tokenizer_2"))]
-            scheduler = diffusers.FlowMatchEulerDiscreteScheduler.from_config(FLUX_SCHEDULER[self.variant])
+            scheduler = diffusers.FlowMatchEulerDiscreteScheduler.from_config(FLUX_SCHEDULER["schnell" if self.variant == "schnell" else "dev"])
             self.text_pipe = diffusers.FluxPipeline(scheduler=scheduler, vae=self.vae, text_encoder=self.encoders[0],
                                                     tokenizer=self.tokenizers[0], text_encoder_2=self.encoders[1],
                                                     tokenizer_2=self.tokenizers[1], transformer=self.transformer)
@@ -433,8 +433,11 @@ class FlowHandoff:
         usable = (memory.cap_bytes or torch.cuda.get_device_properties(device).total_memory - memory.VRAM_HEADROOM_GB * GB) - 0.4 * GB
         self.streaming = self.unet_bytes + self.vae_bytes() + self.working(1024, 1024) > usable
         if self.streaming:
+            # Each block is pinned for the copy as it goes, not kept twice in RAM, pinned and not: that saves the
+            # model's size in RAM again, about 5GB for Flux, at no cost in speed.
             self.transformer.enable_group_offload(onload_device=torch.device(device), offload_device=torch.device("cpu"),
-                                                  offload_type="block_level", num_blocks_per_group=1, use_stream=True)
+                                                  offload_type="block_level", num_blocks_per_group=1, use_stream=True,
+                                                  low_cpu_mem_usage=True)
         self.load_seconds = time.time() - started
 
     def working(self, width, height):
@@ -455,7 +458,8 @@ class FlowHandoff:
                "flux2": diffusers.Flux2Transformer2DModel}[self.kind]
         config = os.path.join(folder, "transformer")
         if self.kind == "flux":
-            write(os.path.join(config, "config.json"), {**FLUX_TRANSFORMER, "guidance_embeds": self.variant == "dev"})
+            channels = {"in_channels": 384, "out_channels": 64} if self.variant == "fill" else {}  # the picture and mask beside the noise
+            write(os.path.join(config, "config.json"), {**FLUX_TRANSFORMER, "guidance_embeds": self.variant != "schnell", **channels})
         if self.kind == "flux2":
             config = os.path.join(folder, f"transformer_{self.size}")
             write(os.path.join(config, "config.json"), FLUX2_TRANSFORMER[self.size])
@@ -531,8 +535,11 @@ class FlowHandoff:
                 for e in self.encoders:
                     if not getattr(e, "streams", False):
                         e.to("cpu")
-                        apply_group_offloading(e, onload_device=torch.device(self.device), offload_type="block_level",
-                                               num_blocks_per_group=1)
+                        # Layer by layer: an encoder's blocks sit inside it, which block-level streaming doesn't reach,
+                        # so it would bring the whole encoder over at once. Each layer goes from the file's own weights
+                        # and back to them, so RAM never holds a copy: about 5GB less for Flux's T5.
+                        apply_group_offloading(e, onload_device=torch.device(self.device), offload_type="leaf_level",
+                                               use_stream=True, low_cpu_mem_usage=True)
                         e.streams = True
             except Exception:
                 where = "cpu"
@@ -592,7 +599,7 @@ class FlowHandoff:
             return {"guidance_scale": self.zimage_guidance(guidance)}
         if self.kind == "flux2":
             return {"guidance_scale": guidance}  # real CFG on Base, and ignored by the distilled builds
-        return {"guidance_scale": guidance if self.variant == "dev" else 0.0}
+        return {"guidance_scale": 0.0 if self.variant == "schnell" else guidance}
 
     def _picture(self, image, width, height, begin, common):
         """What the picture-to-picture pipelines take to start from `image` at step `begin`. They start at
@@ -708,12 +715,15 @@ class FlowHandoff:
     def inpaint_pipe(self):
         """diffusers' inpainting pipeline for this model, built once from the parts already loaded. It paints the
         masked part from `strength` of the way to noise, and at each step puts back the rest of the picture at that
-        step's noise level, so the two meet without a seam. Klein has its own way, in klein_inpaint()."""
+        step's noise level, so the two meet without a seam. Flux Fill sees the picture and mask itself, so it paints
+        what fits the area. Klein has its own way, in klein_inpaint()."""
         if getattr(self, "_inpaint_pipe", None) is None:
             import diffusers
             parts = {k: v for k, v in self.text_pipe.components.items() if k in ("scheduler", "vae", "transformer", "tokenizer", "tokenizer_2")}
             if self.kind == "zimage":
                 pipe = diffusers.ZImageInpaintPipeline(**parts, text_encoder=None)
+            elif self.variant == "fill":
+                pipe = diffusers.FluxFillPipeline(**parts, text_encoder=None, text_encoder_2=None)
             else:
                 pipe = diffusers.FluxInpaintPipeline(**parts, text_encoder=None, text_encoder_2=None)
             pipe.set_progress_bar_config(disable=True)

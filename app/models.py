@@ -25,6 +25,7 @@ LAMA = "big-lama"
 POSE = "keypointrcnn"
 PERSON = "maskrcnn"
 FACES = "retinaface"
+FLUX_FILL = "flux1-fill-dev-Q4_K_S"
 # Robust checkers (FARE, Schlarmann et al., MIT), pinned to the revisions Nano was tested with.
 ROBUST = {
     "fare4-b16": ("chs20/FARE4-ViT-B-16-laion2B-s34B-b88K", "1e941d54ce261e19ee072f1c3d5af8670aa19c02",
@@ -137,6 +138,12 @@ FILES = {
         "urls": ["https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt"],
         "folder": "lama",
     },
+    FLUX_FILL: {
+        "size_gb": 6.34,
+        "sha256": "3782c22eda0622d50eb8683d2aa664e8534a8c1e29ce9e91df491cc400944dc8",
+        "urls": ["https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/78b83f1da140a4dcd6466580516544e1f6effe3e/flux1-fill-dev-Q4_K_S.gguf"],
+        "folder": "checkpoints",
+    },
 }
 # The Robust checker setting's choices, and open_clip's name for each network.
 ROBUST_CHOICES = {"FARE4 B/16": ("fare4-b16", "ViT-B-16"), "FARE2 L/14": ("fare2-l14", "ViT-L-14-quickgelu"),
@@ -146,7 +153,7 @@ FILES.update({name: {"size_gb": size, "sha256": sha256, "folder": f"robust/{name
                      "urls": [f"https://huggingface.co/{repo}/resolve/{revision}/open_clip_pytorch_model.bin"]}
               for name, (repo, revision, sha256, size) in ROBUST.items()})
 
-DIFFUSION = [name for name in FILES if name not in ("secondary", PARTNER, DEPTH, POSE, PERSON, FACES, UPSCALER, RIFE, LAMA, *ROBUST)]
+DIFFUSION = [name for name in FILES if name not in ("secondary", PARTNER, DEPTH, POSE, PERSON, FACES, UPSCALER, RIFE, LAMA, FLUX_FILL, *ROBUST)]
 
 # Small helpers that download when first needed and aren't listed in the app.
 HELPERS = {
@@ -200,6 +207,7 @@ LABELS = {
     POSE: "Keypoint R-CNN",
     PERSON: "Mask R-CNN",
     FACES: "RetinaFace",
+    FLUX_FILL: "Flux Fill",
     "fare4-b16": "Robust checker FARE4 B/16",
     "fare2-l14": "Robust checker FARE2 L/14",
     "fare4-l14": "Robust checker FARE4 L/14",
@@ -227,6 +235,7 @@ ABOUT = {
     POSE: "Keypoint R-CNN from torchvision, which finds people's joints for Pose control. Downloads by itself the first time Pose control is used.",
     RIFE: "RIFE 4.7 by Zhewei Huang, which paints smooth in-between frames for animations. Without it, optical flow is used.",
     LAMA: "LaMa by Suvorov et al., which fills what Erase removes during a render. Downloads by itself the first time Erase is used.",
+    FLUX_FILL: "Flux.1 Fill dev by Black Forest Labs, made for inpainting, for Fix's Inpaint. It uses the Flux text encoders and VAE in your model folders. Non-commercial license.",
     "256x256_diffusion_uncond": "An older general model. Slower and heavier than the main model at 512×512.",
     "pixelartdiffusion_expanded": "Pixel art with strong color.",
     "pixel_art_diffusion_hard_256": "Muted pixel art.",
