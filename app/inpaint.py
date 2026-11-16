@@ -3,11 +3,13 @@ image.
 
 Any model Handoff takes works: SD 1.5, SDXL, Z-Image, Flux.1 or Flux.2 Klein. It is set apart from the handoff model,
 under Inpaint in Settings, with its own steps and guidance, and loads through the same code, so one file used for
-both loads once. diffusers' inpainting pipeline for the model paints the area, putting back the rest of the picture
-at every step's noise level, so the two meet without a seam.
+both loads once.
 
-The model paints a crop around the area, with as much again of the picture on each side to see what surrounds it,
-at the size it works best at, and the area goes back into the picture with a soft edge. Late in a render Disco only
+As ComfyUI's Inpaint Crop and Stitch with Differential Diffusion do it: the model paints a crop around the area, with
+some of the picture on each side to see what surrounds it, at the size it works best at. The area has a soft edge, and
+the model paints the area from its first step and the soft edge step by step as the noise falls, with the rest of the
+picture put back at every step's noise level. So the last steps blend what it painted into what is around it, whatever
+the model, and the area goes back into the picture through the same soft edge. Late in a render Disco only
 polishes what an area holds, and a model's inpaint is as detailed as the picture around it, so it keeps its detail
 where an erase would come out soft.
 
@@ -23,7 +25,7 @@ from imaging import grow
 
 MODES = ("fresh", "rework", "remove")
 # As Crop and Stitch sets them: how much of the picture the model sees around an area, as a multiple of the area's
-# size, how many pixels past the area it paints, and how wide the soft edge it goes back through is.
+# size, how many pixels past the area it paints, and how wide the soft edge it blends in over is.
 CONTEXT, GROW, BLEND = 1.2, 10, 20
 LATENT = 16  # picture pixels in a model's latent pixel, at the most: 8, packed 2x2 in the flow models
 
@@ -46,17 +48,25 @@ def crop_box(mask, width, height, context=CONTEXT):
     return max(left - across, 0), max(top - down, 0), min(right + across, width), min(bottom + down, height)
 
 
+def soft_edge(area, blend):
+    """The area, a numpy array true where the model paints, with a soft edge `blend` pixels wide across its border:
+    half inside and half outside, white to black."""
+    edge = Image.fromarray(area.astype(np.uint8) * 255)
+    return edge.filter(ImageFilter.GaussianBlur(blend / 4)) if blend > 0 else edge  # a Gaussian fades over about four sigmas
+
+
 def paint(model, picture, hard, text, strength, steps, guidance, seed, status, stopped=lambda: False, context=CONTEXT,
           grow_by=GROW, blend=BLEND):
     """The picture, a PIL image, with the area `hard` (a PIL mask the picture's size) repainted by `model`, a
     handoff.load model, and the soft mask it went back in through.
 
     As inpainting is done well elsewhere: the model paints the area and a band `grow_by` pixels wide around it, so
-    what it draws can reach into its surroundings, a wake or a shadow, with the rest of the picture put back at every
-    step. Everything it painted goes back in whole, and the soft edge, `blend` pixels wide, falls outside it, where
-    the model was held to the picture, so nothing it drew is cut off and no seam is left. A model paints in latent
-    pixels, LATENT pixels of its own size at the most, so the edge starts one of those out from the area. The crop
-    is measured around all of the soft edge, so none of it is cut by the crop's border."""
+    what it draws can reach into its surroundings, a wake or a shadow. Across that area's border lies a soft edge,
+    `blend` pixels wide, which the model paints into more and more as its steps go on (see HandoffModel.released),
+    so whatever it drew blends into the picture there. Everything it changed then goes back in whole: the paste's
+    own soft edge lies outside all of it, where the model was held to the picture, starting one latent pixel out, as
+    a model paints in latent pixels, LATENT pixels of its own size at the most. The crop is measured around all of
+    the paste's edge, so none of it is cut by the crop's border."""
     model.status, model.stopped = status, stopped
     half = int(blend) // 2
     area = grow(np.asarray(hard) > 127, int(grow_by))
@@ -77,7 +87,7 @@ def paint(model, picture, hard, text, strength, steps, guidance, seed, status, s
     status("Inpainting")
     painted = model.inpaint(picture.crop(box).resize((width, height), Image.LANCZOS),
                             Image.fromarray(area.astype(np.uint8) * 255).crop(box).resize((width, height), Image.BILINEAR),
-                            text.strip(), min(max(float(strength), 0.05), 1.0), max(int(steps), 1), float(guidance), seed)
+                            soft_edge(area, blend).crop(box).resize((width, height), Image.BILINEAR), text.strip(), min(max(float(strength), 0.05), 1.0), max(int(steps), 1), float(guidance), seed)
     out = picture.copy()
     out.paste(painted.convert("RGB").resize((box[2] - box[0], box[3] - box[1]), Image.LANCZOS), box[:2], paste.crop(box))
     return out, paste

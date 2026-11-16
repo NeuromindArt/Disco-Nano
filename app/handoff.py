@@ -17,6 +17,7 @@ import gc
 import time
 import types
 
+import numpy as np
 import torch
 from PIL import Image
 
@@ -215,17 +216,63 @@ class HandoffModel:
         return self.size_for(width, height)
 
     @torch.no_grad()
-    def inpaint(self, image, mask, text, strength, steps, guidance, seed):
-        """The picture with the white of `mask` repainted, both PIL images at a size inpaint_size() gave. `text` may
-        be empty: the model then carries on the picture around the area."""
+    def inpaint(self, image, area, soft, text, strength, steps, guidance, seed):
+        """The picture with `area` repainted, its edge blended in over `soft`: PIL images at a size inpaint_size()
+        gave, `area` white where to paint and `soft` the same area with a soft edge around it, white to black. `text`
+        may be empty: the model then carries on the picture around the area."""
         where = self.encoders_on(self.status)
         try:
             embeds = self.encode_text(text, "", guidance, where)
         finally:
             self.encoders_off()
-        check = self.stepper("Inpainting", max(int(steps * strength), 1))
+        run = max(int(steps * strength), 1)
         with self.on_gpu():
-            return self.paint_area(image, mask, on_device(embeds, self.device), strength, steps, guidance, seed, check)
+            return self.paint_area(image, area, soft, on_device(embeds, self.device), strength, steps, guidance, seed, run,
+                                   self.stepper("Inpainting", run))
+
+    # Differential diffusion, as ComfyUI's node of that name does it. The model paints where the soft mask is strong
+    # enough for how far through its steps it is, and the rest of the picture goes back in at each step's noise level.
+    # The area itself, at 1, is painted from the first step, and its soft edge joins in step by step as the noise
+    # falls, so the last steps, which only refine, blend what was painted into what is around it. What goes back in
+    # must carry the same noise the model's own steps started from, or a few-step model streaks where the two meet.
+    @staticmethod
+    def released(mask, i, steps):
+        """Where the model paints in step i of `steps`, counted from 0: where `mask`, 0 to 1, is at least how far
+        from the end it is."""
+        return mask >= 1 - i / steps
+
+    @staticmethod
+    def core(soft):
+        """The part of a soft mask, a PIL image, that is painted from the first step: where it is whole."""
+        return Image.fromarray(((np.asarray(soft) == 255) * 255).astype(np.uint8))
+
+    def soft_latent(self, soft, size):
+        """A soft mask, a PIL image, at a latent's (height, width), 0 to 1, as a 1x1xHxW tensor."""
+        return torch.nn.functional.interpolate(imaging.mask_from_pil(soft, self.device), size, mode="area")
+
+    def release_by_mask(self, mask, run, check):
+        """What each step calls back with, after `check`'s own work, for a pipeline that puts the rest of the picture
+        back itself, with its own noise: it gets the mask for its next step's blend. Start it with core() as its mask.
+        `mask` is the soft mask at the latent's size, from soft_latent()."""
+        def blend(p, i, t, values):
+            now = values["mask"]
+            free = self.released(mask, i + 1, getattr(p, "_num_timesteps", None) or run).to(now.dtype)
+            values["mask"] = free.repeat(now.shape[0], 1, 1, 1)  # twice over with guidance, as the pipeline has it
+            return check(p, i, t, values)
+        return blend
+
+    def release_by_latents(self, known, mask, noise, run, check):
+        """What each step calls back with, after `check`'s own work, for a model whose rest of the picture is put back
+        here: `known`, its clean latent, noised with `noise` to the step's level. `known`, `mask` and `noise` are in
+        the latent format the model paints in."""
+        def blend(p, i, t, values):
+            painted = values["latents"]
+            free = self.released(mask, i, getattr(p, "_num_timesteps", None) or run).to(painted.dtype)
+            level = float(p.scheduler.sigmas[p.scheduler.step_index])  # where this step left the path
+            held = ((1 - level) * known + level * noise).to(painted.dtype)  # on the flow models' path, which these are
+            values["latents"] = painted * free + held * (1 - free)
+            return check(p, i, t, values)
+        return blend
 
 
 class Handoff(HandoffModel):
@@ -395,10 +442,19 @@ class Handoff(HandoffModel):
             self._inpaint_pipe = pipe
         return self._inpaint_pipe
 
-    def paint_area(self, image, mask, embeds, strength, steps, guidance, seed, check):
-        out = self.inpaint_pipe()(image=image, mask_image=mask, strength=strength, num_inference_steps=steps, height=image.height,
-                                  width=image.width, guidance_scale=guidance, callback_on_step_end=check,
-                                  generator=self.generator(seed), **embeds)
+    def paint_area(self, image, area, soft, embeds, strength, steps, guidance, seed, run, check):
+        """Paints `area` with its edge blended over `soft` (see HandoffModel.released): the pipeline puts the rest of
+        the picture back at every step, through the mask it is handed for each. An inpainting checkpoint sees the
+        area itself and fills it, as Flux Fill does, so it is told the area and paints it whole."""
+        pipe = self.inpaint_pipe()
+        if pipe.unet.config.in_channels == 9:
+            mask, inputs = area, ["latents"]
+        else:
+            latent = self.soft_latent(soft, (image.height // pipe.vae_scale_factor, image.width // pipe.vae_scale_factor))
+            mask, inputs, check = self.core(soft), ["latents", "mask"], self.release_by_mask(latent, run, check)
+        out = pipe(image=image, mask_image=mask, strength=strength, num_inference_steps=steps, height=image.height,
+                   width=image.width, guidance_scale=guidance, callback_on_step_end=check, callback_on_step_end_tensor_inputs=inputs,
+                   generator=self.generator(seed), **embeds)
         return out.images[0]
 
     @contextlib.contextmanager

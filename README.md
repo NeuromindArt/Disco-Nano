@@ -624,10 +624,12 @@ takes about a minute.
 
 The model paints a crop around the area, as Crop and Stitch does in ComfyUI: the area with a fifth more
 around it, so what it paints fills the area rather than coming out small and cut off at the edge. It paints
-10 pixels past the area too, so what it adds can reach into its surroundings, and the result goes back
-through a soft edge 20 pixels wide that lies outside what it painted, so nothing it drew is faded out.
-**Inpaint context**, **Inpaint grow** and **Inpaint blend** in Settings change these. A model not made for
-inpainting has the rest of the crop put back at every step, so the two meet without a seam.
+10 pixels past the area too, so what it adds can reach into its surroundings. The area has a soft edge
+20 pixels wide, and as Differential Diffusion does in ComfyUI, the model paints the area from its first
+step and the soft edge bit by bit as the noise falls, with the rest of the picture put back at every step.
+Its last steps blend what it painted into what is around it, so any model's inpaint meets the picture
+without a hard edge. **Inpaint context**, **Inpaint grow** and **Inpaint blend** in Settings change these;
+a wider blend blends more.
 
 Like a clone, an inpaint is as detailed as the picture, so it keeps its detail late in a render. From
 about 60%, Disco still has the steps to paint it in its own way, as in the boat above; later, it stays

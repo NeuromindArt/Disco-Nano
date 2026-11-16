@@ -106,7 +106,7 @@ FIELDS = [
     field("inpaint_guidance", 7.0, INPAINT, "How closely the {inpaint_file} follows the inpaint's prompt. 5 to 8 suits most checkpoints, 1 to 2 few-step models, 1 Klein and Z-Image Turbo, 3.5 Flux dev, and 30 Flux Fill."),
     field("inpaint_context", 1.2, INPAINT, "How much of the picture the {inpaint_file} sees around the area, as a multiple of the area's size. Near 1, what it paints fills the area. More shows it more of the scene, and it paints things smaller, so they can be cut off at the area's edge."),
     field("inpaint_grow", 10, INPAINT, "How many pixels past what you painted the {inpaint_file} paints too, so what it adds can reach into its surroundings, such as a wake or a shadow."),
-    field("inpaint_blend", 20, INPAINT, "How many pixels wide the soft edge is where the inpaint meets the picture. It lies outside what the model painted, so nothing it drew is faded out."),
+    field("inpaint_blend", 20, INPAINT, "How many pixels wide the soft edge is where the inpaint meets the picture. The model paints into it bit by bit, so what it drew blends in. Wider blends more."),
     field("handoff_keep", False, HANDOFF,"Also saves the {handoff_file}'s picture beside each image, and with {handoff_finish}, Disco's own image. Not for animation."),
 
     field("animation_mode", "None", ANIMATION, "2D moves a flat picture. 3D flies a camera through the scene, using Depth Anything to tell near from far. Video Input repaints every frame of a video.",

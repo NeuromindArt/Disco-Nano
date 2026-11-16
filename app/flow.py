@@ -20,6 +20,7 @@ import json
 import os
 import time
 
+import numpy as np
 import torch
 from PIL import Image
 
@@ -130,7 +131,6 @@ def read_state(path, prefix):
     mapped read-only: safetensors maps it copy-on-write, which Windows charges in full against its memory limit,
     so a 16GB file could crash the process. Nothing here writes into a tensor in place; casts make new ones."""
     import warnings
-    import numpy as np
     entries, data = flowfiles.safetensors_entries(path)
     view = np.memmap(path, dtype=np.uint8, mode="r")
     state = {}
@@ -551,7 +551,6 @@ class FlowHandoff(HandoffModel):
         steps = common["num_inference_steps"]
         if self.kind != "flux2":
             return {"image": image, "strength": (steps - begin - 0.5) / steps}
-        import numpy as np
         from diffusers.pipelines.flux2.pipeline_flux2_klein import compute_empirical_mu
         pipe = self.text_pipe
         pixels = pipe.image_processor.preprocess(image, height=height, width=width).to(self.device, self.vae.dtype)
@@ -650,44 +649,57 @@ class FlowHandoff(HandoffModel):
             self._inpaint_pipe = pipe
         return self._inpaint_pipe
 
-    def paint_area(self, image, mask, embeds, strength, steps, guidance, seed, check):
+    def paint_area(self, image, area, soft, embeds, strength, steps, guidance, seed, run, check):
+        """As Handoff.paint_area. Z-Image's pipeline puts the rest of the picture back itself, through the mask it is
+        handed for each step. Flux's doesn't take one, and Flux Fill sees the area itself and fills it, so for them
+        the rest goes back in here, with noise of its own. Klein paints in klein_inpaint()."""
         if self.kind == "flux2":
-            return self.klein_inpaint(image, mask, embeds, strength, steps, guidance, seed, check)
-        out = self.inpaint_pipe()(image=image, mask_image=mask, strength=strength, num_inference_steps=steps, height=image.height,
-                                  width=image.width, generator=self.generator(seed), callback_on_step_end=check,
-                                  **self._guidance(guidance), **embeds)
+            return self.klein_inpaint(image, soft, embeds, strength, steps, guidance, seed, run, check)
+        pipe = self.inpaint_pipe()
+        generator = self.generator(seed)
+        if self.kind == "zimage":
+            scale = pipe.vae_scale_factor * 2  # its latents come in 2x2 patches of the autoencoder's
+            latent = self.soft_latent(soft, (2 * (image.height // scale), 2 * (image.width // scale)))
+            mask, inputs, check = self.core(soft), ["latents", "mask"], self.release_by_mask(latent, run, check)
+        else:
+            known, latent = self.packed(pipe, image, soft, generator)
+            noise = torch.randn(known.shape, generator=self.generator(seed + 1), device=self.device, dtype=known.dtype)
+            check, inputs = self.release_by_latents(known, latent, noise, run, check), ["latents"]
+            mask = area if self.variant == "fill" else Image.fromarray(((np.asarray(soft) > 0) * 255).astype(np.uint8))
+        out = pipe(image=image, mask_image=mask, strength=strength, num_inference_steps=steps, height=image.height, width=image.width,
+                   generator=generator, callback_on_step_end=check, callback_on_step_end_tensor_inputs=inputs,
+                   **self._guidance(guidance), **embeds)
         return out.images[0]
 
-    def klein_inpaint(self, image, mask, embeds, strength, steps, guidance, seed, check):
+    def packed(self, pipe, image, soft, generator):
+        """The picture's clean latent and the soft mask at its size, packed in 2x2 patches as Flux and Klein paint."""
+        pixels = pipe.image_processor.preprocess(image, height=image.height, width=image.width).to(self.device, self.vae.dtype)
+        known = pipe._encode_vae_image(pixels, generator).float()
+        mask = self.soft_latent(soft, known.shape[-2:])
+        if self.kind == "flux2":
+            return pipe._pack_latents(known), pipe._pack_latents(mask)
+        b, c, h, w = known.shape
+        return pipe._pack_latents(known, b, c, h, w), pipe._pack_latents(mask.expand(b, c, h, w), b, c, h, w)
+
+    def klein_inpaint(self, image, soft, embeds, strength, steps, guidance, seed, run, check):
         """Klein's inpainting. diffusers' Klein inpainter always shows the model the picture it starts from as a
         reference, and Klein copies a reference, so what was there comes back. So the plain pipeline paints instead,
         from the picture noised to `strength`, and after every step the rest of the picture goes back in at that
-        step's noise level, as the other inpainters do."""
-        import numpy as np
-        import torch.nn.functional as F
+        step's noise level, with the noise it started from, as Handoff.paint_area describes."""
         from diffusers.pipelines.flux2.pipeline_flux2_klein import compute_empirical_mu
         pipe = self.text_pipe
         generator = self.generator(seed)
         pixels = pipe.image_processor.preprocess(image, height=image.height, width=image.width).to(self.device, self.vae.dtype)
         latent = pipe._encode_vae_image(pixels, generator).float()
+        known, mask = pipe._pack_latents(latent), pipe._pack_latents(self.soft_latent(soft, latent.shape[-2:]))
         path = np.linspace(1.0, 1 / steps, steps)  # as the pipeline lays it out, then shifts it for the size
         pipe.scheduler.set_timesteps(sigmas=path, device=self.device, mu=compute_empirical_mu(latent.shape[2] * latent.shape[3], steps))
         begin = min(max(steps - max(int(steps * strength), 1), 0), steps - 1)
         sigma = float(pipe.scheduler.sigmas[begin])
         noise = torch.randn(latent.shape, generator=generator, device=self.device, dtype=latent.dtype)
-        known, still = pipe._pack_latents(latent), pipe._pack_latents(noise)
-        area = imaging.mask_from_pil(mask, self.device)
-        area = pipe._pack_latents((F.interpolate(area, latent.shape[2:], mode="area") > 0.5).float())
-
-        def keep_the_rest(p, i, t, values):
-            level = float(p.scheduler.sigmas[p.scheduler.step_index])
-            painted = values["latents"]
-            outside = ((1 - level) * known + level * still).to(painted.dtype)
-            values["latents"] = painted * area.to(painted.dtype) + outside * (1 - area).to(painted.dtype)
-            return check(p, i, t, values)
-
         out = pipe(latents=((1 - sigma) * latent + sigma * noise).to(COMPUTE), sigmas=list(path[begin:]), num_inference_steps=steps,
-                   height=image.height, width=image.width, generator=generator, callback_on_step_end=keep_the_rest,
+                   height=image.height, width=image.width, generator=generator,
+                   callback_on_step_end=self.release_by_latents(known, mask, pipe._pack_latents(noise), run, check),
                    **self._guidance(guidance), **embeds)
         return out.images[0]
 
