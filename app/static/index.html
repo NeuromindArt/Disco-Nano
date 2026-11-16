@@ -349,7 +349,7 @@
       <video id="stageVideo" controls loop muted playsinline hidden></video>
       <div id="stageEmpty" class="empty">Your image will appear here as it renders.</div>
       <div id="regionEditor" class="region-editor" hidden>
-        <div id="regionFrame" class="region-frame"></div>
+        <div id="regionFrame" class="region-frame"><div id="regionWait" class="stage-wait" hidden><span class="spinner" aria-hidden="true"></span><span>Pausing after this step…</span></div></div>
         <div class="region-bar">
           <span id="regionNote" class="region-note"></span>
           <button type="button" id="regionClear" class="default">Clear</button>
@@ -358,7 +358,7 @@
         </div>
       </div>
       <div id="eraseEditor" class="region-editor" hidden>
-        <div id="eraseFrame" class="region-frame erase-frame"><canvas id="cloneCanvas"></canvas><canvas id="inpaintCanvas"></canvas><canvas id="eraseCanvas"></canvas><div id="eraseRing" class="erase-ring" hidden></div><div id="cloneMark" class="clone-mark" hidden></div><div id="eraseWait" class="erase-wait"><span class="spinner" aria-hidden="true"></span><span id="eraseWaitText">Pausing after this step…</span></div></div>
+        <div id="eraseFrame" class="region-frame erase-frame"><canvas id="cloneCanvas"></canvas><canvas id="inpaintCanvas"></canvas><canvas id="eraseCanvas"></canvas><div id="eraseRing" class="erase-ring" hidden></div><div id="cloneMark" class="clone-mark" hidden></div><div id="eraseWait" class="stage-wait"><span class="spinner" aria-hidden="true"></span><span id="eraseWaitText">Pausing after this step…</span></div></div>
         <div class="fix-dock">
           <div id="fixLate" class="fix-late" role="note" hidden>
             <span>This late, erased areas come out soft. Clone and Inpaint keep detail.</span>

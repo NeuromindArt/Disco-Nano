@@ -71,12 +71,17 @@ function showRegionsTask(t) {
   showRegionsButton(t);
 }
 
+/* Whether boxes can be drawn now: always before a render, and during one only once it has paused, as with Fix. */
+function regionsReady() {
+  return regionMode === "set" || lastStatus?.task?.state === "paused";
+}
+
 function openRegions() {
   if (regionMode || eraseMode) return;
   const t = lastStatus?.task;
   regionMode = t?.active && t.kind === "render" ? "run" : "set";
   regionHeld = false;
-  if (regionMode === "run" && t.state !== "paused") post("/api/pause").catch((e) => formError(e.message));
+  if (regionMode === "run" && t.state !== "paused") post("/api/pause").catch((e) => { formError(e.message); closeRegions(); });
   regionDraft = { boxes: structuredClone(regionsState().boxes) };
   regionPicked = -1;
   document.querySelector(".canvas").classList.add("editing");
@@ -120,12 +125,18 @@ async function regionsCancel() {
   }
 }
 
+/* Until the render has paused, the frame says so and the boxes, Clear and Continue are off. */
 function showRegionBar(t) {
   const run = regionMode === "run";
+  const ready = regionsReady();
+  if (!ready && document.activeElement?.closest?.("#regionFrame")) document.activeElement.blur();
+  $("regionFrame").classList.toggle("waiting", !ready);
+  $("regionWait").hidden = ready;
+  $("regionDone").disabled = $("regionClear").disabled = !ready;
   $("regionDone").textContent = run ? "Continue" : "Done";
   $("regionCancel").textContent = run ? "Cancel and continue" : "Cancel";
   let note = "Drag on the frame to draw a box, then type its prompt.";
-  if (run) note = t?.state === "paused" ? `Paused at step ${t.step} of ${t.total}. ${note}` : "Pausing after this step…";
+  if (run) note = ready ? `Step ${t.step} of ${t.total}. ${note}` : "Pausing after this step…";
   $("regionNote").textContent = note;
 }
 
@@ -159,7 +170,7 @@ function placeRegionFrame() {
 
 function drawRegions() {
   const frame = $("regionFrame");
-  frame.replaceChildren(...regionDraft.boxes.map((b, i) => {
+  frame.replaceChildren($("regionWait"), ...regionDraft.boxes.map((b, i) => {
     const el = document.createElement("div");
     el.className = "region-box" + (i === regionPicked ? " picked" : "");
     el.dataset.index = i;
@@ -200,7 +211,7 @@ const clamp01 = (v) => Math.min(Math.max(v, 0), 1);
 
 /* One drag on the frame: draws a new box from empty space, moves a box by its body, or resizes it by its corner. */
 function startRegionDrag(e) {
-  if (e.button !== 0 || e.target.closest(".region-text, .region-del")) return;
+  if (e.button !== 0 || !regionsReady() || e.target.closest(".region-text, .region-del")) return;
   const frame = $("regionFrame");
   const rect = frame.getBoundingClientRect();
   const at = (ev) => ({ x: clamp01((ev.clientX - rect.left) / rect.width), y: clamp01((ev.clientY - rect.top) / rect.height) });
@@ -258,7 +269,7 @@ function regionKeys(e) {
   if (!regionMode) return;
   if (e.key === "Escape") { e.preventDefault(); regionsCancel(); }
   const typing = e.target.closest?.("textarea, input");
-  if (!typing && (e.key === "Delete" || e.key === "Backspace") && regionPicked >= 0) {
+  if (!typing && (e.key === "Delete" || e.key === "Backspace") && regionPicked >= 0 && regionsReady()) {
     regionDraft.boxes.splice(regionPicked, 1);
     regionPicked = -1;
     drawRegions();
@@ -296,9 +307,9 @@ function setUpRegions() {
     refreshPlan();
     showRegionsButton(lastStatus?.task);
   });
-  $("regionDone").addEventListener("click", regionsDone);
+  $("regionDone").addEventListener("click", () => { if (regionsReady()) regionsDone(); });
   $("regionCancel").addEventListener("click", regionsCancel);
-  $("regionClear").addEventListener("click", () => { regionDraft.boxes = []; regionPicked = -1; drawRegions(); });
+  $("regionClear").addEventListener("click", () => { if (!regionsReady()) return; regionDraft.boxes = []; regionPicked = -1; drawRegions(); });
   $("regionFrame").addEventListener("pointerdown", startRegionDrag);
   document.addEventListener("keydown", regionKeys);
   $("stageImg").addEventListener("load", placeRegionFrame);

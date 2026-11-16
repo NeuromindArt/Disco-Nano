@@ -485,13 +485,14 @@ body.no-grid .canvas { background-image: none; }  /* Settings: Grid behind the p
 .fix-late-close { flex: none; width: 22px; height: 22px; padding: 0; background: none; color: var(--ink-label); font-size: 15px; line-height: 1; }
 .fix-late-close:hover { color: var(--ink); }
 .erase-ring { position: absolute; pointer-events: none; border: 1.5px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgb(0 0 0 / .6); }
-.erase-frame.waiting { cursor: progress; }
-.erase-frame.waiting canvas, .erase-frame.waiting .erase-ring { display: none; }
-.erase-wait {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px;
+/* Until the render has paused, Fix and Regions say so over the frame, and nothing can be drawn. */
+.region-frame.waiting { cursor: progress; }
+.erase-frame.waiting canvas, .erase-frame.waiting .erase-ring, .region-frame.waiting .region-box { display: none; }
+.stage-wait {
+  position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; gap: 10px;
   background: rgb(10 10 12 / .55); color: var(--ink-strong); font-weight: 600;
 }
-.erase-wait[hidden] { display: none; }
+.stage-wait[hidden] { display: none; }
 .brush-size { min-width: 46px; font: 11px var(--font-mono); color: var(--ink-label); font-variant-numeric: tabular-nums; }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin 800ms linear infinite; }
 @keyframes spin { to { rotate: 360deg; } }
