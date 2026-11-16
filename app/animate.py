@@ -1,8 +1,10 @@
-"""Animation: each frame starts from the last one, moved by the camera, and Disco repaints part of it.
+"""Animation: each frame starts from the last one, moved by the camera, and Disco repaints part of it. film() paints
+a render's clip.
 
 Written for Nano. The setting names follow Disco Diffusion's, so its guides still apply, but the code
 is new: the 3D camera reads depth with Depth Anything V2 Small instead of MiDaS and AdaBins.
 """
+import gc
 import math
 import os
 
@@ -11,7 +13,11 @@ import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from PIL import Image, ImageOps
 
+import keyframes
+import tiles
+from imaging import size_start_image
 from keyframes import motion
+from loaders import device, load_lpips
 
 TRANSLATION_SCALE = 1 / 200  # Disco's 3D units, so its keyframe values move about as far here
 NEAR, FAR = 2.0, 20.0  # the depth range a scene is spread over, in the same units
@@ -351,3 +357,173 @@ def save_animation(frames, fps, path, longest=None):
         pictures[0].save(path, save_all=True, append_images=pictures[1:], duration=duration, loop=0, disposal=1)
     else:
         pictures[0].save(path, save_all=True, append_images=pictures[1:], duration=duration, loop=0, quality=88, method=4)
+
+
+# The clip ----------------------------------------------------------------------------------------------
+def film(r):
+    """Renders the frames of the render `r`'s animation, each from the last one moved by the camera or from a video
+    frame, then saves the clip."""
+    cfg, hooks, seed, grid, final, side_x, side_y = r.cfg, r.hooks, r.seed, r.grid, r.final, r.side_x, r.side_y
+    steer, fixed_control = r.steer, r.fixed_control
+    mode = cfg["animation_mode"]
+    loop = cfg["loop_mode"] if cfg["loop_mode"] in ("Paint back to the start", "Ping-pong") else None
+    r.write_notes(again=bool(r.resume))  # claims the run number, so a stopped animation keeps its frames
+    frames_dir = r.named("_frames")
+    os.makedirs(frames_dir, exist_ok=True)
+    video = None
+    if mode == "Video Input":
+        hooks.status("Reading the video")
+        video = VideoInput(cfg["video_init_path"], max(int(cfg["extract_nth_frame"]), 1), *final,
+                           r.init_fit, size_start_image, int(cfg["max_frames"]), loop == "Ping-pong")
+    total = min(int(cfg["max_frames"]), len(video.frames)) if video else int(cfg["max_frames"])
+    # Seamless loop: the last `reach` frames are painted more and more like the frame they lead back to. With
+    # ping-pong that is the frame at the same point on the way out, so it must already be painted.
+    reach = min(max(int(cfg["loop_frames"]), 1), (total - 1) // 2 if loop == "Ping-pong" else total - 1) if loop else 0
+    circle = None  # with ping-pong and one shared noise, the noise goes once around a circle between two draws
+    r.n_batches = total
+    camera = Camera(cfg, total, device, hooks.status, r.depth_model) if mode in ("2D", "3D") else None
+    skips = [min(round(cfg["steps"] * share / 100), cfg["steps"] - 1) for share in keyframes.skips(cfg, total)]
+    if cfg["frames_scale"] and r.lpips_model is None:
+        r.lpips_model = load_lpips()
+
+    def paint(start, skip, n, hand=True):
+        """One frame. With tiles, each frame is tiled like a still."""
+        # before a handoff moves where Disco starts, so the views stay spread over the whole frame. A video's frames
+        # and every frame after the first are clip frames; a 2D or 3D clip's first frame is its start image.
+        r.fit_views(skip, frame=bool(video) or n > 0)
+        if hand:  # the last frame's Small first is not this one's
+            r.pull["set"], r.pull["to"] = False, None
+        if hand and r.handing:
+            start, skip = r.hand_over(start, skip, n, (side_x, side_y) if grid == 1 else final, frame_seed)
+            r.reseed(frame_seed)  # each frame starts alike, whatever the handoff drew
+        if grid == 1:
+            start, skip = r.small_start(start, skip, n)
+            return r.paint(start, side_x, side_y, skip, n)
+        return tiles.paint(r, None if start is None else start.float().cpu(), skip, n).to(device)
+
+    turbo = max(int(cfg["turbo_steps"]), 1) if cfg["turbo_mode"] and camera else 1
+    refresh = {at + int(cfg["prompt_fade"]) for at, _ in r.all_stats[1:]}  # a new prompt gets its own colors
+    first, previous, saved = None, None, {}
+    rendered_first = False  # the first frame's Render first pass already had its handoff
+    between, painted_at = [], 0  # with Turbo, the frames moved on from the last repaint
+    begin = 0
+
+    def frame_at(n):
+        return TF.to_tensor(Image.open(saved[n]).convert("RGB")).unsqueeze(0).mul(2).sub(1).to(device)
+
+    if r.resume:  # pick up after the last frame on disk, as if the run had never stopped
+        while os.path.isfile(os.path.join(frames_dir, f"{begin:05d}.png")):
+            saved[begin] = os.path.join(frames_dir, f"{begin:05d}.png")
+            begin += 1
+        if not begin:
+            raise ValueError("That clip has no frames to continue from.")
+        if begin >= total:
+            raise ValueError(f"That clip already has {begin} frames. Raise Frames to make it longer.")
+        previous = frame_at(begin - 1)
+        if tuple(previous.shape[-2:]) != (final[1], final[0]):
+            raise ValueError(f"That clip's frames are {previous.shape[-1]}x{previous.shape[-2]}. Set the same size and Tiles "
+                             "to carry it on.")
+        first = frame_at(max([0] + [n for n in refresh if n < begin]))
+        painted_at = begin - 1
+        hooks.status(f"Carrying on from frame {begin + 1}")
+
+    def keep(n, image):
+        saved[n] = os.path.join(frames_dir, f"{n:05d}.png")
+        r.to_image(image).save(saved[n])
+
+    try:
+        for n in range(begin, total):
+            r.stats = stats_at(r.all_stats, n, cfg["prompt_fade"])
+            # Only a video can share one noise: a moving camera drags fixed noise across the scene into streaks.
+            frame_seed = seed if video and cfg["video_init_seed_continuity"] else seed + n
+            if video and loop == "Ping-pong" and cfg["video_init_seed_continuity"]:
+                # The same noise would paint the way back as a copy of the way out. Going round a circle, each
+                # frame's noise is close to the last one's, and the frame after the last is back at the first's.
+                sized = (1, 3, final[1], final[0]) if grid > 1 else (1, 3, side_y, side_x)
+                if circle is None:
+                    circle = [torch.randn(sized, generator=torch.Generator().manual_seed(seed + k)) for k in (0, 1)]
+                turn = 2 * math.pi * n / total
+                r.given["noise"] = math.cos(turn) * circle[0] + math.sin(turn) * circle[1]
+            r.reseed(frame_seed)
+            if steer and (fixed_control is not None or video):
+                # the Control image, or else the clean video frame, never the start the last frame was mixed into
+                steer.set_source(fixed_control if fixed_control is not None else TF.to_tensor(video.frames[n]).unsqueeze(0))
+            if video:
+                shown = TF.to_tensor(video.frames[n]).unsqueeze(0).mul(2).sub(1).to(device)
+                start = shown
+                if previous is None and cfg["video_blend"]:
+                    # The first frame builds on a first pass of itself, as later frames build on the last
+                    # one. Without this it stays close to the video while the rest of the clip doesn't.
+                    hooks.status("Painting a first pass of the first frame")
+                    previous = paint(shown, r.skip_steps, n)  # a full repaint from Denoise, as a still would be
+                if previous is not None and cfg["video_blend"]:
+                    last = previous
+                    if cfg["video_flow"] and n:  # the last frame's paint travels with what moved in the video
+                        last = follow_flow(previous, video_flow(video.frames[n - 1], video.frames[n]), cfg)
+                    # The carried paint is repainted every frame, and each pass adds contrast and color. Held to the
+                    # first frame's light and color, as camera moves are, it can't compound into a burned-out clip.
+                    last = hold_colors(last, first, cfg["color_hold"])
+                    start = shown + cfg["video_blend"] * (last - shown)
+                skip = skips[n]
+            elif n == 0:
+                shown = start = r.start_tensor()
+                skip = r.skip_steps  # from a start image or noise, with tiles or without
+                if grid > 1 and not r.start_image and cfg["tile_start"] == "Render first":
+                    hooks.status("Painting the first frame at tile size")
+                    r.fit_views(r.skip_steps, frame=bool(video))
+                    rough, rough_skip = r.hand_over(None, r.skip_steps, n, (side_x, side_y), frame_seed)
+                    r.reseed(frame_seed)
+                    rough = r.to_image(r.denoise(rough, side_x, side_y, rough_skip, n)).resize(final, Image.LANCZOS)
+                    shown = start = TF.to_tensor(rough).unsqueeze(0).mul(2).sub(1).to(device)
+                    skip, rendered_first = r.tile_skip, True
+            else:
+                moved = sharpen(camera.move(previous, n), cfg["frame_sharpen"])
+                shown = start = hold_colors(moved, first, cfg["color_hold"])
+                skip = skips[n]
+            if reach and n >= total - reach:
+                back_to = (n - (total - reach) + 1) / (reach + 1)
+                target = frame_at(total - n if loop == "Ping-pong" else 0)
+                hooks.status(f"Painting back to the start, {round(100 * back_to)}% of the way")
+                start = start + back_to * (target - start)
+            r.init_scale = 0 if start is None else cfg["frames_scale"] if (n or video) else cfg["init_scale"]
+            if steer and fixed_control is None and not video:  # a camera move follows the frame it starts from
+                steer.set_source(None if shown is None else shown.add(1).div(2))
+            r.given["ghost"] = shown.add(1).div(2).float() if r.frame_ghost and shown is not None else None
+            if turbo > 1 and n % turbo and n < total - 1:
+                between.append((n, start))  # between repaints the camera alone moves the picture
+                previous = start
+                hooks.preview(r.to_image(start))
+                continue
+            gc.collect()
+            torch.cuda.empty_cache()
+            r.reseed(frame_seed)  # passes before this one drew noise too, and every frame must start alike
+            image = paint(start, skip, n, hand=not rendered_first)
+            rendered_first = False
+            back = image
+            for m, ahead in reversed(between):  # fade each one toward the new repaint, moved back to it
+                back = camera.move(back, m + 1, back=True)
+                keep(m, ahead + (m - painted_at) / (n - painted_at) * (back - ahead))
+            between, painted_at = [], n
+            previous = image
+            first = image if first is None or n in refresh else first
+            keep(n, image)
+    finally:  # a stopped animation still gets a video of the frames it has
+        for m, ahead in between:
+            keep(m, ahead)
+        saved = [saved[n] for n in sorted(saved)]
+        if saved:
+            fps = max(float(cfg["fps"]), 1)
+            extra = int(cfg["in_between"])
+            if extra > 0 and len(saved) > 1:  # the clip keeps its length, at a higher frame rate
+                saved = add_between(saved, extra, os.path.join(frames_dir, "between"), device, hooks.status,
+                                    wrap=bool(loop) and len(saved) == total)
+                fps *= extra + 1
+            hooks.status("Saving the video")
+            base = r.named("")
+            if cfg["save_mp4"] and len(saved) > 1:
+                save_video(saved, fps, base + ".mp4")
+            if cfg["save_webp"] and len(saved) > 1:
+                save_animation(saved, fps, base + ".webp")
+            if cfg["save_gif"] and len(saved) > 1:
+                save_animation(saved, fps, base + ".gif", longest=512)
+            hooks.image(r.save(r.to_image(previous), 0))

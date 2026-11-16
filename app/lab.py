@@ -1,12 +1,17 @@
 """Experimental changes to the generation loop. Every one is off until its setting is changed.
 
-With all of them off, render() takes its normal path and none of this code runs.
+With all of them off, render() takes its normal path and none of this code runs. With any on, a picture is painted
+through denoise() here, the normal ddim loop with room for the ones that work between steps.
 """
+import math
+
 import torch
 from resize_right import resize
 from torch.nn import functional as F
 
 import settings
+from keyframes import schedule_at
+from loaders import device
 
 
 def wanted(cfg):
@@ -216,3 +221,112 @@ class Ghost:
         target = self.ghost.mul(2).sub(1).to(estimate.dtype)
         change = low_pass(target - estimate).mean(1, keepdim=True)
         return x + strength * scale * change
+
+
+def denoise(r, start, width, height, skip, batch, stop=None, show=None):
+    """The render `r`'s ddim loop for one picture, with room for the experiments that work between steps: the
+    Partner's sketch and borrowed attention, Prompt graft, a ghost, Detail bands and Correct steps. `stop` and `show`
+    work as in Render.paint."""
+    cfg, diffusion, hooks, experiment, eraser, steer, judge = r.cfg, r.diffusion, r.hooks, r.experiment, r.eraser, r.steer, r.judge
+    show = show or r.to_image
+    r.init = r.pull["to"] if r.pull["set"] else start
+    before, r.ahead = r.ahead, 0
+    experiment.reset(height, width, device)
+    helper = experiment.partner
+    ghost = experiment.ghost
+    needed = cfg["two_painters"] or cfg["live_ghost"] == "Live" or cfg["borrow_attention"] or cfg["prompt_graft"]
+    grafting = experiment.graft
+    sketching = helper and cfg["live_ghost"] == "Sketch first" and r.given["ghost"] is None
+    if sketching and r.given["sketch"] is not None:  # a clip keeps its first sketch, or the layout would jump every frame
+        ghost.ghost, sketching = r.given["sketch"], False
+    if helper and (needed or sketching):
+        helper.to(device)
+        helper.restart(r.seed + batch)
+        if sketching:
+            hooks.status("Painting the sketch")
+            drawn = helper.paint(cfg["sketch_steps"])
+            ghost.ghost = drawn.add(1).div(2).float()
+            if r.animating:
+                r.given["sketch"] = ghost.ghost
+            if cfg["partner_keep_sketch"]:
+                r.save_sketch(drawn)
+        if not needed:  # only the sketch was wanted, so the render gets the VRAM back
+            helper.to("cpu")
+            torch.cuda.empty_cache()
+    if r.given["ghost"] is not None:
+        ghost.ghost = r.given["ghost"]
+    first = diffusion.num_timesteps - skip - 1
+    x = r.start_noise((1, 3, height, width), device)
+    if x is None:
+        x = torch.randn(1, 3, height, width, device=device)
+    if skip or start is not None:
+        base = torch.zeros_like(x) if start is None else start
+        x = diffusion.q_sample(base, torch.tensor([first], device=device), x)
+    image = torch.zeros_like(x)
+    for j, i in enumerate(range(first, -1, -1)):
+        r.t = i
+        if eraser:
+            eraser.shown = image  # the last step's picture, which a pause here shows
+        hooks.step(j + before, first + 1 + before, batch, r.n_batches, r.seed, at=1 - i / diffusion.num_timesteps)
+        t = torch.tensor([i], device=device)
+        at = schedule_at(i, diffusion.num_timesteps)
+        band = int(experiment.band[at])
+        if helper and needed:
+            helper.strength = experiment.borrow[at]
+            live = cfg["live_ghost"] == "Live" and ghost.curve[at]
+            if grafting:
+                grafting.strength = cfg["prompt_graft"] * grafting.curve[at]
+            if band or (helper.strength or live or grafting and grafting.strength) and j % cfg["partner_every"] == 0:
+                helper.refresh(image, float(diffusion.alphas_cumprod[i]))
+                if live:
+                    ghost.ghost = helper.sketch().add(1).div(2).float()
+                if grafting:
+                    grafting.update(helper.difference, helper.nearest(float(diffusion.alphas_cumprod[i])))
+        alpha, alpha_prev = diffusion.alphas_cumprod[i], diffusion.alphas_cumprod_prev[i]
+        repeats = experiment.repeats(at)
+        for repeat in range(repeats + 1):
+            with torch.no_grad():
+                out = diffusion.ddim_sample(r.one_pass, x, t, clip_denoised=cfg["clip_denoised"], cond_fn=r.cond_fn,
+                                            model_kwargs={}, eta=cfg["eta"])
+            x = out["sample"]
+            if repeat < repeats:  # back up one step, so the model can absorb the push
+                ratio = alpha / alpha_prev
+                x = math.sqrt(ratio) * x + math.sqrt(1 - ratio) * torch.randn_like(x)
+        image = out["pred_xstart"].detach()
+        if ghost:
+            x = ghost.pull(x, image, math.sqrt(alpha_prev), at)
+        x = r.hold_layout(x, image, i)
+        if eraser and eraser.step(image):
+            r.forget_erased()
+            x = eraser.restart(x, i, r.predict)
+        if steer:
+            x = steer.pull(x, image, i, diffusion)
+        if band:
+            moved = experiment.share(helper.sketch(), image, band)
+            image = image + moved
+            x = x + math.sqrt(alpha_prev) * moved
+            if experiment.band_path == "Blend":  # the noise estimate changes with the mix, so the step stays small
+                sigma = cfg["eta"] * math.sqrt((1 - alpha_prev) / (1 - alpha)) * math.sqrt(1 - alpha / alpha_prev)
+                x = x - math.sqrt(max(1 - alpha_prev - sigma ** 2, 0)) * math.sqrt(alpha / (1 - alpha)) * moved
+        if judge and cfg["correct_steps"] and judge.correct_curve[at] and i > 0:
+            # Langevin steps at the new noise level, so the picture settles there before the next step. With
+            # Two painters they aim at both models' combined prediction, so the path samples both at once.
+            r.t = i - 1
+            t_next = torch.tensor([i - 1], device=device)
+            for _ in range(int(cfg["correct_steps"])):
+                with torch.no_grad():
+                    mine = diffusion.ddim_sample(r.one_pass, x, t_next, clip_denoised=cfg["clip_denoised"],
+                                                 cond_fn=r.cond_fn if cfg["correct_clip"] else None, model_kwargs={}, eta=0)["pred_xstart"]
+                    if helper and band:
+                        theirs = helper.denoise(mine, float(alpha_prev))
+                        mine = mine + experiment.share(theirs, mine, band)
+                    x = judge.corrector(x, mine, float(alpha_prev), float(cfg["correct_snr"]))
+            image = mine.detach()
+        if j % cfg["display_rate"] == 0 or not i or j + 1 == stop or r.pausing():
+            hooks.preview(show(image))
+        if j + 1 == stop:
+            break
+    if helper and needed and helper.z0 is not None and cfg["partner_keep_sketch"]:
+        r.save_sketch(helper.sketch())
+    r.release()
+    return image
