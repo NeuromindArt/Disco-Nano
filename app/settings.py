@@ -18,6 +18,7 @@ TILES = "Tiles"
 LAB = "Experimental"
 CONTROLS = "Controls"
 HANDOFF = "Handoff"
+INPAINT = "Inpaint"
 ANIMATION = "Animation"
 
 FIELDS = [
@@ -76,7 +77,7 @@ FIELDS = [
 
     field("tile_scale", "Off", TILES, "Builds a larger image from several renders at the frame size. Time grows with the number of tiles.",
           options=["Off", "2x, 4 tiles", "3x, 9 tiles", "4x, 16 tiles"]),
-    field("tile_denoise", 0.5, TILES, "How much each tile may change. Low keeps the picture, high paints something new."),
+    field("tile_denoise", 0.5, TILES, "With Render first, how much the tiles repaint the first picture. Low keeps it, high paints something new."),
     field("tile_start", "Render first", TILES,
           "For renders with no start image. Render first paints one image, then repaints it in tiles, for one scene. Split the noise tiles from the start: busier, and the subject can repeat.",
           options=["Render first", "Split the noise"]),
@@ -100,6 +101,9 @@ FIELDS = [
     field("small_hold", 0.0, HANDOFF, "After {small_first}, keeps the full size's broad shapes and colors close to the small picture, so no second subject grows. Fine detail stays free. About 0.5 is a good start. 0 is off."),
     field("small_hold_curve", "[1]*500+[0]*500", HANDOFF, "How much {small_hold} applies, over the 1000-step schedule. The default holds until halfway, then lets go for the detail."),
     field("small_side", 768, HANDOFF,"The longer side of the {small_first} start, in pixels. Frames no larger than this aren't affected."),
+    field("inpaint_file", "", INPAINT, "The full path of an SD 1.5, SDXL, Z-Image, Flux.1 or Flux.2 Klein model, .safetensors or .gguf, that Fix's Inpaint paints with. Empty leaves Inpaint off."),
+    field("inpaint_steps", 30, INPAINT, "Steps for the {inpaint_file}'s whole path. An inpaint takes its Strength's share of them. Few-step models such as Lightning, Turbo or Klein want 4 to 8."),
+    field("inpaint_guidance", 7.0, INPAINT, "How closely the {inpaint_file} follows the inpaint's prompt. 5 to 8 suits most checkpoints, 1 to 2 few-step models, 1 Klein and Z-Image Turbo, and 3.5 Flux dev."),
     field("handoff_keep", False, HANDOFF,"Also saves the {handoff_file}'s picture beside each image, and with {handoff_finish}, Disco's own image. Not for animation."),
 
     field("animation_mode", "None", ANIMATION, "2D moves a flat picture. 3D flies a camera through the scene, using Depth Anything to tell near from far. Video Input repaints every frame of a video.",
@@ -173,7 +177,7 @@ FIELDS = [
     field("person_curve", "[1]*700+[0]*300", CONTROLS, "How much {person_control} counts, over the 1000-step schedule. Held late, the person can look pasted in."),
     field("depth_target", 0.0, LAB, "Steers toward the ghost's depth, so near and far stay in place. Needs {live_ghost}, {ghost_image} or {frame_ghost}, and Depth Anything from Models in Settings. About 1 is a good start."),
     field("two_painters", False, LAB, "The partner model and Disco paint one picture at every step. The partner owns the broad shapes, and the size it owns shrinks over the render."),
-    field("painters_curve", "[64]*300+[32]*300+[16]*200+[0]*200", LAB, "The smallest shape, in pixels, that the partner owns, over the 1000-step schedule. 0 leaves everything to Disco."),
+    field("painters_curve", "[64]*200+[32]*200+[0]*600", LAB, "The smallest shape, in pixels, that the partner owns, over the 1000-step schedule. 0 leaves everything to Disco. Handing over later flattens the light and dark."),
     field("painters_strength", 1.0, LAB, "How much of the broad shapes the partner decides."),
     field("painters_color", False, LAB, "Also takes the partner's broad color, not just its light and dark."),
     field("painters_path", "Blend", LAB, "Blend mixes the two predictions. Replace moves the picture straight to the mix.", options=["Blend", "Replace"]),
@@ -256,6 +260,7 @@ LABELS = {
     "one_subject": "One subject", "subject_words": "Subjects", "one_subject_curve": "One subject curve",
     "correct_steps": "Corrector steps", "correct_curve": "Corrector curve", "correct_snr": "Corrector size", "correct_clip": "Corrector follows the prompt",
     "borrow_grids": "Borrowed layers",
+    "inpaint_file": "Inpaint model", "inpaint_steps": "Inpaint steps", "inpaint_guidance": "Inpaint guidance",
     "handoff_file": "Handoff model", "handoff_share": "Handoff %", "handoff_finish": "Finish %", "handoff_steps": "Steps",
     "handoff_guidance": "CFG", "handoff_few_steps": "Few-step model", "handoff_negative": "Negative prompt",
     "handoff_keep": "Save its picture", "handoff_start_denoise": "Start denoise %", "handoff_sampler": "Sampler",
@@ -272,7 +277,7 @@ LABELS = {
 # Nano's own settings, which have no official name.
 NANO_ONLY = {"views_fit", "views_shapes", "exact_repeat", "cpu_threads", "save_progress_video", "keep_models_loaded", "image_prompts", "image_prompt_weight", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view", "tile_overlap",
              "color_hold", "frame_sharpen", "frame_skip_keys", "frame_ghost", "prompt_fade", "in_between", "loop_mode", "loop_frames", "video_blend", "video_flow", "save_mp4", "save_webp", "save_gif",
-             *(f["name"] for f in FIELDS if f["section"] in (LAB, HANDOFF, CONTROLS))}
+             *(f["name"] for f in FIELDS if f["section"] in (LAB, HANDOFF, CONTROLS, INPAINT))}
 
 # Words that aren't settings, as plain and official.
 WORDS = {
@@ -347,6 +352,8 @@ RANGES = {
     "handoff_share": (0, 100),
     "handoff_finish": (0, 100),
     "handoff_steps": (4, 60),
+    "inpaint_steps": (4, 60),
+    "inpaint_guidance": (1, 12),
     "handoff_guidance": (1, 12),
     "handoff_start_denoise": (0, 100),
     "handoff_clip_skip": (1, 4),

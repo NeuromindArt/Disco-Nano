@@ -445,9 +445,9 @@ class FlowHandoff:
     def label(self):
         return self.about["label"]
 
-    def zimage_guidance(self):
+    def zimage_guidance(self, guidance=None):
         """Z-Image's pipeline counts guidance from 0, one below the usual scale."""
-        return max(self.guidance - 1, 0.0)
+        return max((self.guidance if guidance is None else guidance) - 1, 0.0)
 
     def load_transformer(self, path, folder, names):
         import diffusers
@@ -509,8 +509,17 @@ class FlowHandoff:
         self.steps = max(int(cfg["handoff_steps"]), 1)
         self.guidance = float(cfg["handoff_guidance"])
         self.embeds = []
-        # On the GPU when they fit with room to work. Otherwise each encoder streams there a layer at a time, as a big
-        # model does, and if that can't be set up, it runs on the CPU, which is slow but always fits.
+        where = self.encoders_on(status)
+        try:
+            for at, lines in prompt_sets:
+                self.embeds.append((at, self.encode_text(*words(lines, cfg["handoff_negative"]), self.guidance, where)))
+        finally:
+            self.encoders_off()
+
+    def encoders_on(self, status):
+        """Brings the text encoders where they can run, and returns that device. On the GPU when they fit with room
+        to work. Otherwise each encoder streams there a layer at a time, as a big model does, and if that can't be
+        set up, it runs on the CPU, which is slow but always fits."""
         size = sum(p.numel() * p.element_size() for e in self.encoders for p in e.parameters())
         where = self.device
         if memory.room() > size + 0.5 * GB and not any(getattr(e, "streams", False) for e in self.encoders):
@@ -529,36 +538,37 @@ class FlowHandoff:
                 where = "cpu"
                 status("Encoding the prompt on the CPU, as the GPU is short of room")
         self.attach_encoders(True)
-        try:
-            with torch.no_grad():
-                for at, lines in prompt_sets:
-                    text, negative = words(lines, cfg["handoff_negative"])
-                    if self.kind == "zimage":
-                        guided = self.zimage_guidance() > 0
-                        positive, negatives = self.text_pipe.encode_prompt(prompt=text, device=where,
-                                                                           do_classifier_free_guidance=guided,
-                                                                           negative_prompt=negative or "")
-                        embeds = {"prompt_embeds": [e.cpu() for e in positive]}
-                        if guided:
-                            embeds["negative_prompt_embeds"] = [e.cpu() for e in negatives]
-                    elif self.kind == "flux2":
-                        positive, _ = self.text_pipe.encode_prompt(prompt=text, device=where, max_sequence_length=512)
-                        embeds = {"prompt_embeds": positive.cpu()}
-                        if self.variant == "base" and self.guidance > 1:  # the distilled builds don't read one
-                            negatives, _ = self.text_pipe.encode_prompt(prompt=negative or "", device=where, max_sequence_length=512)
-                            embeds["negative_prompt_embeds"] = negatives.cpu()
-                    else:
-                        prompt_embeds, pooled, _ = self.text_pipe.encode_prompt(prompt=text, prompt_2=text, device=where,
-                                                                                 max_sequence_length=256 if self.variant == "schnell" else 512)
-                        embeds = {"prompt_embeds": prompt_embeds.cpu(), "pooled_prompt_embeds": pooled.cpu()}
-                    self.embeds.append((at, embeds))
-        finally:
-            self.attach_encoders(False)
-            for e in self.encoders:
-                if not getattr(e, "streams", False):
-                    e.to("cpu")
-            gc.collect()
-            torch.cuda.empty_cache()
+        return where
+
+    def encoders_off(self):
+        self.attach_encoders(False)
+        for e in self.encoders:
+            if not getattr(e, "streams", False):
+                e.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    @torch.no_grad()
+    def encode_text(self, text, negative, guidance, where):
+        """One prompt's embeddings, in RAM, as the pipelines take them, for this guidance."""
+        if self.kind == "zimage":
+            guided = self.zimage_guidance(guidance) > 0
+            positive, negatives = self.text_pipe.encode_prompt(prompt=text, device=where, do_classifier_free_guidance=guided,
+                                                               negative_prompt=negative or "")
+            embeds = {"prompt_embeds": [e.cpu() for e in positive]}
+            if guided:
+                embeds["negative_prompt_embeds"] = [e.cpu() for e in negatives]
+            return embeds
+        if self.kind == "flux2":
+            positive, _ = self.text_pipe.encode_prompt(prompt=text, device=where, max_sequence_length=512)
+            embeds = {"prompt_embeds": positive.cpu()}
+            if self.variant == "base" and guidance > 1:  # the distilled builds don't read one
+                negatives, _ = self.text_pipe.encode_prompt(prompt=negative or "", device=where, max_sequence_length=512)
+                embeds["negative_prompt_embeds"] = negatives.cpu()
+            return embeds
+        prompt_embeds, pooled, _ = self.text_pipe.encode_prompt(prompt=text, prompt_2=text, device=where,
+                                                                 max_sequence_length=256 if self.variant == "schnell" else 512)
+        return {"prompt_embeds": prompt_embeds.cpu(), "pooled_prompt_embeds": pooled.cpu()}
 
     def needs_room(self, width, height, painted=False):
         if not painted:
@@ -576,12 +586,13 @@ class FlowHandoff:
         chosen = next((e for at, e in reversed(self.embeds) if at <= frame), self.embeds[0][1])
         return {k: [v.to(self.device) for v in e] if isinstance(e, list) else e.to(self.device) for k, e in chosen.items()}
 
-    def _guidance(self):
+    def _guidance(self, guidance=None):
+        guidance = self.guidance if guidance is None else guidance
         if self.kind == "zimage":
-            return {"guidance_scale": self.zimage_guidance()}
+            return {"guidance_scale": self.zimage_guidance(guidance)}
         if self.kind == "flux2":
-            return {"guidance_scale": self.guidance}  # real CFG on Base, and ignored by the distilled builds
-        return {"guidance_scale": self.guidance if self.variant == "dev" else 0.0}
+            return {"guidance_scale": guidance}  # real CFG on Base, and ignored by the distilled builds
+        return {"guidance_scale": guidance if self.variant == "dev" else 0.0}
 
     def _picture(self, image, width, height, begin, common):
         """What the picture-to-picture pipelines take to start from `image` at step `begin`. They start at
@@ -690,6 +701,90 @@ class FlowHandoff:
         gc.collect()
         torch.cuda.empty_cache()
         return picture.resize((width, height), Image.LANCZOS)
+
+    def inpaint_size(self, width, height):
+        return size_for(width, height)
+
+    def inpaint_pipe(self):
+        """diffusers' inpainting pipeline for this model, built once from the parts already loaded. It paints the
+        masked part from `strength` of the way to noise, and at each step puts back the rest of the picture at that
+        step's noise level, so the two meet without a seam. Klein has its own way, in klein_inpaint()."""
+        if getattr(self, "_inpaint_pipe", None) is None:
+            import diffusers
+            parts = {k: v for k, v in self.text_pipe.components.items() if k in ("scheduler", "vae", "transformer", "tokenizer", "tokenizer_2")}
+            if self.kind == "zimage":
+                pipe = diffusers.ZImageInpaintPipeline(**parts, text_encoder=None)
+            else:
+                pipe = diffusers.FluxInpaintPipeline(**parts, text_encoder=None, text_encoder_2=None)
+            pipe.set_progress_bar_config(disable=True)
+            self._inpaint_pipe = pipe
+        return self._inpaint_pipe
+
+    @torch.no_grad()
+    def inpaint(self, image, mask, text, strength, steps, guidance, seed):
+        """The picture with the white of `mask` repainted, both PIL images at a size inpaint_size() gave. `text` may
+        be empty: the model then carries on the picture around the area."""
+        where = self.encoders_on(self.status)
+        try:
+            embeds = self.encode_text(text, "", guidance, where)
+        finally:
+            self.encoders_off()
+        run = max(int(steps * strength), 1)
+
+        def check(p, i, t, values):
+            self.status(f"Inpainting, step {i + 1} of {run}")
+            if self.stopped():
+                raise KeyboardInterrupt
+            return values
+
+        try:
+            self.to_gpu(True)
+            if self.kind == "flux2":
+                return self.klein_inpaint(image, mask, embeds, strength, steps, guidance, seed, check)
+            out = self.inpaint_pipe()(image=image, mask_image=mask, strength=strength, num_inference_steps=steps, height=image.height,
+                       width=image.width, generator=torch.Generator(self.device).manual_seed(int(seed) % 2**32),
+                       callback_on_step_end=check, **self._guidance(guidance),
+                       **{k: [v.to(self.device) for v in e] if isinstance(e, list) else e.to(self.device) for k, e in embeds.items()})
+            picture = out.images[0]
+        finally:
+            self.to_gpu(False)
+            out = embeds = None
+            gc.collect()
+            torch.cuda.empty_cache()
+        return picture
+
+    def klein_inpaint(self, image, mask, embeds, strength, steps, guidance, seed, check):
+        """Klein's inpainting. diffusers' Klein inpainter always shows the model the picture it starts from as a
+        reference, and Klein copies a reference, so what was there comes back. So the plain pipeline paints instead,
+        from the picture noised to `strength`, and after every step the rest of the picture goes back in at that
+        step's noise level, as the other inpainters do."""
+        import numpy as np
+        import torch.nn.functional as F
+        from diffusers.pipelines.flux2.pipeline_flux2_klein import compute_empirical_mu
+        pipe = self.text_pipe
+        generator = torch.Generator(self.device).manual_seed(int(seed) % 2**32)
+        pixels = pipe.image_processor.preprocess(image, height=image.height, width=image.width).to(self.device, self.vae.dtype)
+        latent = pipe._encode_vae_image(pixels, generator).float()
+        path = np.linspace(1.0, 1 / steps, steps)  # as the pipeline lays it out, then shifts it for the size
+        pipe.scheduler.set_timesteps(sigmas=path, device=self.device, mu=compute_empirical_mu(latent.shape[2] * latent.shape[3], steps))
+        begin = min(max(steps - max(int(steps * strength), 1), 0), steps - 1)
+        sigma = float(pipe.scheduler.sigmas[begin])
+        noise = torch.randn(latent.shape, generator=generator, device=self.device, dtype=latent.dtype)
+        known, still = pipe._pack_latents(latent), pipe._pack_latents(noise)
+        area = torch.from_numpy(np.asarray(mask.convert("L"), dtype=np.float32) / 255)[None, None].to(self.device)
+        area = pipe._pack_latents((F.interpolate(area, latent.shape[2:], mode="area") > 0.5).float())
+
+        def keep_the_rest(p, i, t, values):
+            level = float(p.scheduler.sigmas[p.scheduler.step_index])
+            painted = values["latents"]
+            outside = ((1 - level) * known + level * still).to(painted.dtype)
+            values["latents"] = painted * area.to(painted.dtype) + outside * (1 - area).to(painted.dtype)
+            return check(p, i, t, values)
+
+        out = pipe(latents=((1 - sigma) * latent + sigma * noise).to(COMPUTE), sigmas=list(path[begin:]), num_inference_steps=steps,
+                   height=image.height, width=image.width, generator=generator, callback_on_step_end=keep_the_rest,
+                   **self._guidance(guidance), **{k: v.to(self.device) for k, v in embeds.items()})
+        return out.images[0]
 
     def show(self, latent, size, common):
         """The picture so far in the preview, decoded as Disco gets it, skipping steps so decoding takes at

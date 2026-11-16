@@ -134,28 +134,37 @@ class Handoff:
         self.clip_skip = max(int(cfg.get("handoff_clip_skip") or 1), 1) - 1  # diffusers counts the layers left out
         self.text_pipe.scheduler = self.image_pipe.scheduler = make_scheduler(
             self.scheduler_config, cfg.get("handoff_sampler", "Euler"), bool(cfg.get("handoff_karras")), bool(cfg["handoff_few_steps"]))
+        self.embeds = []
+        self.encoders_on()
+        try:
+            for at, lines in prompt_sets:
+                self.embeds.append((at, self.encode_text(*words(lines, cfg["handoff_negative"]), self.guidance, self.clip_skip)))
+        finally:
+            self.encoders_off()
+
+    def encoders_on(self, status=None):
         for e in self.encoders:
             e.to(self.device)
         self.attach_encoders(True)
-        self.embeds = []
+        return self.device
+
+    def encoders_off(self):
+        self.attach_encoders(False)
+        for e in self.encoders:
+            e.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    @torch.no_grad()
+    def encode_text(self, text, negative, guidance, clip_skip=0):
+        """One prompt's embeddings, in RAM, as the pipelines take them, for this guidance."""
         names = (["prompt_embeds", "negative_prompt_embeds", "pooled_prompt_embeds", "negative_pooled_prompt_embeds"]
                  if self.xl else ["prompt_embeds", "negative_prompt_embeds"])
-        try:
-            with torch.no_grad():
-                for at, lines in prompt_sets:
-                    text, negative = words(lines, cfg["handoff_negative"])
-                    both = {"prompt_2": text, "negative_prompt_2": negative} if self.xl else {}
-                    out = self.text_pipe.encode_prompt(prompt=text, device=self.device, num_images_per_prompt=1,
-                                                       do_classifier_free_guidance=self.guidance > 1, negative_prompt=negative,
-                                                       clip_skip=self.clip_skip or None, **both)
-                    self.embeds.append((at, {k: v.cpu() for k, v in zip(names, out) if v is not None}))
-        finally:
-            self.attach_encoders(False)
-            for e in self.encoders:
-                e.to("cpu")
-            out = None
-            gc.collect()
-            torch.cuda.empty_cache()
+        both = {"prompt_2": text, "negative_prompt_2": negative} if self.xl else {}
+        out = self.text_pipe.encode_prompt(prompt=text, device=self.device, num_images_per_prompt=1,
+                                           do_classifier_free_guidance=guidance > 1, negative_prompt=negative,
+                                           clip_skip=clip_skip or None, **both)
+        return {k: v.cpu() for k, v in zip(names, out) if v is not None}
 
     def finish_size(self, width, height):
         return finish_size(width, height)
@@ -281,6 +290,60 @@ class Handoff:
         gc.collect()
         torch.cuda.empty_cache()
         return picture.resize((width, height), Image.LANCZOS)
+
+    def inpaint_size(self, width, height):
+        return size_for(width, height)
+
+    def inpaint_pipe(self, steps):
+        """diffusers' inpainting pipeline for this checkpoint, built once from the parts already loaded, with an Euler
+        scheduler spaced for few-step models when it runs few steps. It paints the masked part from `strength` of the
+        way to noise, and at each step puts back the rest of the picture at that step's noise level, so the two meet
+        without a seam."""
+        import diffusers
+        if getattr(self, "_inpaint_pipe", None) is None:
+            parts = dict(self.text_pipe.components, text_encoder=None)
+            if self.xl:
+                pipe = diffusers.StableDiffusionXLInpaintPipeline(**{**parts, "text_encoder_2": None})
+            else:
+                pipe = diffusers.StableDiffusionInpaintPipeline(**{**parts, "safety_checker": None}, requires_safety_checker=False)
+            pipe.set_progress_bar_config(disable=True)
+            self._inpaint_pipe = pipe
+        self._inpaint_pipe.scheduler = make_scheduler(self.scheduler_config, "Euler", False, steps <= 10)
+        return self._inpaint_pipe
+
+    @torch.no_grad()
+    def inpaint(self, image, mask, text, strength, steps, guidance, seed):
+        """The picture with the white of `mask` repainted, both PIL images at a size inpaint_size() gave. `text` may
+        be empty: the checkpoint then carries on the picture around the area."""
+        self.encoders_on()
+        try:
+            embeds = self.encode_text(text, "", guidance)
+        finally:
+            self.encoders_off()
+        pipe = self.inpaint_pipe(steps)
+        run = max(int(steps * strength), 1)
+
+        def check(p, i, t, values):
+            self.status(f"Inpainting, step {i + 1} of {run}")
+            if self.stopped():
+                raise KeyboardInterrupt
+            return values
+
+        try:
+            self.vae.to(self.device)
+            self.unet.to(self.device)
+            out = pipe(image=image, mask_image=mask, strength=strength, num_inference_steps=steps, height=image.height,
+                       width=image.width, guidance_scale=guidance, callback_on_step_end=check,
+                       generator=torch.Generator(self.device).manual_seed(int(seed) % 2**32),
+                       **{k: v.to(self.device) for k, v in embeds.items()})
+            picture = out.images[0]
+        finally:  # whatever happened, the GPU goes back to Disco
+            self.unet.to("cpu")
+            self.vae.to("cpu")
+            out = embeds = None
+            gc.collect()
+            torch.cuda.empty_cache()
+        return picture
 
     def encode(self, image):
         vae = self.vae.float() if self.xl else self.vae  # SDXL's VAE overflows in float16

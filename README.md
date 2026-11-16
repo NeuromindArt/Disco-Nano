@@ -41,6 +41,9 @@ RTX 3070 8GB.
   even from text alone
 - Regional prompts: draw boxes on the frame, each with a prompt of its own, before a render or by
   pausing one on its preview
+- Fix: pause a render and erase something you don't want, with Disco repainting the area so there's
+  no seam, inpaint it with a model of your own, or clone one part of the picture over another.
+  Inpaint and Clone keep their detail even late on
 - Image prompts: a set of images guides the render alongside the text, like an embedding with no training
 - VRAM, RAM and disk bars that show what Disco uses next to the rest of the PC. Offloading to RAM
   turns on by itself when a render needs it
@@ -192,9 +195,11 @@ downloads its own copy into Nano's folder.
    [latest release](https://github.com/NeuromindArt/Disco-Nano/releases/latest), under **Assets**.
 2. Extract it somewhere outside OneDrive, such as `C:\`. You get a **Disco Diffusion Nano** folder.
 3. Double-click **setup.bat** in that folder. It installs everything into a `data` folder beside it:
-   about 6GB of libraries and the 2GB main model, so the first run takes a while.
-4. Double-click **Start Disco Nano.bat**. The black window shows what is loading, and the app opens
-   in your browser at http://127.0.0.1:7861 when it is ready.
+   about 6GB of libraries and the 2GB main model, so the first run takes a while. Models that ComfyUI or
+   a Stable Diffusion web UI on the PC already has are used where they are instead of downloaded.
+4. Double-click **Disco Nano**, the shortcut with the Disco icon that setup makes, or **Start Disco
+   Nano.bat**. The black window shows what is loading, and the app opens in your browser at
+   http://127.0.0.1:7861 when it is ready. Drag the shortcut to the desktop or taskbar to keep it handy.
 
 Closing the black window shuts Nano down. CLIP models download on your first render.
 
@@ -419,8 +424,8 @@ which suits a restyle. Video Input and the frames of a 2D or 3D clip do the same
   render.
 
 The bar at the top of the Views card counts this for the settings you have: which steps are skipped,
-which a Handoff checkpoint paints, which lay out shapes and which paint detail. With Tiles it counts
-from Tile denoise, and with Frame skip keyframes it shows a frame on average. It reads the schedules too: a step lays out shapes while
+which a Handoff checkpoint paints, which lay out shapes and which paint detail. With Frame skip
+keyframes it shows a frame on average. It reads the schedules too: a step lays out shapes while
 Whole-image views at least match Close-up views, so editing those two moves the split. Each schedule's
 graph marks where shapes end, and shades what a start image or Frame skip skips.
 
@@ -429,6 +434,7 @@ graph marks where shapes end, and shades what a start image or Frame skip skips.
 **Handoff** lets a model you already have, SD 1.5, SDXL, Z-Image, Flux.1 or Flux.2 Klein, paint first, and Disco
 then repaints its picture: the checkpoint decides the layout and subject, and Disco paints it. It can
 also run the other way round, with the checkpoint finishing Disco's image, or both in one render.
+The switch on the card's title row turns it on and off, and off remembers the model for next time.
 
 - **Handoff model** lists the SD 1.5 and SDXL checkpoints in your checkpoint folders, and the Z-Image,
   Flux.1 and Flux.2 Klein models in the `unet` and `diffusion_models` folders beside them, grouped by subfolder.
@@ -525,7 +531,7 @@ experiments that are sized to the frame: the partner model's, the ghost and styl
 ## Regional prompts
 
 The **Regional prompts** card puts boxes on the frame, each with a prompt of its own: a lighthouse on
-the left, a boat on the right. Turn it on, press **Edit regions**, drag on the frame to draw a box, type
+the left, a boat on the right. Turn it on with the switch on the card's title row, press **Edit regions**, drag on the frame to draw a box, type
 its prompt, then press Done. Drag a box to move it, drag its corner to resize it, and press × to remove
 it. The card lists the boxes, and they go with every render while it's on. Turning it off keeps them for
 later.
@@ -541,7 +547,102 @@ the rest, so the style stays the same across the picture. Whole-picture views ar
 prompt, each region's by how much of the frame its box covers. **Strength** is how much a box's prompt
 takes over inside it: 0.75 by default, and 1 leaves the main prompt out of a close-up inside a box.
 Boxes are kept as shares of the frame, so they fit any size and work with Small first. Regional prompts
-work with stills and clips, but not with Tiles.
+work with stills, clips and Tiles. With Tiles, the boxes lie over the whole tiled picture.
+
+## Fix
+
+**Fix** changes a render while it paints. Press **Fix** beside Stop and the render pauses after the
+current step. Pick **Erase**, **Clone** or **Inpaint** on the bar, paint on the preview, then press **Apply
+and continue**. You can use all three in one pause: the erase is done first, then the inpaint, and the
+clones go over them. Each fix
+works on the picture as it is at that step, so if the prompt grows something back, fix it again later.
+Fix works with Tiles, where a pause waits for the step all the tiles are on. It is for stills: in a clip,
+what it fixed would change partway through.
+
+<table>
+  <tr>
+    <td width="40%" valign="top"><b>Without a fix</b><br>A render with a second lighthouse on the far headland.</td>
+    <td width="60%"><img src="docs/fix/untouched.jpg" width="100%" alt="The render without a fix, with a second lighthouse on the far headland"></td>
+  </tr>
+  <tr>
+    <td width="40%" valign="top"><b>Erase at 70%</b><br>Painted over, the lighthouse is gone, and Disco paints the storm into its place.<br><br><img src="docs/fix/erase_painted.jpg" width="120" alt="The lighthouse painted over in red"><br><sub>What was painted over</sub></td>
+    <td width="60%"><img src="docs/fix/erase.jpg" width="100%" alt="Erase: the lighthouse is gone"></td>
+  </tr>
+  <tr>
+    <td width="40%" valign="top"><b>Clone at 85%</b><br>Sky from beside the lighthouse, copied over it. Late in a render, Clone keeps the picture's detail where an erase comes out soft.<br><br><img src="docs/fix/clone_painted.jpg" width="120" alt="The sky copied over the lighthouse"><br><sub>The copy as painted</sub></td>
+    <td width="60%"><img src="docs/fix/clone.jpg" width="100%" alt="Clone: sky and spray where the lighthouse was"></td>
+  </tr>
+  <tr>
+    <td width="40%" valign="top"><b>Inpaint at 60%</b><br><i>a small wooden sailboat</i>, painted in by Flux.2 Klein, then carried on by Disco, which works the surf over its bow. Painted in at 85%, the boat would stay closer to the model's own.<br><br><img src="docs/fix/inpaint_painted.jpg" width="120" alt="Where the boat goes, painted in violet"><br><sub>Where the boat goes</sub></td>
+    <td width="60%"><img src="docs/fix/inpaint.jpg" width="100%" alt="Inpaint: a wooden sailboat in the surf"></td>
+  </tr>
+</table>
+
+**Erase** removes what you paint over. [LaMa](https://github.com/advimman/lama) fills the area from what
+is around it, and Disco repaints the fill over the steps left, so it takes on the picture's style and
+leaves no seam.
+
+Up to 70% of the way through, the erased area gets fresh noise, as the render's own noise still holds
+the old thing's shape then and would rebuild it in the same place. After that, the area gets less fresh
+noise, and none from 80%: by then the render's own noise is too weak to rebuild anything, and fresh noise
+can't all be painted out in the steps left, so it would turn to grain.
+
+LaMa's fill is smooth, and partway through a render Disco only builds on the broad shapes an area already
+has, so a fill carried straight on would be painted as haze. So while it gets fresh noise, the erased area
+first goes back to an earlier, noisier point, where Disco draws broad shapes of its own that fit what is
+around it, then comes back to the render's step in a few quick steps. That adds a few seconds to the erase.
+From 80% it can't: too few steps would be left after coming back to add detail. Late in a render, Disco
+only polishes what an area holds, so an erased area keeps LaMa's softness, and the bar suggests Clone.
+
+**Clone** copies one part of the picture over another, like a clone stamp, at any step. Alt-click where
+to copy from, then paint where it should go: a crosshair shows the source, which follows the brush, so
+later strokes keep copying from the same distance. Alt-click again for a new source. The copy's colors
+are matched to where it lands, by the difference along its edge, so a piece from a lighter part of the
+sky doesn't show as a patch. A clone gets fresh noise as an erase does, so what it covers doesn't come
+back, but it doesn't go back to be drawn again, and Disco carries on painting it. Since it is already as
+detailed as the picture, it keeps its detail late in a render, where an erase can't: tested at 85%, a
+piece of sky cloned over a lighthouse kept its detail to the end and blended in.
+
+**Inpaint** has a model of your own paint something into the picture: any model Handoff takes, SD 1.5,
+SDXL, Z-Image, Flux.1 or Flux.2 Klein. Choose it under **Inpaint** in Settings, where its steps and guidance
+fill in for the model's kind. Until one is chosen, Inpaint is greyed out. Paint where it should go, and
+say what in the box on the bar, such as *a small sailboat*. Left empty, the model paints whatever fits
+around the area. **Start** picks what it paints from:
+
+- **Fresh** (the default): the model paints the area anew.
+- **Rework**: the model paints over what's there, at **Strength**, to change it rather than replace it.
+- **Over a cleared area**: LaMa clears what's there first, then the model paints over its fill at Strength.
+
+The model paints a crop around the area, with as much again on each side to see what surrounds it,
+and diffusers' inpainting puts back the rest of the crop at every step, so the two meet without a seam.
+Like a clone, an inpaint is as detailed as the picture, so it keeps its detail late in a render. The
+model loads the first time it's used, which takes up to a minute, and stays in RAM for the rest of the
+render, and for the next one if it's used again. While it paints, Disco waits in RAM if the two won't
+fit on the GPU together. If an inpaint fails, the render carries on: an area it would have painted over a
+cleared area is erased instead, and the status line says why.
+
+The **Noise** slider beside Brush shows how much fresh noise this fix gives the areas, and starts at the
+share that suits the step the render paused at. Each fix starts from that again, so you don't have to set
+it each time. If something keeps coming back, raise it. If a fixed area turns grainy, lower it.
+
+Fix once you can see the thing, from about a third of the way through. Before that the layout is still
+forming, and the change spreads to the rest of the picture. LaMa (0.2GB) downloads the first time you
+erase, or get it from Models in Settings. It runs for about a second and leaves the GPU straight after,
+so it adds nothing to the VRAM a render needs.
+
+**On the start image.** Something that is in the start image fixes best there, before the render:
+otherwise the render begins with it in place, and from Denoise 50% it begins past the shapes phase, with
+too few steps left to paint it out. Press the brush on the start image and it opens on the stage. Erase,
+inpaint or clone, then press **Apply**. The result is saved as a new image beside the start image, which it
+replaces, so the original is kept, and you can fix more before rendering. It runs on the GPU, or on the
+CPU while a render is running, and takes a few seconds. Inpaint runs on the GPU, so it waits for the
+render to end.
+
+The brush's size is on the bar, and the **[** and **]** keys and the mouse wheel change it. **E** and
+**C** and **I** switch between Erase, Clone and Inpaint. **Undo**, or Ctrl+Z, takes back the last stroke. Each fix during a
+render saves the picture before it and after it in the render's job folder, beside what you painted:
+`erase-0-before.jpg` and `erase-0-fill.jpg` for the first, with `erase-0.png` for an erase mask and
+`inpaint-0.png` for an inpaint, and `clone-0-0.png` and on for each clone source's mask.
 
 ## Controls
 
@@ -616,7 +717,9 @@ image. Get Tiny SD from Models, about 900MB.
   depth model reads the ghost once and checks the render at every step. About 1 is a good start, and it
   pairs well with Sketch first and Prompt graft. It needs Depth Anything from Models, about 100MB.
 - **Two painters** shares every step between the two models: the partner owns the broad shapes, and
-  Disco the detail, finishing alone.
+  Disco the detail, finishing alone. The partner hands the shapes back at 40%, after the layout is set:
+  holding them longer flattens the light and dark toward gray, because it overrides the prompt checkers'
+  push at that scale.
 - **Borrowed attention** gives Disco the partner's sense of which parts of the picture belong together.
   **Borrowed layers** sets where: Coarse, the default, borrows only the broad layout and keeps Disco's
   color, All borrows everywhere for a stronger, grayer result, and Coarsest changes the least. It works
@@ -666,7 +769,8 @@ strength** changes Prompt strength over the render along its own curve.
 
 ## Tiles
 
-**Tiles** builds a larger image from several renders at the frame size. It needs no more VRAM than
+**Tiles** builds a larger image from several renders at the frame size. The switch on the card's title row
+turns it on, and **Size** chooses how many tiles. It needs no more VRAM than
 the frame does, and time grows with the number of tiles. The tiles take each step in turn, and
 the overlaps are merged before the next step, so neighbors settle on one image instead of being
 joined afterward. The join moves at random inside the overlap every step, so it can't harden into a
@@ -678,7 +782,7 @@ straight line.
 | 3x, 9 tiles | 2112×1344 |
 | 4x, 16 tiles | 2784×1760 |
 
-- **With a start image**, **Tile denoise** sets how much is repainted, in place of Denoise. The
+- **With a start image**, **Denoise** sets how much is repainted, as it does without tiles. The
   image can be any size, because it is resized to the final size first.
 - **With text only**, **Text start** chooses how the picture begins. **Render first**, the default,
   paints one image at the frame size and then the tiles repaint it using Tile denoise. It keeps one
@@ -691,8 +795,8 @@ straight line.
 Tiles always use the ddim sampler, and symmetry doesn't apply.
 
 **Tiles in animation** tile every frame, so a clip takes about as many times longer as there are
-tiles. The first frame follows the rules above, a video's frames use Tile denoise, and every later
-frame uses Frame skip %.
+tiles. The first frame follows the rules above, and every later frame, and every video frame, uses
+Frame skip %.
 
 Tested on an RTX 3070 8GB: a 2x render from a 768×512 frame at 100 steps, with Tile denoise 0.5,
 took about 6 minutes and peaked at 5.2GB. The picture below is one, made with Render first. 3x and

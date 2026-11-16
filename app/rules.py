@@ -92,8 +92,6 @@ def blocked(cfg, downloaded=_have):
         block(["small_first"], f"Can't run with {_names(sized)}, which are sized to the frame.")
     if _on(cfg, "tile_scale"):
         block(["small_first"], "Tiles have their own small start: Render first, under Text start.")
-    if regions_on(cfg):
-        block(["tile_scale"], "Can't run with Regional prompts. Turn them off first.")
     steering = [n for n in CONTROLS + ["face_detail"] if _on(cfg, n)]
     if _on(cfg, "tile_scale"):
         block(CONTROLS + ["face_detail"], "Controls can't run with Tiles.")

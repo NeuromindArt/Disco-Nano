@@ -17,22 +17,19 @@ function regionsSet() { return !!state.regions?.on && state.regions.boxes.some((
 
 /* The regions a render gets: only boxes with a prompt, and none while the switch is off. */
 function regionsFor() {
-  if (!regionsSet() || tileGrid() > 1) return null;
+  if (!regionsSet()) return null;
   return { strength: state.regions.strength, boxes: state.regions.boxes.filter((b) => b.text.trim()) };
 }
 
 /* The card: its switch, Strength, the boxes as a list, and the button that opens the editor. */
 function showRegionsButton(t) {
   const r = regionsState();
-  const tiled = tileGrid() > 1;
   const rendering = !!t?.active && t.kind === "render";
   $("regionsOn").checked = r.on;
-  $("regionsOn").disabled = tiled;
-  $("regionsMore").hidden = !r.on || tiled;
-  $("regionsWhy").hidden = !tiled;
-  $("regionsWhy").textContent = tiled ? "Regional prompts can't run with Tiles." : "";
+  $("regionsMore").hidden = !r.on;
+  $("regionsOff").hidden = r.on;
   const btn = $("regionsBtn");
-  btn.disabled = !!regionMode || (!!t?.active && (!rendering || !t.total));
+  btn.disabled = !!regionMode || eraseMode || (!!t?.active && (!rendering || !t.total));
   btn.textContent = rendering ? "Pause and edit regions" : "Edit regions";
   if (document.activeElement !== $("regionStrength")) $("regionStrength").value = r.strength;
   const range = document.querySelector('[data-for="regionStrength"]');
@@ -52,13 +49,13 @@ function showRegionsButton(t) {
     }) : [Object.assign(document.createElement("li"), { className: "none", textContent: "No boxes yet. Edit regions draws them on the frame." })]));
   }
   const sum = $("sum-regions");
-  if (sum) sum.textContent = !r.on || tiled ? "Off" : boxes.length === 1 ? "1 box" : `${boxes.length} boxes`;
+  if (sum) sum.textContent = !r.on ? "" : boxes.length === 1 ? "1 box" : `${boxes.length} boxes`;
 }
 
 /* Called with every status: keeps the editor in step with the render it paused. */
 function showRegionsTask(t) {
   const running = !!t?.active && t.kind === "render";
-  if (!regionMode && running && t.state === "paused") openRegions();  // paused from another tab, or before a reload
+  if (!regionMode && !eraseMode && running && t.state === "paused" && t.pause_for !== "erase") openRegions();  // paused from another tab, or before a reload
   // The editor is for a paused render, or for setting boxes before one. A render that ends, or one that starts
   // from elsewhere while the boxes are being set, closes it so the preview shows.
   if ((regionMode === "run" && !running) || (regionMode === "set" && running)) closeRegions();
@@ -75,7 +72,7 @@ function showRegionsTask(t) {
 }
 
 function openRegions() {
-  if (regionMode) return;
+  if (regionMode || eraseMode) return;
   const t = lastStatus?.task;
   regionMode = t?.active && t.kind === "render" ? "run" : "set";
   regionHeld = false;
@@ -139,7 +136,8 @@ function placeRegionFrame() {
   const frame = $("regionFrame");
   const img = $("stageImg");
   const area = canvas.getBoundingClientRect();
-  const aspect = state.width / state.height;
+  // With Tiles, the boxes lie over the whole tiled picture, whose shape differs a little from the frame's.
+  const aspect = tileGrid() > 1 ? finalSize(state.width, state.height)[0] / finalSize(state.width, state.height)[1] : state.width / state.height;
   const shown = !img.hidden && img.naturalWidth && img.complete;
   const matches = shown && (regionMode === "run" || Math.abs(img.naturalWidth / img.naturalHeight / aspect - 1) < 0.02);
   let box;
@@ -284,6 +282,7 @@ function setUpRegions() {
   $("regionsOn").addEventListener("change", (e) => {
     e.stopPropagation();
     regionsState().on = e.target.checked;
+    if (e.target.checked) openCard("regions");
     save();
     refreshPlan();
     showRegionsButton(lastStatus?.task);

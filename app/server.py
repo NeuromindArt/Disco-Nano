@@ -5,6 +5,8 @@ their own process, so their memory is fully released when they end and an out-of
 failure cannot take the app down.
 """
 import asyncio
+import base64
+import io
 import json
 import os
 import re
@@ -28,6 +30,8 @@ from PIL import Image, ImageOps
 
 print("Checking folders", flush=True)
 import budget
+import inpaint
+import finder
 import flowfiles
 import keyframes
 import models
@@ -80,12 +84,14 @@ class Task:
         self.worker, self.ended, self.keep_models = worker, False, True
         self.state, self.message = "starting", "Starting"
         self.step = self.total = self.batch = 0
+        self.at = None  # how far through the whole schedule the last step was, from 0 to 1
         self.n_batches = 1
         self.step_times = deque(maxlen=12)
         self.started = time.time()
         self.sampling_started = None
         self.paused = False  # a status message came between steps
-        self.holding = False  # paused by the page, for regions to be drawn
+        self.holding = False  # paused by the page, for regions to be drawn or something erased
+        self.pause_for = ""  # "regions" or "erase", so a page opened during the pause shows the right editor
         self.seed = None
         self.images = []
         self.preview_rev = 0
@@ -277,10 +283,11 @@ def handle_event(task, e):
         elif kind == "step":
             if task.paused and task.sampling_started:
                 task.state, task.message, task.paused = "rendering", "Upscaling" if task.kind == "upscale" else "Rendering", False
-            task.step, task.total, task.batch = e["step"], e["total"], e["batch"]
+            task.step, task.total, task.batch, task.at = e["step"], e["total"], e["batch"], e.get("at")
             task.step_times.append(e["t"])
         elif kind == "paused":
-            task.state, task.message, task.holding = "paused", "Paused. Draw regions, then Continue.", True
+            task.state, task.holding = "paused", True
+            task.message = "Paused. Paint over what to fix." if task.pause_for == "erase" else "Paused. Draw regions, then Continue."
         elif kind == "resumed":
             task.state, task.message, task.holding = "rendering", "Rendering", False
             task.step_times.clear()  # the wait isn't render time
@@ -310,12 +317,13 @@ def task_json(task):
         eta = round(left * spp)
     return {
         "kind": task.kind, "id": task.job_id, "label": task.label, "state": task.state, "message": task.message,
-        "step": task.step, "total": task.total, "batch": task.batch, "n_batches": task.n_batches,
+        "step": task.step, "total": task.total, "batch": task.batch, "n_batches": task.n_batches, "at": task.at,
         "seconds_per_step": round(spp, 2) if spp else None, "eta_s": eta, "seed": task.seed,
         "elapsed_s": round((task.finished_at or time.time()) - task.started), "preview_rev": task.preview_rev,
         "images": [image_url(p) for p in task.images], "peak_vram_gb": task.peak_vram, "error": task.error,
         "log": list(task.log)[-14:] if task.state in ("error", "oom") else [],
         "pausing": task.kind == "render" and os.path.exists(os.path.join(task.job_dir, "pause")),
+        "pause_for": task.pause_for if task.kind == "render" else "",
         "active": task.running(),
     }
 
@@ -690,12 +698,14 @@ def schema():
 @app.get("/api/models")
 def model_list():
     def kind(name):
-        if name in (models.PARTNER, models.DEPTH, models.POSE, models.PERSON, models.FACES, models.RIFE, *models.ROBUST):
+        if name in (models.PARTNER, models.DEPTH, models.POSE, models.PERSON, models.FACES, models.RIFE, models.LAMA, *models.ROBUST):
             return "partner"
         return "upscaler" if name == models.UPSCALER else "helper" if name == "secondary" else "diffusion"
     return {"models": [{"name": n, "label": models.LABELS.get(n, n), "kind": kind(n), "about": models.ABOUT[n],
                         "size_gb": models.FILES[n]["size_gb"], "cuts": models.CUT_SCHEDULES.get(models.cut_style(n)),
-                        "downloaded": os.path.exists(models.path_of(n))} for n in models.FILES]}
+                        "downloaded": os.path.exists(models.path_of(n)),
+                        "found_at": models.path_of(n) if models.path_of(n) != models.own_path(n) else None}
+                       for n in models.FILES]}
 
 
 def downloads_json():
@@ -865,11 +875,15 @@ def clean_regions(value):
 
 
 @app.post("/api/pause")
-def pause():
-    """Holds the render after its next step, so regions can be drawn on the preview."""
+def pause(why: str = ""):
+    """Holds the render after its next step, so regions can be drawn on the preview, or something erased."""
     with lock:
         if not current or not current.running() or current.kind != "render":
             return {"ok": False}
+        if why == "erase":
+            refuse_erase(current)
+        if not current.holding:
+            current.pause_for = "erase" if why == "erase" else "regions"
         open(os.path.join(current.job_dir, "pause"), "w").close()
         if not current.holding:
             current.message = "Pausing after this step"
@@ -883,14 +897,6 @@ def resume(body: dict):
         if not current or current.kind != "render":
             return {"ok": False}
         regions = clean_regions(body.get("regions"))
-        settings = {}
-        try:
-            with open(os.path.join(current.job_dir, "job.json"), encoding="utf-8") as f:
-                settings = json.load(f)["settings"]
-        except (OSError, ValueError, KeyError):
-            pass
-        if regions and rules._on(settings, "tile_scale"):
-            raise HTTPException(400, "Regional prompts can't run with Tiles.")
         if "regions" in body:  # without them, it carries on with the regions it had
             temp = os.path.join(current.job_dir, "regions.tmp")
             with open(temp, "w", encoding="utf-8") as f:
@@ -903,6 +909,181 @@ def resume(body: dict):
         if current.running() and current.state in ("paused", "rendering"):
             # at once, so the page doesn't read the pause it just ended as a new one
             current.state, current.message, current.holding = "rendering", "Rendering", False
+        current.pause_for = ""
+    return {"ok": True}
+
+
+def job_settings(task):
+    try:
+        with open(os.path.join(task.job_dir, "job.json"), encoding="utf-8") as f:
+            return json.load(f)["settings"]
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+@app.post("/api/erase-image")
+def erase_image(body: dict):
+    """Fixes a start image before a render: erases what the mask marks, so the render never has it to bring back,
+    and clones the layers over it. The result is a new image beside the start images, so the original is kept. LaMa
+    runs in a process of its own: on the GPU when nothing is rendering, and on the CPU while a render is, so the two
+    don't compete for VRAM."""
+    path = str(body.get("path") or "")
+    if not os.path.isfile(path) or image_size(path) is None:
+        raise HTTPException(400, "The start image is missing. Drop it again.")
+    mask, clones, inpainting = fix_from(body)
+    stem = re.sub(r"_(erased|fixed)\d*$", "", os.path.splitext(os.path.basename(path))[0])
+    n = 1
+    while os.path.exists(os.path.join(INIT_DIR, f"{stem}_fixed{n}.png")):
+        n += 1
+    out = os.path.join(INIT_DIR, f"{stem}_fixed{n}.png")
+    os.makedirs(INIT_DIR, exist_ok=True)
+    with tempfile.TemporaryDirectory() as temp:
+        cmd = [PYTHON, "-B", os.path.join(APP_DIR, "erase.py"), "--image", path, "--out", out]
+        if mask is not None:
+            mask.save(os.path.join(temp, "mask.png"))
+            cmd += ["--mask", os.path.join(temp, "mask.png")]
+        if clones:
+            with open(os.path.join(temp, "clones.json"), "w", encoding="utf-8") as f:
+                json.dump(save_clones(clones, temp, "clone"), f)
+            cmd += ["--clones", os.path.join(temp, "clones.json")]
+        with lock:
+            busy = bool(current and current.running())
+        if inpainting:
+            if busy:  # the model and a render won't share the GPU, and on the CPU it would take many minutes
+                raise HTTPException(409, "Inpaint the start image when no render is running.")
+            inpainting["mask"].save(os.path.join(temp, "inpaint.png"))
+            with open(os.path.join(temp, "inpaint.json"), "w", encoding="utf-8") as f:
+                json.dump({**inpainting, "mask": os.path.join(temp, "inpaint.png")}, f)
+            cmd += ["--inpaint", os.path.join(temp, "inpaint.json")]
+        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT)
+        try:
+            run = subprocess.run(cmd + (["--device", "cpu"] if busy else []), capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", cwd=ROOT, env=env, timeout=900,
+                                 creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(500, "Fixing took too long and was stopped.")
+    if run.returncode or not os.path.isfile(out):
+        lines = [l for l in (run.stderr or run.stdout or "").splitlines() if l.strip()]
+        raise HTTPException(500, "Fixing failed" + (f": {lines[-1][-300:]}" if lines else "."))
+    return {"path": out, "name": os.path.basename(out), "size": image_size(out), "url": input_url(out)}
+
+
+def refuse_erase(task):
+    """Erase is for stills: in a clip, what it removes would show until the frame it's erased on, and a video
+    brings it back every frame."""
+    if job_settings(task).get("animation_mode", "None") != "None":
+        raise HTTPException(400, "Fix is for stills.")
+
+
+def mask_from(data):
+    """A PNG a page painted, sent as a data URL: white where to erase, or how much to clone."""
+    found = re.fullmatch(r"data:image/png;base64,([A-Za-z0-9+/=]+)", str(data or ""))
+    if not found or len(found.group(1)) > 40 * 2**20:
+        raise HTTPException(400, "The mask isn't a PNG.")
+    try:
+        return Image.open(io.BytesIO(base64.b64decode(found.group(1)))).convert("L")
+    except (OSError, ValueError):
+        raise HTTPException(400, "The mask isn't a PNG.")
+
+
+INPAINT_MODES = ("remove", "fresh", "rework")
+
+
+def inpaint_from(asked):
+    """The inpaint a page sent, checked: {"mask": PNG, "prompt", "mode": remove, fresh or rework, "strength": 0 to 1,
+    "file": the Inpaint model, "steps", "guidance"}, with the mask as an image. Or None for none."""
+    if asked is None:
+        return None
+    if not isinstance(asked, dict):
+        raise HTTPException(400, "The inpaint isn't readable.")
+    path = str(asked.get("file") or "")
+    if not path:
+        raise HTTPException(400, "Choose an Inpaint model in Settings first.")
+    if not os.path.isfile(path):
+        raise HTTPException(400, f"The Inpaint model isn't there any more: {path}")
+    about = budget.describe_checkpoint(path)
+    if not about:
+        raise HTTPException(400, "The Inpaint model isn't one Inpaint can use: an SD 1.5, SDXL, Z-Image, Flux.1 or Flux.2 Klein model.")
+    if about["kind"] not in ("sd15", "sdxl"):
+        import flowfiles
+        missing = flowfiles.missing_parts(path, about["kind"])
+        if missing:
+            raise HTTPException(400, f"The Inpaint model needs its {' and '.join(missing)}, which weren't found in the models folder around it.")
+    mode, strength, steps, guidance = asked.get("mode"), asked.get("strength"), asked.get("steps"), asked.get("guidance")
+    if mode not in INPAINT_MODES:
+        raise HTTPException(400, "Inpaint starts from remove, fresh or rework.")
+    for value, low, high, what in ((strength, 0, 1, "Strength is a share from 0 to 1."), (steps, 1, 200, "Inpaint steps are 1 to 200."),
+                                   (guidance, 0, 30, "Inpaint guidance is 0 to 30.")):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+            raise HTTPException(400, what)
+    prompt = asked.get("prompt") or ""
+    if not isinstance(prompt, str) or len(prompt) > 1000:
+        raise HTTPException(400, "The inpaint prompt is text of up to 1000 characters.")
+    return {"mask": mask_from(asked.get("mask")), "prompt": prompt, "mode": mode, "strength": float(strength),
+            "file": path, "steps": int(steps), "guidance": float(guidance)}
+
+
+def fix_from(body):
+    """The erase mask, or None, the clone layers a page sent: each {"mask": PNG, "dx": , "dy": }, how far right and
+    down its source is as a share of the picture's width and height, and the inpaint, as inpaint_from() reads it, or
+    None. At least one of them."""
+    mask = None if body.get("mask") is None else mask_from(body.get("mask"))
+    clones = body.get("clones") or []
+    if not isinstance(clones, list) or len(clones) > 50:
+        raise HTTPException(400, "Clones are a list of up to 50 layers.")
+    layers = []
+    for layer in clones:
+        offset = [layer.get(k) if isinstance(layer, dict) else None for k in ("dx", "dy")]
+        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not -1 <= v <= 1 for v in offset):
+            raise HTTPException(400, "A clone's source is a share of the picture from -1 to 1 across and down.")
+        layers.append((mask_from(layer.get("mask")), float(offset[0]), float(offset[1])))
+    inpainting = inpaint_from(body.get("inpaint"))
+    if mask is None and not layers and inpainting is None:
+        raise HTTPException(400, "Paint something to erase, inpaint or clone.")
+    return mask, layers, inpainting
+
+
+def save_clones(layers, folder, stem):
+    """Saves the clone layers' masks in the folder, and returns them as the renderer reads them."""
+    listed = []
+    for k, (mask, dx, dy) in enumerate(layers):
+        path = os.path.join(folder, f"{stem}-{k}.png")
+        mask.save(path)
+        listed.append({"mask": path, "dx": dx, "dy": dy})
+    return listed
+
+
+@app.post("/api/erase")
+def erase_mask(body: dict):
+    """What was painted over a paused render: an erase mask, white where to erase, and clone layers, as fix_from()
+    reads them. The render fixes them as it carries on, after the step it paused at. Send it before /api/resume.
+    `fresh`, 0 to 1, is the share of fresh noise the areas get; without it, the renderer picks one by how far through
+    the render it is."""
+    mask, clones, inpainting = fix_from(body)
+    fresh = body.get("fresh")
+    if fresh is not None:
+        if isinstance(fresh, bool) or not isinstance(fresh, (int, float)) or not 0 <= fresh <= 1:
+            raise HTTPException(400, "Fresh noise is a share from 0 to 1.")
+        fresh = float(fresh)
+    with lock:
+        if not current or not current.running() or current.kind != "render":
+            raise HTTPException(409, "No render is running.")
+        refuse_erase(current)
+        n = 0
+        while any(os.path.exists(os.path.join(current.job_dir, f)) for f in (f"erase-{n}.png", f"clone-{n}-0.png", f"inpaint-{n}.png")):
+            n += 1
+        path = None
+        if mask is not None:
+            path = os.path.join(current.job_dir, f"erase-{n}.png")
+            mask.save(path)
+        clones = save_clones(clones, current.job_dir, f"clone-{n}")
+        if inpainting:
+            inpainting["mask"].save(os.path.join(current.job_dir, f"inpaint-{n}.png"))
+            inpainting["mask"] = os.path.join(current.job_dir, f"inpaint-{n}.png")
+        temp = os.path.join(current.job_dir, "erase.tmp")
+        with open(temp, "w", encoding="utf-8") as f:
+            json.dump({"mask": path, "clones": clones, "inpaint": inpainting, "n": n, "fresh": fresh}, f)
+        os.replace(temp, os.path.join(current.job_dir, "erase.json"))  # whole before the worker reads it
     return {"ok": True}
 
 
@@ -1258,11 +1439,6 @@ def add_checkpoint(body: dict, request: Request):
     return {"path": path}
 
 
-# Install folders of other Stable Diffusion apps, and where each keeps its checkpoints.
-OTHER_APPS = ("comfyui", "stable-diffusion-webui", "sd-webui", "sd.webui", "webui", "forge", "automatic", "invokeai", "swarmui")
-APP_CHECKPOINTS = (("models", "checkpoints"), ("models", "Stable-diffusion"), ("Models", "Stable-Diffusion"))
-SKIP_FOLDERS = {"windows", "program files", "program files (x86)", "programdata", "appdata", "node_modules", "$recycle.bin",
-                "system volume information", "steam", "steamapps", "recovery"}
 _search_lock = threading.Lock()  # one search at a time
 _upgrade = {"thread": None}  # the one search for a PC updated from a version that searched on every visit
 
@@ -1276,7 +1452,7 @@ def update_from_searching():
 
     def run():
         with _search_lock:
-            for folder in find_other_apps():
+            for folder in finder.find_other_apps(UPSCALE_DIRS):
                 add_checkpoint_dir(folder)
         paths.save_local_settings({"checkpoint_search_done": True})
 
@@ -1286,57 +1462,15 @@ def update_from_searching():
 
 @app.get("/api/find-checkpoint-folders")
 def find_checkpoint_folders():
-    """Checkpoint folders of ComfyUI and the Stable Diffusion web UIs on this PC that aren't in the list yet. It runs
-    only when asked: by the welcome screen, and by Find in other apps in Settings. The page adds what it wants."""
+    """Checkpoint folders of ComfyUI and the Stable Diffusion web UIs on this PC that aren't in the list yet, and the
+    models Nano would download that those apps already have, which it then uses where they are. It runs only when
+    asked: by the welcome screen, and by Find in other apps in Settings. The page adds the folders it wants."""
     with _search_lock:
-        found = find_other_apps()
+        found = finder.find_other_apps(UPSCALE_DIRS)
+        copies = models.find_copies(finder.model_roots([*found, *CHECKPOINT_DIRS], UPSCALE_DIRS))
     known = {os.path.normcase(os.path.normpath(d)) for d in CHECKPOINT_DIRS}
-    return {"found": [d for d in found if os.path.normcase(os.path.normpath(d)) not in known]}
-
-
-def find_other_apps():
-    """Where ComfyUI and the Stable Diffusion web UIs keep their checkpoints: beside the upscaler folders, and in any
-    install folder up to three folders deep on each drive. It reads folder names only, skips system folders, and
-    stops after 50,000 of them."""
-    found = []
-
-    def add(*parts):
-        path = os.path.join(*parts)
-        if os.path.isdir(path) and path.lower() not in [f.lower() for f in found]:
-            found.append(path)
-
-    try:
-        for d in UPSCALE_DIRS:  # an upscale_models folder usually sits beside the checkpoints
-            add(os.path.dirname(os.path.normpath(d)), "checkpoints")
-            add(os.path.dirname(os.path.normpath(d)), "Stable-diffusion")
-        looked = 0
-        for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
-            level = [f"{letter}:\\"]
-            if not os.path.isdir(level[0]):
-                continue
-            for _ in range(3):
-                deeper = []
-                for folder in level:
-                    try:
-                        entries = list(os.scandir(folder))
-                    except OSError:
-                        continue
-                    for entry in entries:
-                        looked += 1
-                        name = entry.name.lower()
-                        try:
-                            if not entry.is_dir() or name.startswith((".", "$")) or name in SKIP_FOLDERS:
-                                continue
-                        except OSError:
-                            continue
-                        if name.startswith(OTHER_APPS):
-                            for parts in APP_CHECKPOINTS:
-                                add(entry.path, *parts)
-                        deeper.append(entry.path)
-                level = deeper if looked < 50000 else []
-    except OSError:
-        pass
-    return found
+    return {"found": [d for d in found if os.path.normcase(os.path.normpath(d)) not in known],
+            "models": [models.LABELS.get(n, n) for n in copies]}
 
 
 def model_folders():
@@ -1379,7 +1513,8 @@ def checkpoints():
                 about = budget.describe_checkpoint(path)
                 if about:
                     group, _, short = name.rpartition("/")
-                    found.append({"path": path, "name": short, "group": group, "sdxl": about["kind"] == "sdxl", **about})
+                    found.append({"path": path, "name": short, "group": group, "sdxl": about["kind"] == "sdxl", **about,
+                                  "inpaint": inpaint.defaults(about, path)})
     found.sort(key=lambda f: (f["group"].lower(), f["name"].lower()))
     return {"checkpoints": found, "folders": CHECKPOINT_DIRS}
 

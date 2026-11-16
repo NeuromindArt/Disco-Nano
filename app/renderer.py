@@ -31,6 +31,10 @@ class Hooks:
         # Regional prompts: boxes with prompts of their own. A pause can change them, which counts up the revision.
         self.regions, self.regions_rev, self.regions_read = regions, 0, None
         self.started = False
+        # While a keep_steps file is in Nano's data folder, every preview is kept in the job's steps folder, named by
+        # the step it came after, to see afterward what a render did step by step.
+        self.steps = os.path.join(job_dir, "steps") if os.path.exists(os.path.join(paths.HOME, "keep_steps")) else None
+        self.last_step = 0
         # With Save progress video, every preview is also kept as a frame until its image is saved.
         self.progress = os.path.join(job_dir, "progress") if progress else None
         self.frames = []
@@ -41,14 +45,18 @@ class Hooks:
     def stopped(self):
         return os.path.exists(self.stop_file)
 
-    def step(self, j, total, batch, n_batches, seed):
+    def step(self, j, total, batch, n_batches, seed, can_hold=True, at=None):
+        """Step j, counted from 0, of `total`. The page shows the steps done, from 1 to `total`. Tiles report each
+        tile's step but hold a pause only between whole steps, where the preview and an erase are. `at` is how far
+        through the whole schedule the step is, from 0 to 1, which a start image or Tiles makes differ from j/total."""
         if not self.started:
             self.started = True
             emit("sampling", total_steps=total, n_batches=n_batches, seed=seed)
-        emit("step", step=j, total=total, batch=batch, n_batches=n_batches)
+        emit("step", step=j + 1, total=total, batch=batch, n_batches=n_batches, **({} if at is None else {"at": round(at, 3)}))
+        self.last_step = j + 1
         if os.path.exists(self.stop_file):
             raise KeyboardInterrupt
-        if os.path.exists(self.pause_file):
+        if can_hold and os.path.exists(self.pause_file):
             self.hold()
         self.read_regions()
 
@@ -57,6 +65,11 @@ class Hooks:
 
     def hold(self):
         """Waits while the pause file is there, so regions can be drawn on the preview."""
+        torch = sys.modules.get("torch")
+        if torch is not None and torch.cuda.is_available():
+            # VRAM the render keeps for its next step goes back while it waits: with the card nearly full, the
+            # browser's own drawing on the GPU stalls, and the brush lags. An erase's extra steps add to what is kept.
+            torch.cuda.empty_cache()
         emit("paused")
         while os.path.exists(self.pause_file):
             if os.path.exists(self.stop_file):
@@ -81,6 +94,12 @@ class Hooks:
 
     def preview(self, image):
         image = image.convert("RGB")
+        if self.steps:
+            os.makedirs(self.steps, exist_ok=True)
+            name = f"{self.last_step:05d}.jpg"
+            while os.path.exists(os.path.join(self.steps, name)):  # an erase shows a second preview after the same step
+                name = name[:-4] + "b.jpg"
+            image.save(os.path.join(self.steps, name), quality=90)
         if self.progress:
             os.makedirs(self.progress, exist_ok=True)
             frame = os.path.join(self.progress, f"{len(self.frames):05d}.jpg")

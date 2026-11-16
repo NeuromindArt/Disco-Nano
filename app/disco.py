@@ -27,6 +27,7 @@ from torch.nn import functional as F
 
 import animate
 import control
+import erase
 import critic
 import depth
 import graft
@@ -624,8 +625,6 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             return False
         given = hooks.regions if hasattr(hooks, "regions") else cfg.get("regions")
         boxes = [b for b in (given or {}).get("boxes", []) if str(b.get("text", "")).strip()]
-        if boxes and grid > 1:
-            raise ValueError("Regional prompts can't run with Tiles.")
         moving = regions["rev"] is not None and boxes  # the text encoders have left the GPU by now
         regions.update(rev=rev, boxes=boxes, strength=float((given or {}).get("strength", 0.75)), embeds={})
         if regions["rev"] or given:
@@ -645,10 +644,17 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     def region_rows(main, boxes, overview, total, height, width):
         """[cuts, prompts + regions] weights. A close-up is judged by each region's prompt in proportion to how much
         of it the region covers, times Region strength, and by the main prompts for the rest. A whole-image view
-        is judged the same way, by how much of the frame each region covers."""
-        rects = torch.tensor([[b["x"] * width, b["y"] * height, (b["x"] + b["w"]) * width, (b["y"] + b["h"]) * height]
+        is judged the same way, by how much of the frame each region covers.
+
+        With Tiles, the regions lie over the whole tiled picture, and a tile's close-ups are measured where the tile
+        is in it. A tile's whole-image view is the whole picture when Whole picture view shows the tile in it, and
+        otherwise only the tile."""
+        left, top = tile_at or (0, 0)
+        full_w, full_h = final if tile_at else (width, height)
+        rects = torch.tensor([[b["x"] * full_w, b["y"] * full_h, (b["x"] + b["w"]) * full_w, (b["y"] + b["h"]) * full_h]
                               for b in regions["boxes"]], device=device)
-        spots = torch.tensor([[0, 0, width, height]] * overview + [[x, y, x + size, y + size] for x, y, size in boxes],
+        seen = [0, 0, full_w, full_h] if tile_at is None or place else [left, top, left + width, top + height]
+        spots = torch.tensor([seen] * overview + [[left + x, top + y, left + x + size, top + y + size] for x, y, size in boxes],
                              device=device, dtype=torch.float32)
         across = (torch.minimum(spots[:, None, 2], rects[None, :, 2]) - torch.maximum(spots[:, None, 0], rects[None, :, 0])).clamp(min=0)
         down = (torch.minimum(spots[:, None, 3], rects[None, :, 3]) - torch.maximum(spots[:, None, 1], rects[None, :, 1])).clamp(min=0)
@@ -716,11 +722,57 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             return None
         return noise.to(where)
     place = None  # while tiling, puts the tile into a small copy of the whole picture
+    tile_at = None  # while tiling, where the tile is in the whole picture, so regions measure its close-ups there
     pull = {"set": False, "to": None}  # after a handoff, Init scale still compares against the start before it
     ahead = {"steps": 0}  # steps Small first already painted, so the full-size pass counts on from them
     hold = {"to": None}  # after Small first, the small picture the full size holds its broad shapes to
     hold_curve = schedule(cfg["small_hold_curve"]) if small and float(cfg["small_hold"] or 0) else None
     hold_size = max(8, min(side_x, side_y) // 24)  # shapes broader than this are held: 32 pixels at 1280x768
+    def inpainter(picture, hard, soft, asked):
+        """Fix's Inpaint: the picture, 0 to 1, with the area repainted by the Inpaint model the page chose. The model
+        is kept as the handoff model is, so a later inpaint, or a handoff with the same file, doesn't load it again,
+        and Disco waits in RAM while it paints if the two won't fit on the GPU together."""
+        import handoff
+        import inpaint
+        path = asked["file"]
+        painter = kept(("handoff", path, os.path.getmtime(path)), lambda: handoff.load(path, hooks.status, device))
+        image, size = inpaint.to_pil(picture), (picture.shape[-1], picture.shape[-2])
+        unit = lambda m: Image.fromarray((m[0, 0].clamp(0, 1).cpu().numpy() * 255).round().astype(np.uint8))
+        resting = [model, secondary_model, lpips_model, *(m.visual for m in clip_models), experiment.partner if experiment else None]
+        release()
+        with handoff.Parked(painter, resting, device, *painter.inpaint_size(*size), painted=True):
+            painted = inpaint.paint(painter, image, unit(hard), unit(soft), asked.get("prompt", ""), asked["strength"],
+                                    asked["steps"], asked["guidance"], seed + eraser.count, hooks.status,
+                                    getattr(hooks, "stopped", lambda: False))  # a new try paints anew
+        return inpaint.from_pil(painted, picture)
+
+    # Fix: what was painted over during a pause, erased, inpainted or cloned, and repainted by the steps left.
+    eraser = erase.Erase(hooks.job_dir, device, diffusion, hooks.status, inpainter) if getattr(hooks, "job_dir", None) else None
+
+    def predict(x, t):
+        """The model's own picture and noise for x at timestep t, without guidance, on x's device: for an erase."""
+        tt = torch.tensor([t], device=device)
+        with torch.no_grad():
+            out = diffusion.p_mean_variance(one_pass or model, x.to(device), tt, clip_denoised=cfg["clip_denoised"], model_kwargs={})
+            eps = diffusion._predict_eps_from_xstart(x.to(device), tt, out["pred_xstart"])
+        return out["pred_xstart"].to(x.device), eps.to(x.device)
+
+    def forget_erased():
+        """After an erase, what the render is held to forgets the thing too: the start image Init scale compares
+        against, Small first's picture, the Controls' picture and a ghost. Otherwise they would keep pulling it back."""
+        nonlocal init
+        eraser.erased = False
+        init = eraser.cover(init)
+        pull["to"] = eraser.cover(pull["to"])
+        hold["to"] = eraser.cover(hold["to"])
+        if steer and steer.source is not None:
+            steer.set_source(eraser.cover(steer.source, unit=True))
+        ghost = experiment.ghost if experiment else None
+        if ghost and ghost.ghost is not None:  # a Ghost image or a sketch made first; Live ghost redraws from the render
+            ghost.ghost = eraser.cover(ghost.ghost, unit=True)
+            if ghost.shapes is not None:
+                with torch.no_grad():
+                    ghost.shapes = ghost.relations(ghost.ghost)
 
     def hold_layout(x, estimate, i):
         """Hold the small layout: after the step at index i, moves the render's broad shapes and colors toward the
@@ -879,7 +931,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                       skip_timesteps=skip, init_image=start, randomize_class=cfg["randomize_class"])
         progress["t"] = diffusion.num_timesteps - skip - 1
         before, ahead["steps"] = ahead["steps"], 0
-        total_steps = progress["t"] + before
+        total_steps = progress["t"] + 1 + before
         shape = (1, 3, height, width)
         common["noise"] = start_noise(shape, device)
         if cfg["diffusion_sampling_mode"] == "ddim":
@@ -893,11 +945,15 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             last = progress["t"] == -1 or j + 1 == stop
             if j % cfg["display_rate"] == 0 or last or pausing():
                 hooks.preview(show(sample["pred_xstart"]))
-            hooks.step(j + before, total_steps, batch, n_batches, seed)  # after the preview, so a pause shows this step
+            hooks.step(j + before, total_steps, batch, n_batches, seed,  # after the preview, so a pause shows this step
+                       at=1 - (progress["t"] + 1) / diffusion.num_timesteps)
             if j + 1 == stop:
                 break
             if hold["to"] is not None:  # the sampler reads the sample back for the next step
                 sample["sample"] = hold_layout(sample["sample"], sample["pred_xstart"], progress["t"] + 1)
+            if eraser and not painting_tile and eraser.step(sample["pred_xstart"]):
+                forget_erased()
+                sample["sample"] = eraser.restart(sample["sample"], progress["t"] + 1, predict)
             if steer:
                 sample["sample"] = steer.pull(sample["sample"], sample["pred_xstart"], progress["t"] + 1, diffusion)
         release()
@@ -942,7 +998,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         image = torch.zeros_like(x)
         for j, i in enumerate(range(first, -1, -1)):
             progress["t"] = i
-            hooks.step(j + before, first + before, batch, n_batches, seed)
+            hooks.step(j + before, first + 1 + before, batch, n_batches, seed, at=1 - i / diffusion.num_timesteps)
             t = torch.tensor([i], device=device)
             at = min(int(1000 * (1 - (i + 1) / diffusion.num_timesteps)), 999)
             band = int(experiment.band[at])
@@ -971,6 +1027,9 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             if ghost:
                 x = ghost.pull(x, image, math.sqrt(alpha_prev), at)
             x = hold_layout(x, image, i)
+            if eraser and eraser.step(image):
+                forget_erased()
+                x = eraser.restart(x, i, predict)
             if steer:
                 x = steer.pull(x, image, i, diffusion)
             if band:
@@ -1091,7 +1150,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         on, so neighbors settle on the same image instead of being joined at the end. Each tile is an
         ordinary render as far as the GPU is concerned.
         """
-        nonlocal place, init
+        nonlocal place, init, tile_at
         size = (1, 3, final[1], final[0])
         noise = start_noise(size, "cpu")
         if noise is None:
@@ -1101,38 +1160,79 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         if canvas is None:
             canvas = diffusion.q_sample(torch.zeros(size) if start is None else start, torch.tensor([first]), noise)
         latest = start
+
+        def paint_tile(source, i, x, y, view):
+            """One tile's guided prediction of the picture and of the noise, from `source` at timestep i."""
+            nonlocal place, init, tile_at
+            box = (..., slice(y, y + side_y), slice(x, x + side_x))
+            tile = source[box].to(device)
+            place = view and cfg["tile_whole_view"] and tiles.placer(*view, x, y, side_x, side_y, device)
+            tile_at = (x, y)
+            held = pull["to"] if pull["set"] else start
+            init = None if held is None else held[box].to(device)  # Init scale compares against this
+            t = torch.tensor([i], device=device)
+            with torch.no_grad():
+                out = diffusion.p_mean_variance(one_pass or model, tile, t, clip_denoised=cfg["clip_denoised"], model_kwargs={})
+                pred = diffusion.condition_score(cond_fn, out, tile, t, model_kwargs={})["pred_xstart"]
+                eps = diffusion._predict_eps_from_xstart(tile, t, pred)
+                if not i:
+                    pred = out["pred_xstart"]  # as in a normal render, the last image is the model's own
+            return pred.cpu(), eps.cpu()
+
+        def predict_tiles(source, t):
+            """predict() over the whole picture a tile at a time, the overlaps blended as a step blends them. Tiles
+            that no erase touches are left out, as only the erased area is used."""
+            across = tiles.fades(final[0], side_x - overlap, grid, overlap)
+            down = tiles.fades(final[1], side_y - overlap, grid, overlap)
+            area = eraser.back
+            pred_sum, eps_sum = torch.zeros(size), torch.zeros(size)
+            for number, (x, y) in enumerate(spots):
+                box = (..., slice(y, y + side_y), slice(x, x + side_x))
+                if not area[box].any():
+                    continue
+                weight = down[number // grid][y:y + side_y, None] * across[number % grid][x:x + side_x]
+                pred, eps = predict(source[box], t)
+                pred_sum[box] += pred.cpu().float() * weight
+                eps_sum[box] += eps.cpu().float() * weight
+            return pred_sum, eps_sum
+
+        def ddim(pred, eps, i):
+            """One DDIM step on the whole picture, so its noise doesn't get averaged away in the overlaps."""
+            alpha, alpha_prev = diffusion.alphas_cumprod[i], diffusion.alphas_cumprod_prev[i]
+            sigma = cfg["eta"] * math.sqrt((1 - alpha_prev) / (1 - alpha)) * math.sqrt(1 - alpha / alpha_prev)
+            sample = pred * math.sqrt(alpha_prev) + math.sqrt(1 - alpha_prev - sigma ** 2) * eps
+            return sample + sigma * torch.randn(size) if i else sample
+
         for j, i in enumerate(range(first, -1, -1)):
             progress["t"] = i
-            t = torch.tensor([i], device=device)
             view = None if latest is None else tiles.small_copy(latest)
             pred_sum, eps_sum = torch.zeros(size), torch.zeros(size)
             across = tiles.fades(final[0], side_x - overlap, grid, overlap)
             down = tiles.fades(final[1], side_y - overlap, grid, overlap)
             for number, (x, y) in enumerate(spots):
-                hooks.step(j * len(spots) + number, (first + 1) * len(spots), batch, n_batches, seed)
+                hooks.step(j * len(spots) + number, (first + 1) * len(spots), batch, n_batches, seed, can_hold=not number,
+                           at=1 - i / diffusion.num_timesteps)
+                if eraser and not number and latest is not None and eraser.step(latest):
+                    # A pause holds here, on the last step's picture, which is what the page painted over, so an erase
+                    # comes before this step paints anything. The canvas is at the last step's noise level, i + 1's.
+                    start = eraser.cover(start)  # each tile's Init scale compares against its part of this
+                    latest = eraser.cover(latest)
+                    forget_erased()
+                    canvas = eraser.restart(canvas, i + 1, predict_tiles)
+                    view = tiles.small_copy(latest)
+                    shown = to_image(latest)
+                    shown.thumbnail((1024, 1024))
+                    hooks.preview(shown)  # the erased picture at once, not a step later
                 box = (..., slice(y, y + side_y), slice(x, x + side_x))
                 weight = down[number // grid][y:y + side_y, None] * across[number % grid][x:x + side_x]
-                tile = canvas[box].to(device)
-                place = view and cfg["tile_whole_view"] and tiles.placer(*view, x, y, side_x, side_y, device)
-                held = pull["to"] if pull["set"] else start
-                init = None if held is None else held[box].to(device)  # Init scale compares against this
-                with torch.no_grad():
-                    out = diffusion.p_mean_variance(one_pass or model, tile, t, clip_denoised=cfg["clip_denoised"], model_kwargs={})
-                    pred = diffusion.condition_score(cond_fn, out, tile, t, model_kwargs={})["pred_xstart"]
-                    eps = diffusion._predict_eps_from_xstart(tile, t, pred)
-                    if not i:
-                        pred = out["pred_xstart"]  # as in a normal render, the last image is the model's own
-                pred_sum[box] += pred.cpu() * weight
-                eps_sum[box] += eps.cpu() * weight
-            place = None
-            # One DDIM step on the whole picture, so its noise doesn't get averaged away in the overlaps.
-            alpha, alpha_prev = diffusion.alphas_cumprod[i], diffusion.alphas_cumprod_prev[i]
-            sigma = cfg["eta"] * math.sqrt((1 - alpha_prev) / (1 - alpha)) * math.sqrt(1 - alpha / alpha_prev)
-            canvas = pred_sum * math.sqrt(alpha_prev) + math.sqrt(1 - alpha_prev - sigma ** 2) * eps_sum
-            if i:
-                canvas += sigma * torch.randn(size)
+                pred, eps = paint_tile(canvas, i, x, y, view)
+                pred_sum[box] += pred * weight
+                eps_sum[box] += eps * weight
+            place = tile_at = None
+            canvas = ddim(pred_sum, eps_sum, i)
             latest = pred_sum.clamp(-1, 1)
-            if j % max(cfg["display_rate"] // len(spots), 1) == 0 or not i:
+            # A pause holds before the next step's first tile, so the page paints over this step's picture.
+            if j % max(cfg["display_rate"] // len(spots), 1) == 0 or not i or pausing():
                 preview = to_image(latest)
                 preview.thumbnail((1024, 1024))  # saving a full-size preview takes longer than it's worth
                 hooks.preview(preview)
@@ -1166,7 +1266,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         whole = denoise_lab if experiment else denoise
 
         def paint(start, skip, n, hand=True):
-            """One frame. With tiles, each frame is tiled like a still, and a start uses Tile denoise."""
+            """One frame. With tiles, each frame is tiled like a still."""
             # before a handoff moves where Disco starts, so the views stay spread over the whole frame. A video's frames
             # and every frame after the first are clip frames; a 2D or 3D clip's first frame is its start image.
             fit_views(skip, frame=bool(video) or n > 0)
@@ -1180,8 +1280,6 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                 return whole(start, side_x, side_y, skip, n)
             return paint_tiles(None if start is None else start.float().cpu(), skip, n).to(device)
 
-        # A frame that starts from an image or video rather than the last frame uses Denoise, or Tile denoise with tiles.
-        start_skip = tile_skip if grid > 1 else skip_steps
         turbo = max(int(cfg["turbo_steps"]), 1) if cfg["turbo_mode"] and camera else 1
         refresh = {at + int(cfg["prompt_fade"]) for at, _ in all_stats[1:]}  # a new prompt gets its own colors
         first, previous, saved = None, None, {}
@@ -1236,7 +1334,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                         # The first frame builds on a first pass of itself, as later frames build on the last
                         # one. Without this it stays close to the video while the rest of the clip doesn't.
                         hooks.status("Painting a first pass of the first frame")
-                        previous = paint(shown, start_skip, n)  # a full repaint, as a still would be
+                        previous = paint(shown, skip_steps, n)  # a full repaint from Denoise, as a still would be
                     if previous is not None and cfg["video_blend"]:
                         last = previous
                         if cfg["video_flow"] and n:  # the last frame's paint travels with what moved in the video
@@ -1248,7 +1346,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                     skip = skips[n]
                 elif n == 0:
                     shown = start = TF.to_tensor(source).unsqueeze(0).mul(2).sub(1).to(device) if start_image else None
-                    skip = start_skip if start_image else skip_steps
+                    skip = skip_steps  # from a start image or noise, with tiles or without
                     if grid > 1 and not start_image and cfg["tile_start"] == "Render first":
                         hooks.status("Painting the first frame at tile size")
                         fit_views(skip_steps, frame=bool(video))
@@ -1311,6 +1409,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
 
     n_batches = cfg["n_batches"]
     hooks.status("Starting the first step")
+    # Tile denoise is only for Render first, where the tiles repaint the picture its first pass made.
     tile_skip = min(round(cfg["steps"] * (1 - cfg["tile_denoise"])), cfg["steps"] - 1)
     if animating:
         film()
@@ -1339,8 +1438,8 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                 start, skip = TF.to_tensor(first.resize(final, Image.LANCZOS)).unsqueeze(0).mul(2).sub(1), tile_skip
                 fit_views(tile_skip)
             else:
-                fit_views(tile_skip if start is not None else skip_steps)
-                start, skip = hand_over(start, tile_skip if start is not None else skip_steps, batch, final, seed + batch, handoff_picture)
+                fit_views(skip_steps)
+                start, skip = hand_over(start, skip_steps, batch, final, seed + batch, handoff_picture)
                 set_seeds(seed + batch)
             image = to_image(paint_tiles(None if start is None else start.cpu(), skip, batch))
         disco_own = cfg["handoff_keep"] and os.path.join(folder, f"{batch_name}({run})_{batch}_disco.png")

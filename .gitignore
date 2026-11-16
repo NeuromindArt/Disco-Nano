@@ -8,3 +8,4 @@ __pycache__/
 .vscode/
 Thumbs.db
 dist/
+*.lnk

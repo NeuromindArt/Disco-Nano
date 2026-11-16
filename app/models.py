@@ -1,5 +1,6 @@
 """Model files and their shapes. URLs, hashes and configurations come from Disco Diffusion (MIT)."""
 import hashlib
+import json
 import os
 import urllib.request
 
@@ -20,6 +21,7 @@ PARTNER_FILES = {
 }
 DEPTH = "depth-anything-small"
 RIFE = "rife-4.7"
+LAMA = "big-lama"
 POSE = "keypointrcnn"
 PERSON = "maskrcnn"
 FACES = "retinaface"
@@ -129,6 +131,12 @@ FILES = {
         "urls": ["https://github.com/HolyWu/vs-rife/releases/download/model/flownet_v4.7.pkl"],
         "folder": "rife",
     },
+    LAMA: {  # LaMa's big-lama as TorchScript, as Lama Cleaner and ComfyUI's inpaint nodes use it
+        "size_gb": 0.21,
+        "sha256": "344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9",
+        "urls": ["https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt"],
+        "folder": "lama",
+    },
 }
 # The Robust checker setting's choices, and open_clip's name for each network.
 ROBUST_CHOICES = {"FARE4 B/16": ("fare4-b16", "ViT-B-16"), "FARE2 L/14": ("fare2-l14", "ViT-L-14-quickgelu"),
@@ -138,7 +146,7 @@ FILES.update({name: {"size_gb": size, "sha256": sha256, "folder": f"robust/{name
                      "urls": [f"https://huggingface.co/{repo}/resolve/{revision}/open_clip_pytorch_model.bin"]}
               for name, (repo, revision, sha256, size) in ROBUST.items()})
 
-DIFFUSION = [name for name in FILES if name not in ("secondary", PARTNER, DEPTH, POSE, PERSON, FACES, UPSCALER, RIFE, *ROBUST)]
+DIFFUSION = [name for name in FILES if name not in ("secondary", PARTNER, DEPTH, POSE, PERSON, FACES, UPSCALER, RIFE, LAMA, *ROBUST)]
 
 # Small helpers that download when first needed and aren't listed in the app.
 HELPERS = {
@@ -188,6 +196,7 @@ LABELS = {
     PARTNER: "Tiny SD",
     DEPTH: "Depth Anything V2 Small",
     RIFE: "RIFE 4.7",
+    LAMA: "LaMa",
     POSE: "Keypoint R-CNN",
     PERSON: "Mask R-CNN",
     FACES: "RetinaFace",
@@ -217,6 +226,7 @@ ABOUT = {
     PERSON: "Mask R-CNN from torchvision, which cuts out people's silhouettes for Person control. Downloads by itself the first time Person control is used.",
     POSE: "Keypoint R-CNN from torchvision, which finds people's joints for Pose control. Downloads by itself the first time Pose control is used.",
     RIFE: "RIFE 4.7 by Zhewei Huang, which paints smooth in-between frames for animations. Without it, optical flow is used.",
+    LAMA: "LaMa by Suvorov et al., which fills what Erase removes during a render. Downloads by itself the first time Erase is used.",
     "256x256_diffusion_uncond": "An older general model. Slower and heavier than the main model at 512×512.",
     "pixelartdiffusion_expanded": "Pixel art with strong color.",
     "pixel_art_diffusion_hard_256": "Muted pixel art.",
@@ -254,8 +264,84 @@ def filename(name):
     return ALL_FILES[name]["urls"][0].split("?")[0].rsplit("/", 1)[-1]
 
 
-def path_of(name):
+def own_path(name):
     return os.path.join(paths.MODELS, ALL_FILES[name].get("folder", ""), filename(name))
+
+
+def path_of(name):
+    """Nano's own copy, or the same file found in another app's folder, which is used where it is."""
+    own = own_path(name)
+    if os.path.exists(own):
+        return own
+    there = found_copies().get(name)
+    return there if there and os.path.exists(there) else own
+
+
+# Models found in other apps' folders, by name, and where each is. A copy that is moved or deleted later is
+# simply downloaded again.
+FOUND = os.path.join(paths.MODELS, "found.json")
+_found = {"key": None, "copies": {}}
+
+
+def found_copies():
+    try:
+        key = os.path.getmtime(FOUND)
+    except OSError:
+        return {}
+    if key != _found["key"]:
+        try:
+            with open(FOUND, encoding="utf-8") as f:
+                _found["copies"] = json.load(f)
+        except (OSError, ValueError):
+            _found["copies"] = {}
+        _found["key"] = key
+    return _found["copies"]
+
+
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(2**20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def find_copies(roots, report=lambda message: None):
+    """Looks under the roots for models Nano doesn't have yet, and keeps those that are the same file: the same name,
+    and the SHA-256 pinned here. Returns the names it found."""
+    import finder
+    wanted = {}
+    for name, entry in ALL_FILES.items():
+        if entry.get("sha256") and not os.path.exists(path_of(name)):
+            wanted.setdefault(filename(name).lower(), []).append(name)
+    if not wanted:
+        return []
+    copies, new = dict(found_copies()), []
+    for path in finder.files_named(roots, set(wanted)):
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        for name in wanted[os.path.basename(path).lower()]:
+            expected = ALL_FILES[name].get("size_gb")
+            # The size rules out most files that only share a name, such as model.safetensors, before the slow part.
+            if name in new or (expected is None and size > 50 * 2**20) or                     (expected is not None and abs(size / 1e9 - expected) > max(0.03, expected * 0.15)):
+                continue
+            report(f"Checking {os.path.basename(path)}")
+            try:
+                same = sha256_of(path) == ALL_FILES[name]["sha256"]
+            except OSError:
+                continue
+            if same:
+                copies[name] = path
+                new.append(name)
+    if new:
+        os.makedirs(paths.MODELS, exist_ok=True)
+        temp = FOUND + ".tmp"
+        with open(temp, "w", encoding="utf-8") as f:
+            json.dump(copies, f, indent=1)
+        os.replace(temp, FOUND)
+    return new
 
 
 def ensure(name, report):
@@ -265,6 +351,7 @@ def ensure(name, report):
     path = path_of(name)
     if os.path.exists(path):
         return path
+    path = own_path(name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     part, label = path + ".part", os.path.basename(path)
     for url in ALL_FILES[name]["urls"]:
@@ -281,11 +368,7 @@ def ensure(name, report):
         except OSError:
             continue
         report(f"Checking {label}")
-        digest = hashlib.sha256()
-        with open(part, "rb") as f:
-            for chunk in iter(lambda: f.read(2**20), b""):
-                digest.update(chunk)
-        if digest.hexdigest() == ALL_FILES[name]["sha256"]:
+        if sha256_of(part) == ALL_FILES[name]["sha256"]:
             os.replace(part, path)
             return path
         os.remove(part)

@@ -60,10 +60,14 @@ echo Installing the libraries Nano uses. The first time is about 6GB and takes a
 "%VENV_PY%" -m pip install --disable-pip-version-check -r "%~dp0app\requirements.txt" || goto failed
 "%VENV_PY%" -B "%~dp0app\fetch_code.py" || goto failed
 echo.
-echo Downloading the main model, about 2GB.
+echo Looking for models other apps already have, then downloading the main model, about 2GB, if needed.
 "%VENV_PY%" -B "%~dp0app\download_models.py" || echo The download failed. It will try again on your first render.
 echo.
-echo Setup finished. Double-click "Start Disco Nano.bat" to open the app.
+rem A .bat file can't have an icon of its own, so a shortcut beside it carries the Disco icon.
+echo Making a Disco Nano shortcut with the app's icon.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('%~dp0Disco Nano.lnk'); $s.TargetPath = '%~dp0Start Disco Nano.bat'; $s.WorkingDirectory = '%~dp0'; $s.IconLocation = '%~dp0app\static\icon.ico'; $s.Description = 'Disco Diffusion Nano'; $s.Save()" >nul 2>&1
+echo.
+echo Setup finished. Double-click "Disco Nano" to open the app.
 echo Optional models download the first time you use them.
 pause
 exit /b 0

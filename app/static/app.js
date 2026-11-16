@@ -270,9 +270,10 @@ function buildAccents() {
   box.append(custom);
   applyAccent(state.accent || ACCENTS[0][0]);
   // The grid behind the picture, or plain gray. Set here, with the accent, so the page never shows the wrong one.
+  // It starts off: only a grid switched on in Settings, which saves no_grid as false, shows.
   const grid = $("canvasGrid");
-  grid.checked = !state.no_grid;
-  document.body.classList.toggle("no-grid", !!state.no_grid);
+  grid.checked = state.no_grid === false;
+  document.body.classList.toggle("no-grid", !grid.checked);
   grid.addEventListener("change", () => { state.no_grid = !grid.checked; document.body.classList.toggle("no-grid", state.no_grid); save(); });
 }
 
@@ -281,6 +282,7 @@ function settingOf(label) {
   let id = label.htmlFor || label.querySelector("input:not([type=hidden]), select")?.id || "";
   if (id.startsWith("adv-")) id = id.slice(4);
   if (id === "denoise") id = "skip_steps";
+  if (id === "tilePick") id = "tile_scale";
   return byName[id] ? id : null;
 }
 
@@ -675,15 +677,12 @@ function viewPlan() {
   const steps = Math.max(Number(state.steps) || 0, 1);
   const clip = animating();
   const keyed = clip && keyedSkips()?.length;
-  // With tiles, a still's start image is painted from Tile denoise, which takes the place of Denoise.
-  const tiledStart = !clip && tileGrid() > 1 && !!state.init_image;
   const skip = clip ? frameSkip(steps)
-    : tiledStart ? Math.min(pyRound(steps * (1 - Number(state.tile_denoise))), steps - 1)
     : Math.min(Number(state.skip_steps) || 0, steps - 1);
   // A handoff model paints the start after the views are fitted, so Disco's own steps begin later still.
   const disco = afterHandoffSkip(skip);
   const why = keyed ? "Frame skip keyframes, on average" : clip ? `Frame skip ${state.frames_skip_steps}%`
-    : tiledStart ? `Tile denoise ${Math.round(100 * Number(state.tile_denoise))}%` : `Denoise ${denoiseOf(skip, steps)}%`;
+    : `Denoise ${denoiseOf(skip, steps)}%`;
   const mode = lookValue("views_fit");
   const fit = mode === true || mode === "Start images and clip frames" || (!clip && mode === "Start images");
   const shapes = Math.min(Math.max(Number(lookValue("views_shapes") ?? 40) / 100, 0), 1);
@@ -904,6 +903,35 @@ function openCard(name, open = true) {
   showCards();
 }
 
+/* Tiles and Handoff are each one thing, on or off, so a switch on the card's title row turns them on and off.
+   Off remembers the last size or model, which the dropdown keeps showing, and on brings it back. */
+const FIRST_TILES = "2x, 4 tiles";
+
+function showCardSwitches() {
+  $("tilesOn").checked = tileGrid() > 1;
+  $("tilePick").value = tileGrid() > 1 ? state.tile_scale : state.tile_last || FIRST_TILES;
+  $("handoffOn").checked = !!state.handoff_file;
+}
+
+function setTiles(value) {
+  if (tileGrid() > 1) state.tile_last = state.tile_scale;
+  $("tile_scale").value = value;
+  $("tile_scale").dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function switchHandoff(on) {
+  if (!on) {
+    if (state.handoff_file) state.handoff_last = state.handoff_file;
+    pickCheckpoint("");
+    return;
+  }
+  openCard("handoff");
+  if (state.handoff_last) return pickCheckpoint(state.handoff_last);
+  $("handoffOn").checked = false;  // it needs a model first, so the list opens to choose one
+  $("handoffPick").focus();
+  try { $("handoffPick").showPicker(); } catch { /* the list is in view to choose from */ }
+}
+
 /* Each card's title row says what it holds, so a closed card still shows its settings. */
 function showSummaries() {
   const model = catalog?.find((m) => m.name === state.diffusion_model);
@@ -916,16 +944,17 @@ function showSummaries() {
     render: `${state.steps} steps`,
     model: model ? (state.names === "official" ? model.name : model.label) : "",
     animation: kind ? `${kind}, ${state.max_frames} frames` : "",
-    tiles: state.tile_scale === "Off" ? "Off" : `${String(state.tile_scale).split(",")[0]}, ${finalSize(state.width, state.height).join("×")}`,
+    tiles: tileGrid() === 1 ? "" : `${String(state.tile_scale).split(",")[0]}, ${finalSize(state.width, state.height).join("×")}`,
     lab: on ? `${on} on` : "Off",
     controls: controlsOn() ? `${controlsOn()} on` : "Off",
     handoff: [handingOff() && [Number(state.handoff_share) > 0 && `${state.handoff_share}%`, Number(state.handoff_finish) > 0 && !animating() && `finish ${state.handoff_finish}%`,
-      baseName(state.handoff_file).replace(/\.safetensors$/i, "")].filter(Boolean).join(", "),
-      smallFirstOn() && `small first ${state.small_first}%`].filter(Boolean).join("; ") || "Off",
+      baseName(state.handoff_file).replace(/\.(safetensors|gguf)$/i, "")].filter(Boolean).join(", "),
+      smallFirstOn() && `small first ${state.small_first}%`].filter(Boolean).join("; "),
     cutouts: changedIn("cutouts") ? `${changedIn("cutouts")} changed` : model?.cuts ? "The model's own" : "Close-up ramp",
     guidance: changedIn("guidance") ? `${changedIn("guidance")} changed` : "Default",
   };
   for (const [name, text] of Object.entries(sums)) $(`sum-${name}`).textContent = text;
+  showCardSwitches();
   for (const id of ["handoff_share", "handoff_start_denoise", "handoff_finish"]) $(id).closest(".slider-row").hidden = !state.handoff_file;
   // Start denoise sets where the checkpoint starts on a start image or a clip's frames, so from noise it does nothing.
   const fromStart = !!state.init_image || animating();
@@ -1297,7 +1326,7 @@ function finalSize(width, height) {
   return [width + (width - overlap) * extra, height + (height - overlap) * extra];
 }
 
-/* The step Tile denoise starts a tiled start image or video frame from. */
+/* The step Render first's tiles start from, repainting the picture its first pass made. */
 function tileSkip() {
   const steps = Math.max(Number(state.steps) || 1, 1);
   return Math.min(pyRound(steps * (1 - Number(state.tile_denoise))), steps - 1);
@@ -1324,11 +1353,9 @@ function firstSeconds(perStep, smallPer) {
   const at = (from) => paintSeconds(afterHandoffSkip(from), perStep, smallPer);
   if (video) {
     // Every video frame uses Frame skip; Build up's carried paint first needs a pass of the frame from Denoise.
-    const start = grid > 1 ? tileSkip() : skip;
-    return at(frameSkip(steps)) + (Number(state.video_blend) ? at(start) : 0);
+    return at(frameSkip(steps)) + (Number(state.video_blend) ? at(skip) : 0);
   }
-  if (grid > 1 && state.init_image) return at(tileSkip());
-  if (grid > 1 && state.tile_start === "Render first") {
+  if (grid > 1 && !state.init_image && state.tile_start === "Render first") {
     const whole = Math.max(steps - afterHandoffSkip(skip), 0) * perStep;  // the frame at tile size, then the tiles
     return whole + paintSeconds(tileSkip(), perStep, smallPer);
   }
@@ -1347,19 +1374,19 @@ function showTiles() {
   const renderFirst = state.tile_start === "Render first";
   $("tileMore").hidden = grid === 1;
   const video = animating() && state.animation_mode === "Video Input";
-  $("tile_denoise").disabled = grid === 1 || !(state.init_image || renderFirst || video);
+  // Tile denoise is how much Render first's tiles repaint its first pass. A start image or video uses Denoise.
+  $("tile_denoise").disabled = grid === 1 || !renderFirst || !!state.init_image || video;
+  $("tile_denoise").closest(".slider-row").title = grid > 1 && (state.init_image || video)
+    ? worded("A start image or video uses {skip_steps}.") : grid > 1 && !renderFirst ? "Only Render first repaints in tiles from a picture." : "";
   $("tile_start").disabled = !!state.init_image || video;
-  // With tiles, a start image is repainted by Tile denoise, so the start image's own Denoise has no say.
   // A video's frames all use Frame skip, and Denoise only paints Build up's first pass of the first frame.
-  const tiledStart = grid > 1 && !!(state.init_image || video);
   const frameSkipOnly = video && !Number(state.video_blend);
   // Below Handoff 100%, Disco carries on from where the checkpoint stopped, so there's no share left to choose.
   const carryOn = handingStart() && Number(state.handoff_share) < 100;
   for (const id of ["denoise", "skip_steps"]) {
     const row = $(id).closest(".slider-row");
-    row.classList.toggle("unused", tiledStart || frameSkipOnly || carryOn);
-    row.title = tiledStart ? worded("Tiles use Tile denoise for the start image, so {skip_steps} isn't used.")
-      : frameSkipOnly ? worded("Every video frame uses {frames_skip_steps}, so {skip_steps} isn't used.")
+    row.classList.toggle("unused", frameSkipOnly || carryOn);
+    row.title = frameSkipOnly ? worded("Every video frame uses {frames_skip_steps}, so {skip_steps} isn't used.")
       : carryOn ? worded("With {handoff_share} below 100, Disco carries on from where the checkpoint stopped, so {skip_steps} isn't used.") : "";
   }
 }
@@ -1574,7 +1601,8 @@ function controlsFor(name) {
   if (name === "animation_mode") return [...document.querySelectorAll('[data-anim="3D"]')];
   if (LAB_IMAGES.includes(name) || name === "image_prompts") return [...document.querySelectorAll(`[data-drop="${name}"]`)];
   if (name === "init_image") return [$("initDrop")];
-  if (name === "handoff_file") return [$("handoffPick")];
+  if (name === "handoff_file") return [$("handoffPick"), $("handoffOn")];
+  if (name === "tile_scale") return [$("tilePick"), $("tilesOn")];
   const found = [$(name), $(`adv-${name}`), ...document.querySelectorAll(`[data-for="${name}"]`)];
   return found.filter((el) => el && el.type !== "hidden");
 }
@@ -1618,18 +1646,21 @@ function showBlocked() {
 // ---- all settings ----
 /* The Settings window holds how the app behaves, with its folders, models and network. Settings that shape the picture are in the cards. */
 const APP_FIELDS = ["keep_models_loaded", "cpu_threads", "display_rate", "save_progress_video"];
+// Fix's Inpaint: the model it paints with and how. They shape no render, so they live here, not in a card.
+const INPAINT_FIELDS = ["inpaint_file", "inpaint_steps", "inpaint_guidance"];
 
 function buildAdvanced() {
   const body = $("advBody");
-  const list = APP_FIELDS.filter((n) => byName[n]).map((n) => byName[n]);
-  const box = document.createElement("section");
-  box.className = "folders app-fields";
-  box.setAttribute("aria-label", "Rendering");
-  const title = document.createElement("span");
-  title.className = "adv-name";
-  title.textContent = "Rendering";
-  box.append(title, ...list.map((f) => advField(f)));
-  body.append(box);
+  for (const [label, names] of [["Rendering", APP_FIELDS], ["Inpaint", INPAINT_FIELDS]]) {
+    const box = document.createElement("section");
+    box.className = "folders app-fields";
+    box.setAttribute("aria-label", label);
+    const title = document.createElement("span");
+    title.className = "adv-name";
+    title.textContent = label;
+    box.append(title, ...names.filter((n) => byName[n]).map((n) => advField(byName[n])));
+    body.append(box);
+  }
   makeSwitches(body);
 }
 
@@ -2091,6 +2122,10 @@ function advField(f, compact = false) {
     f.options.forEach((o) => input.append(option(o)));
     input.value = current;
     wrap.append(name, input);
+  } else if (f.name === "inpaint_file") {
+    input = document.createElement("select");
+    fillModelPick(input, current, "None");
+    wrap.append(name, input);
   } else if (f.kind === "number" && sliderRange(f)) {
     // A slider over the useful range, with a box for typing any value, including past either end.
     const [low, high, step] = sliderRange(f);
@@ -2136,6 +2171,22 @@ function advField(f, compact = false) {
     edit.setAttribute("aria-label", `Edit ${term(f.name)}`);
     edit.addEventListener("click", () => openSchedule(f.name));
     if (compact) cell.replaceChildren(edit, input); else cell.append(edit);
+  }
+  if (f.name === "inpaint_file") {
+    const pick = document.createElement("button");
+    Object.assign(pick, { type: "button", className: "default icon-button", title: "Browse for a model file on the PC that renders" });
+    pick.setAttribute("aria-label", "Browse for a model file");
+    pick.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+    pick.addEventListener("click", async () => {
+      try {
+        const path = await chooseCheckpoint(input.value);
+        if (!path) return;
+        await loadCheckpoints();
+        pickInpaintModel(path);
+      } catch (e) { formError(e.message); }
+    });
+    input.addEventListener("change", () => pickInpaintModel(input.value));
+    cell.append(pick);
   }
   if (f.name === "partner_file") {
     const pick = document.createElement("button");
@@ -2187,7 +2238,7 @@ function advChanged(f, input, wrap) {
 
 // Counts only Settings' own settings. Changes in the cards show in each card's title row.
 const changedLabel = () => {
-  const n = APP_FIELDS.filter((name) => name in state.advanced).length;
+  const n = [...APP_FIELDS, ...INPAINT_FIELDS].filter((name) => name in state.advanced).length;
   return n ? `(${n} changed)` : "";
 };
 
@@ -2200,7 +2251,7 @@ function resetAdvancedPanel() {
 }
 
 function resetAdvanced() {
-  for (const name of APP_FIELDS) delete state.advanced[name];
+  for (const name of [...APP_FIELDS, ...INPAINT_FIELDS]) delete state.advanced[name];
   resetAdvancedPanel();
   save();
   updateFit();
@@ -2472,7 +2523,8 @@ function welcomeRow(m, ticked) {
   box.addEventListener("change", showWelcomeTotal);
   const size = document.createElement("span");
   size.className = "value";
-  size.textContent = m.downloaded ? "Installed" : sizeLabel(m.size_gb);
+  size.textContent = m.found_at ? "Found" : m.downloaded ? "Installed" : sizeLabel(m.size_gb);
+  if (m.found_at) size.title = `Used where it is: ${m.found_at}`;
   row.append(box, textBlock(m.name, m.about), size);
   return row;
 }
@@ -2489,26 +2541,39 @@ async function openWelcome() {
   $("welcomeOutput").value = f.output_dir;
   $("welcomeUpscalers").value = f.upscale_dirs.join("\n");
   $("welcomeCheckpoints").value = f.checkpoint_dirs.join("\n");
-  findCheckpointFolders($("welcomeCheckpoints"), $("welcomeCheckpointsHelp")).catch(() => {});
-  const main = byName.diffusion_model.default;
-  $("welcomeUpscaler").replaceChildren(...catalog.filter((m) => m.kind === "upscaler").map((m) => welcomeRow(m, true)));
-  $("welcomeModels").replaceChildren(...catalog.filter((m) => m.kind !== "upscaler").map((m) => welcomeRow(m, m.name === main || m.kind === "helper")));
-  showWelcomeTotal();
+  findCheckpointFolders($("welcomeCheckpoints"), $("welcomeCheckpointsHelp")).then(async ({ models }) => {
+    if (!models.length) return;
+    await loadModels();  // models found in other apps show as found, not as downloads
+    showWelcomeModels(new Set(welcomeTicked().map((box) => box.dataset.model)));
+  }).catch(() => {});
+  showWelcomeModels();
   $("welcome").showModal();
 }
 
+/* The models to tick for download. `ticked` keeps the choices made so far when the list is shown again. */
+function showWelcomeModels(ticked) {
+  const main = byName.diffusion_model.default;
+  const wanted = (m, start) => (ticked ? ticked.has(m.name) : start);
+  $("welcomeUpscaler").replaceChildren(...catalog.filter((m) => m.kind === "upscaler").map((m) => welcomeRow(m, wanted(m, true))));
+  $("welcomeModels").replaceChildren(...catalog.filter((m) => m.kind !== "upscaler").map((m) => welcomeRow(m, wanted(m, m.name === main || m.kind === "helper"))));
+  showWelcomeTotal();
+}
+
 /* Looks once for the checkpoint folders of ComfyUI and the web UIs, and adds any it finds to a folder list. It
-   runs only when asked: when the welcome screen opens, and from Find in other apps. Returns how many it added. */
+   runs only when asked: when the welcome screen opens, and from Find in other apps. The same search finds models
+   those apps already have, so Nano needn't download them. Returns how many folders it added, and those models. */
 async function findCheckpointFolders(box, note) {
   const before = note.textContent;
-  note.textContent = "Looking for ComfyUI and Stable Diffusion web UI folders…";
+  note.textContent = "Looking for ComfyUI and Stable Diffusion web UI folders, and models they already have…";
   try {
-    const { found } = await api("/api/find-checkpoint-folders");
+    const { found, models } = await api("/api/find-checkpoint-folders");
     const have = new Set(box.value.split("\n").map((d) => d.trim().toLowerCase()).filter(Boolean));
     const added = found.filter((d) => !have.has(d.toLowerCase()));
     if (added.length) box.value = [box.value.trim(), ...added].filter(Boolean).join("\n");
-    note.textContent = added.length ? `Found ${added.length} folder${added.length > 1 ? "s" : ""} in other apps.` : before;
-    return added.length;
+    const notes = [added.length && `Found ${added.length} folder${added.length > 1 ? "s" : ""} in other apps.`,
+      models.length && `Using ${models.join(", ")} from them, so ${models.length > 1 ? "those don't" : "it doesn't"} need downloading.`];
+    note.textContent = notes.filter(Boolean).join(" ") || before;
+    return { added: added.length, models };
   } catch (e) {
     note.textContent = before;
     throw e;
@@ -2569,7 +2634,7 @@ async function droppedFiles(transfer) {
 
 function wireDrop(zone, { input, onFiles, onImage, onClear }) {
   const open = (e) => {
-    if (e.target.closest(".drop-clear") || zone.closest(".blocked") || zone.classList.contains("busy")) return;
+    if (e.target.closest(".drop-clear, .drop-erase") || zone.closest(".blocked") || zone.classList.contains("busy")) return;
     input.click();
   };
   zone.addEventListener("click", open);
@@ -2638,6 +2703,7 @@ function showInit() {
     });
   }
   $("initOptions").hidden = !state.init_image;
+  if (typeof showEraseButton === "function") showEraseButton(lastStatus?.task);  // the start image's Erase button
   $("startBlock").hidden = animating() && state.animation_mode === "Video Input";
   $("matchImage").disabled = !state.init_size;
   for (const btn of document.querySelectorAll("[data-init-fit]")) {
@@ -2833,11 +2899,11 @@ async function loadCheckpoints() {
   showIdle();  // which handoff settings apply depends on the model's kind
 }
 
-function showCheckpoints() {
-  const select = $("handoffPick");
-  const current = state.handoff_file || "";
-  // Grouped by the subfolder each checkpoint is in, as ComfyUI sorts them.
-  const options = [option("", "Off")];
+/* Fills a model list: the checkpoints grouped by the subfolder each is in, as ComfyUI sorts them, with `current`
+   kept even when it isn't in a checkpoint folder. `none` labels the empty choice, which `always` keeps; otherwise it
+   shows only until a model is chosen. */
+function fillModelPick(select, current, none, always = true) {
+  const options = always || !current ? [option("", none)] : [];
   const groups = new Map();
   for (const c of checkpointList) {
     const label = c.label ? `${c.name} (${c.label})` : c.sdxl ? `${c.name} (SDXL)` : c.name;
@@ -2850,6 +2916,27 @@ function showCheckpoints() {
   if (current && !checkpointList.some((c) => c.path === current)) options.push(option(current, baseName(current).replace(/\.(safetensors|gguf)$/i, "")));
   select.replaceChildren(...options);
   select.value = current;
+}
+
+/* Inpaint's model, with the steps and guidance it was made for. */
+function pickInpaintModel(path) {
+  const own = { inpaint_file: path, ...(path && checkpointList.find((c) => c.path === path)?.inpaint) };
+  for (const [name, value] of Object.entries(own)) {
+    if (!byName[name]) continue;
+    if (JSON.stringify(value) === JSON.stringify(byName[name].default)) delete state.advanced[name];
+    else state.advanced[name] = value;
+  }
+  resetAdvancedPanel();
+  save();
+  if (eraseMode) showEraseBar(lastStatus?.task);
+}
+
+function showCheckpoints() {
+  const select = $("handoffPick");
+  const current = state.handoff_file || state.handoff_last || "";
+  fillModelPick(select, current, "Choose a model", false);
+  const inpaint = $("adv-inpaint_file");
+  if (inpaint) fillModelPick(inpaint, lookValue("inpaint_file"), "None");
   $("handoffWhere").textContent = checkpointList.length ? ""
     : isLocal() ? "Browse to a checkpoint, or add checkpoint folders in Settings." : "Browse to a checkpoint on the PC that renders, or add checkpoint folders in Settings.";
 }
@@ -2952,6 +3039,7 @@ function showPreview(url, rev) {
 function renderTask(t) {
   const active = !!t?.active;
   showRegionsTask(t);
+  showEraseTask(t);
   $("renderBtn").disabled = active;
   $("renderMini").hidden = active;
   $("upscaleBtn").disabled = active;
@@ -3013,13 +3101,13 @@ async function poll() {
     showStatus(s);
     renderTask(s.task);
     await showDownloads(s.downloads);
-  } catch { showReady(false, "Not connected"); }  // the next tick retries
+  } catch { showConnected(false); }  // the next tick retries
 }
 
-function showReady(ready, text) {
-  $("statusState").textContent = text;
-  $("statusState").classList.toggle("ready", ready);
-  $("statusState").classList.toggle("not-ready", !ready);
+/* Only whether the server answers: what it is doing shows under the progress bar. */
+function showConnected(connected) {
+  $("statusState").textContent = connected ? "Connected" : "Not connected";
+  $("statusState").classList.toggle("offline", !connected);
 }
 
 function showStatus(s) {
@@ -3027,7 +3115,7 @@ function showStatus(s) {
   showDisk(s.disk);
   showLocal(s.local !== false);
   showRemote(s);
-  showReady(!s.task?.active, s.task?.active ? s.task.message : "Ready");
+  showConnected(true);
   $("engineWarn").hidden = !s.other_gpu_app;
   updateFit();
 }
@@ -3446,7 +3534,8 @@ async function init() {
   buildHelpSettings();  // after the cards, so each setting is listed under the card it's in
   showSchedulePreviews();
   applyNames();
-  for (const name of ["tile_scale", "tile_start", "live_ghost", "animation_mode", "robust_critic", "route_prompts", "loop_mode"]) byName[name].options.forEach((o) => $(name).append(option(o)));
+  byName.tile_scale.options.filter((o) => o !== "Off").forEach((o) => $("tilePick").append(option(o)));
+  for (const name of ["tile_start", "live_ghost", "animation_mode", "robust_critic", "route_prompts", "loop_mode"]) byName[name].options.forEach((o) => $(name).append(option(o)));
   await loadModels();
   showGalleryPanel();
   showControlsPanel();
@@ -3477,6 +3566,7 @@ async function init() {
     save();
   });
   setUpRegions();
+  setUpErase();
   $("advancedBtn").addEventListener("click", () => $("advanced").showModal());
   document.querySelectorAll("[data-names]").forEach((btn) =>
     btn.addEventListener("click", () => setNames(btn.dataset.names)));
@@ -3533,8 +3623,16 @@ async function init() {
   showCards();
   $("handoffBrowse").addEventListener("click", browseCheckpoint);
   $("handoffPick").addEventListener("change", (e) => {
-    pickCheckpoint(e.target.value);
+    e.stopPropagation();
+    if (e.target.value) pickCheckpoint(e.target.value);
   });
+  $("handoffOn").addEventListener("change", (e) => { e.stopPropagation(); switchHandoff(e.target.checked); });
+  $("tilesOn").addEventListener("change", (e) => {
+    e.stopPropagation();
+    if (e.target.checked) openCard("tiles");
+    setTiles(e.target.checked ? $("tilePick").value : "Off");
+  });
+  $("tilePick").addEventListener("change", (e) => { e.stopPropagation(); state.tile_last = e.target.value; setTiles(e.target.value); });
   $("addPromptChange").addEventListener("click", addPromptChange);
   $("shareToggle").addEventListener("change", () => setSharing({ on: $("shareToggle").checked }));
   $("shareNewCode").addEventListener("click", () => setSharing({ new_code: true }));
@@ -3553,9 +3651,10 @@ async function init() {
     button.disabled = true;
     $("checkpointFound").textContent = "";
     try {
-      const added = await findCheckpointFolders($("checkpointDirs"), $("checkpointFound"));
+      const { added, models } = await findCheckpointFolders($("checkpointDirs"), $("checkpointFound"));
       if (added) await saveFolders();
-      else $("checkpointFound").textContent = "No other folders found.";
+      if (models.length) await loadModels();
+      if (!added && !models.length) $("checkpointFound").textContent = "No other folders found.";
     } catch (e) { folderError(e.message); }
     button.disabled = false;
   });

@@ -64,6 +64,7 @@
           </div>
           <img class="drop-image" alt="" hidden>
           <span class="drop-name"></span>
+          <button type="button" class="drop-erase" id="initErase" aria-label="Fix the start image" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l10-10a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L11 21z"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg></button>
           <button type="button" class="drop-clear" title="Remove the start image" aria-label="Remove the start image" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
           </button>
@@ -193,20 +194,19 @@
       </section>
 
       <section class="card" data-card="regions">
-        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Regional prompts</span><span class="card-sum" id="sum-regions"></span></button>
+        <div class="card-top"><button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Regional prompts</span><span class="card-sum" id="sum-regions"></span></button><input type="checkbox" id="regionsOn" class="switch card-switch" role="switch" aria-label="Regional prompts" data-help="Boxes on the frame, each with a prompt of its own. Off keeps the boxes but leaves them out of renders."></div>
         <div class="card-body">
-          <label class="check toggle" data-help="Boxes on the frame, each with a prompt of its own. Off keeps the boxes but leaves them out of renders."><input type="checkbox" id="regionsOn" class="switch" role="switch"> Regional prompts</label>
+          <p class="hint" id="regionsOff">Boxes on the frame, each with a prompt of its own.</p>
           <div id="regionsMore" class="regions-more" hidden>
             <div class="slider-row"><label class="field-name" for="regionStrength" data-help="How much a box's prompt takes over inside it. The main prompt keeps the rest. 1 leaves the main prompt out of close-ups inside a box.">Strength</label><input type="range" data-for="regionStrength" min="0" max="1" step="0.05"><input id="regionStrength" class="readout" type="number" min="0" max="1" step="0.05"></div>
             <ul id="regionList" class="region-list"></ul>
             <button type="button" id="regionsBtn" class="default regions-btn" data-help="Opens the box editor. During a render, it pauses after the current step so you can draw, then Continue carries on with the new boxes.">Edit regions</button>
           </div>
-          <p class="hint" id="regionsWhy" hidden></p>
         </div>
       </section>
 
       <section class="card" data-card="handoff">
-        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Handoff</span><span class="card-sum" id="sum-handoff"></span></button>
+        <div class="card-top"><button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Handoff</span><span class="card-sum" id="sum-handoff"></span></button><input type="checkbox" id="handoffOn" class="switch card-switch" role="switch" aria-label="Handoff" data-help="Another model paints part of each image: the start, the finish, or both."></div>
         <div class="card-body">
           <div class="line stacked" data-sub="checkpoint" data-sub-label="Handoff model">
             <label class="field-name" for="handoffPick" data-words="{handoff_file}">Handoff model</label>
@@ -225,9 +225,10 @@
       </section>
 
       <section class="card" data-card="tiles">
-        <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Tiles</span><span class="card-sum" id="sum-tiles"></span></button>
+        <div class="card-top"><button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Tiles</span><span class="card-sum" id="sum-tiles"></span></button><input type="checkbox" id="tilesOn" class="switch card-switch" role="switch" aria-label="Tiles" data-help="Builds a larger image from several renders at the frame size. Time grows with the number of tiles."></div>
         <div class="card-body">
-          <label class="line" data-sub="tile_scale"><span class="field-name">Tiles</span><select id="tile_scale"></select></label>
+          <label class="line" data-sub="tile_scale" data-sub-label="Tiles"><span class="field-name">Size</span><select id="tilePick"></select></label>
+          <input type="hidden" id="tile_scale">
           <div class="slider-row" data-in="tile_scale"><label class="field-name" for="tile_denoise">Tile denoise</label><input type="range" data-for="tile_denoise" min="0.1" max="1" step="0.05"><input id="tile_denoise" class="readout" type="number" min="0.1" max="1" step="0.05"></div>
           <div id="tileMore" data-in="tile_scale" hidden>
             <label class="line"><span class="field-name">Text start</span><select id="tile_start"></select></label>
@@ -331,6 +332,7 @@
       <p id="timeNote" class="time-note"></p>
       <div class="actions">
         <button type="button" id="renderBtn" class="primary">Render</button>
+        <button type="button" id="eraseBtn" class="default" hidden>Fix</button>
         <button type="button" id="stopBtn" class="danger" hidden>Stop</button>
       </div>
       <div class="mini-actions">
@@ -353,6 +355,47 @@
           <button type="button" id="regionClear" class="default">Clear</button>
           <button type="button" id="regionCancel" class="default">Cancel</button>
           <button type="button" id="regionDone" class="primary">Done</button>
+        </div>
+      </div>
+      <div id="eraseEditor" class="region-editor" hidden>
+        <div id="eraseFrame" class="region-frame erase-frame"><canvas id="cloneCanvas"></canvas><canvas id="inpaintCanvas"></canvas><canvas id="eraseCanvas"></canvas><div id="eraseRing" class="erase-ring" hidden></div><div id="cloneMark" class="clone-mark" hidden></div><div id="eraseWait" class="erase-wait"><span class="spinner" aria-hidden="true"></span><span id="eraseWaitText">Pausing after this step…</span></div></div>
+        <div class="fix-dock">
+          <div id="fixLate" class="fix-late" role="note" hidden>
+            <span>This late, erased areas come out soft. Clone and Inpaint keep detail.</span>
+            <button type="button" id="fixLateClone" class="link-button">Use Clone</button>
+            <button type="button" id="fixLateClose" class="fix-late-close" aria-label="Dismiss" title="Don't show this again">×</button>
+          </div>
+          <div class="region-bar fix-bar">
+            <div class="fix-row">
+              <div class="segmented fix-tools" role="group" aria-label="Tool">
+                <button type="button" id="fixErase" aria-pressed="true" title="Paint over something to remove it (E)">Erase</button>
+                <button type="button" id="fixClone" aria-pressed="false" title="Alt-click a spot to copy from, then paint it over something (C)">Clone</button>
+                <button type="button" id="fixInpaint" aria-pressed="false">Inpaint</button>
+              </div>
+              <span id="eraseNote" class="region-note"></span>
+            </div>
+            <div id="inpaintOptions" class="fix-row inpaint-options" hidden>
+              <input type="text" id="inpaintPrompt" placeholder="What to paint here, such as a small sailboat" aria-label="What goes here" maxlength="1000" spellcheck="false" autocomplete="off">
+              <select id="inpaintMode" aria-label="Start from" title="What the Inpaint model starts from">
+                <option value="fresh" title="The model paints the area anew: what the box says, or what fits around it">Fresh</option>
+                <option value="rework" title="The model paints over what's there at Strength, to change it">Rework</option>
+                <option value="remove" title="LaMa clears what's there first, then the model paints over its fill at Strength">Over a cleared area</option>
+              </select>
+              <label id="inpaintStrengthBox" class="region-strength" title="How much the model repaints. Lower keeps more of what it starts from.">Strength <input type="range" id="inpaintStrength" min="5" max="100" step="5"><span id="inpaintStrengthShown" class="brush-size"></span></label>
+            </div>
+            <div class="fix-row fix-controls">
+              <label class="region-strength" title="How wide the brush is. The [ and ] keys and the mouse wheel change it too.">Brush <input type="range" id="eraseBrush"><span id="eraseBrushSize" class="brush-size"></span></label>
+              <label id="eraseFreshBox" class="region-strength" title="Fresh noise for what you fix. More keeps the old thing from coming back; too much late on leaves grain.">Noise <input type="range" id="eraseFresh" min="0" max="100" step="5"><span id="eraseFreshShown" class="brush-size"></span></label>
+              <span class="fix-edits">
+                <button type="button" id="eraseUndo" class="default" title="Undo the last stroke (Ctrl+Z)">Undo</button>
+                <button type="button" id="eraseClear" class="default" title="Clear everything painted in this pause">Clear</button>
+              </span>
+              <span class="fix-actions">
+                <button type="button" id="eraseCancel" class="default">Cancel and continue</button>
+                <button type="button" id="eraseDone" class="primary">Continue</button>
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -413,7 +456,7 @@
   </div>
   <span class="spacer"></span>
   <span id="downloadState" class="value" hidden></span>
-  <span id="statusState"></span>
+  <span id="statusState" class="offline" role="status">Not connected</span>
 </footer>
 
 <dialog id="advanced" class="modal" aria-label="Settings">
@@ -523,14 +566,20 @@
     <h3>Prompts</h3>
     <p>Write one prompt per line, and all of them guide the image together. End a line with a weight to change how much it counts: <code>:2</code> counts double, and <code>:-1</code> steers away from it.</p>
     <h3>Regional prompts</h3>
-    <p>The Regional prompts card puts boxes on the frame, each with a prompt of its own. Turn it on and press Edit regions, then drag on the frame to draw a box, type its prompt and press Done. Drag a box to move it, drag its corner to resize it, and press × to remove it. The boxes go with every render while the card is on, and turning it off keeps them for later. During a render the button reads Pause and edit regions: it pauses the render after the current step and opens the editor on the preview, and Continue carries on with the new boxes from there, as often as you like. A close-up inside a box is judged mostly by the box's prompt, and the main prompt keeps the rest, so the style stays the same. Strength sets how much a box's prompt takes over inside it. Regional prompts don't work with Tiles.</p>
+    <p>The Regional prompts card puts boxes on the frame, each with a prompt of its own. Turn it on and press Edit regions, then drag on the frame to draw a box, type its prompt and press Done. Drag a box to move it, drag its corner to resize it, and press × to remove it. The boxes go with every render while the card is on, and turning it off keeps them for later. During a render the button reads Pause and edit regions: it pauses the render after the current step and opens the editor on the preview, and Continue carries on with the new boxes from there, as often as you like. A close-up inside a box is judged mostly by the box's prompt, and the main prompt keeps the rest, so the style stays the same. Strength sets how much a box's prompt takes over inside it. With Tiles, the boxes lie over the whole tiled picture.</p>
+    <h3>Fix</h3>
+    <p>Press Fix beside Stop while a render runs and it pauses after the current step. Pick Erase, Clone or Inpaint, paint on the preview, then press Apply and continue. You can use all three in one pause. Fix works with Tiles, and is for stills.</p>
+    <p>Erase removes what you paint over. LaMa fills the area from what is around it, and Disco repaints it over the steps left, so there's no seam. If it grows back, erase again later, or raise Noise beside Brush: it starts at the share of fresh noise that suits the step, and more keeps things from coming back, but too much late on leaves grain. Erase once you can see the thing, from about a third of the way through: before that, the change spreads to the rest of the picture. Past 80%, erased areas come out soft, as the steps left can't add detail to them.</p>
+    <p>Inpaint has a model of your own paint something into the area: choose it under Inpaint in Settings. Say what in the box beside it, or leave it empty for whatever fits around it. Fresh paints the area anew, Rework paints over what's there to change it, and Over a cleared area has LaMa clear it first. Strength sets how much Rework and Over a cleared area repaint.</p>
+    <p>Clone copies one part of the picture over another, at any step. Alt-click where to copy from, then paint: the source follows the brush, and Alt-click again for a new one. The copy's colors are matched to where it lands, and Disco carries on painting it. Late in a render, Clone and Inpaint keep detail where Erase can't.</p>
+    <p>Something in the start image fixes best there, before the render. Press the brush on the start image, erase, inpaint or clone, and press Apply. The result is saved as a new image that replaces the start image, so the original is kept. The [ and ] keys and the mouse wheel change the brush size, E, C and I switch tools, and Ctrl+Z undoes a stroke.</p>
     <h3>Looks</h3>
     <p>A look sets how the prompt shapes the picture, at any size. Changing one of its settings by hand shows Custom.</p>
     <dl id="helpLooks"></dl>
     <h3 data-words="{Cutouts} and schedules">Cutouts and schedules</h3>
     <p data-words="Each step, the {clip_lower} judge {cuts_lower} of the picture: whole-image views and close-ups. The {Cutouts} card sets how many of each there are and how close the close-ups get."></p>
     <p data-words="The default close-up ramp keeps {cut_ic_pow} low at the start, so close-ups are wide and lay out the scene, and raises it toward the end for detail. It made real scenes where flat settings gave texture. Mostly shapes and Mostly detail under Look give more of the steps to one or the other."></p>
-    <p>The bar at the top of the card counts which steps are skipped, which a Handoff checkpoint paints, which lay out shapes and which paint detail, for the steps, Denoise, Tile denoise or Frame skip and schedules you have set, and each schedule's graph marks where shapes end. A step lays out shapes while Whole-image views at least match Close-up views, so editing those two moves the split. The schedules run over 1000 points from noise to the finished picture. The first 400 lay out the scene with whole-image views and wide close-ups, and the rest paint detail with tighter and tighter close-ups. A start image skips the first steps, so at Denoise 50% Disco starts at point 500 and paints only detail over the image's shapes, which suits a restyle. Video frames do the same with Frame skip %. Fit views to the painted steps spreads the schedules over only the steps that are painted, so they start with a pass of shapes of their own and the prompt can turn what is in the image into what it describes. It's on for start images by default, and Start images and clip frames fits each frame of a clip too. Shapes share % sets how many of the steps that pass gets: 40 keeps the schedules as drawn, and 20 gives a fifth to shapes and the rest to detail.</p>
+    <p>The bar at the top of the card counts which steps are skipped, which a Handoff checkpoint paints, which lay out shapes and which paint detail, for the steps, Denoise or Frame skip and schedules you have set, and each schedule's graph marks where shapes end. A step lays out shapes while Whole-image views at least match Close-up views, so editing those two moves the split. The schedules run over 1000 points from noise to the finished picture. The first 400 lay out the scene with whole-image views and wide close-ups, and the rest paint detail with tighter and tighter close-ups. A start image skips the first steps, so at Denoise 50% Disco starts at point 500 and paints only detail over the image's shapes, which suits a restyle. Video frames do the same with Frame skip %. Fit views to the painted steps spreads the schedules over only the steps that are painted, so they start with a pass of shapes of their own and the prompt can turn what is in the image into what it describes. It's on for start images by default, and Start images and clip frames fits each frame of a clip too. Shapes share % sets how many of the steps that pass gets: 40 keeps the schedules as drawn, and 20 gives a fifth to shapes and the rest to detail.</p>
     <p>Settings that change over the render are schedules. Each one shows as a graph from the start of the render on the left to the end on the right, with its values in the corner. Click a graph to open its editor. Drag a level up or down to change it, and drag the line between two levels to move the change. Double-click a level to split it there, and double-click a line to join its two sides. The text box takes the same schedule as text, such as [12]*400+[4]*600: 12 for the first 400 of 1000 parts, then 4. A value that differs from the default shows in the accent color. Hover over a setting's name to read what it does.</p>
     <p>Guidance holds how the push toward the prompt is smoothed and limited, and how the picture is sampled. An option with settings of its own becomes a section when you switch it on, with its settings right under it, and its arrow folds them away. Settings that are always in use, such as those for Frames per second, start folded behind an arrow. A dot on an arrow means a setting inside is changed.</p>
     <h3>Seeds and Exact repeat</h3>
@@ -550,7 +599,7 @@
     <p>Image prompts take many images at once: drop a set of images or a whole folder. They guide the render beside your text. Every prompt checker reads each image, and what the images have in common counts: a subject, a style, a palette, a mood. It's close to what an embedding does, but nothing is trained, so it takes seconds and works with any set. Ten to fifty images that share one idea work best. Image prompt weight sets how much they count beside a text line weighted 1, and below 0 steers away from them.</p>
     <h3>Tiles</h3>
     <p>Tiles builds a larger image from several renders at the frame size, so it needs no more VRAM than the frame does. Every tile takes each step in turn, and the overlaps are averaged before the next step, so neighbors settle on one image with no joins. Time grows with the number of tiles: 4 tiles take four times as long per step, 16 take sixteen times.</p>
-    <p data-words="With a start image, Tile denoise sets how much is repainted, and {skip_steps} isn't used. Your image can be any size, because it is resized to the final size first. With text only, Text start chooses how the picture begins. Render first, the default, paints one image at the frame size and the tiles repaint it using Tile denoise, which keeps one scene with large shapes. Split the noise paints at full size from the first step and uses {skip_steps}; it is busier, and each tile can paint its own copy of the subject."></p>
+    <p data-words="With a start image, {skip_steps} sets how much is repainted, as without tiles. Your image can be any size, because it is resized to the final size first. With text only, Text start chooses how the picture begins. Render first, the default, paints one image at the frame size and the tiles repaint it using Tile denoise, which keeps one scene with large shapes. Split the noise paints at full size from the first step and uses {skip_steps}; it is busier, and each tile can paint its own copy of the subject."></p>
     <p data-words="Whole picture view lets the {clip_lower} see each tile as part of the full image. Tiles use the ddim sampler, and symmetry doesn't apply."></p>
     <h3>Animation</h3>
     <p>Animation renders a clip one frame at a time. 2D moves a flat picture each frame. 3D flies a camera through the scene, with Depth Anything telling near from far, so 3D needs it from Models. Video Input repaints each frame of a video you drop on its box. Every frame after the first starts from the last one, and Frame skip % sets how much of it is kept. Higher is steadier and faster. 75 holds a scene while the camera moves, and 60 lets it keep reinventing itself. Video Input switches to 55, so the video gets repainted more. Frame skip keyframes, under the arrow beside Frame skip %, can lower it around a prompt change, so the new prompt takes over sooner.</p>
@@ -579,7 +628,7 @@
     <p>Prompt graft adds the effect of your prompt straight into Disco's own decoder, which normally can't read text. Subjects often come out whole, and Disco's paint and color stay. About 3 is a good start. It adds about 0.6GB of VRAM and works only with the 512x512 model.</p>
     <p>Live ghost lets the partner guide the picture's broad light and dark, and leaves color and detail to Disco. Sketch first paints a quick sketch before the render and takes it out of memory again, so it needs no extra VRAM during the render. Live keeps repainting during the render.</p>
     <p>Depth target keeps near and far where the ghost has them. A small depth model reads the ghost once and then checks the render at every step, so it works with Live ghost or a Ghost image. About 1 is a good start, and it pairs well with Sketch first and Prompt graft. It adds about 0.1 to 0.25GB of VRAM and a few seconds. Get Depth Anything from Models in Settings, about 100MB.</p>
-    <p>Two painters shares every step between the two models. The partner owns the broad shapes, and Disco owns detail and finishes alone.</p>
+    <p>Two painters shares every step between the two models. The partner owns the broad shapes until the layout is set, at 40%, and Disco owns detail and finishes alone. Holding the shapes longer, in Two painters curve, flattens the light and dark.</p>
     <p>Borrowed attention gives Disco the partner's sense of which parts of the picture belong together. Subjects often improve. Borrowed layers sets where: Coarse borrows only the broad layout and keeps Disco's color, All borrows everywhere for a stronger, grayer result, and Coarsest changes the least. It works especially well with Time travel.</p>
     <p>Five more change the checkers themselves, the CLIP models that compare the picture with your prompt. A checker is as happy with bits of a subject scattered over the canvas as with one whole subject, which is why Disco subjects fall apart. None of these needs the partner, and they can be combined.</p>
     <p>Coherence critic shows the checkers each view twice, once with its pieces shuffled, and pushes the picture so the shuffled one scores worse. Your prompt then only counts when it comes from how the parts fit together, so subjects hold together and the paint stays. About 0.6 is a good start. It adds about 10% time and about 0.9GB of VRAM, or 0.65GB with Coherence views set to Whole-image.</p>
@@ -688,5 +737,6 @@
 <div id="toast" class="toast" role="status" hidden></div>
 <script src="app.js"></script>
 <script src="regions.js"></script>
+<script src="erase.js"></script>
 </body>
 </html>
