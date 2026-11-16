@@ -561,16 +561,16 @@ what it fixed would change partway through.
 
 <table>
   <tr>
-    <td width="40%" valign="top"><b>Without a fix</b><br>A render with a second lighthouse on the far headland.</td>
-    <td width="60%"><img src="docs/fix/untouched.jpg" width="100%" alt="The render without a fix, with a second lighthouse on the far headland"></td>
+    <td width="40%" valign="top"><b>Without a fix</b><br>A render with a red lighthouse in the water, below the horizon on the right.</td>
+    <td width="60%"><img src="docs/fix/untouched.jpg" width="100%" alt="The render without a fix, with a red lighthouse in the water"></td>
   </tr>
   <tr>
-    <td width="40%" valign="top"><b>Erase at 70%</b><br>Painted over, the lighthouse is gone, and Disco paints the storm into its place.<br><br><img src="docs/fix/erase_painted.jpg" width="120" alt="The lighthouse painted over in red"><br><sub>What was painted over</sub></td>
-    <td width="60%"><img src="docs/fix/erase.jpg" width="100%" alt="Erase: the lighthouse is gone"></td>
+    <td width="40%" valign="top"><b>Erase from 53%</b><br>The lighthouse painted over early, then what grew back in its place, each time it showed: its base, a small tower on a rock, a pale spire and two specks on the horizon, five fixes in all. Disco paints rough sea into its place.<br><br><img src="docs/fix/erase_painted.jpg" width="120" alt="The lighthouse painted over in red, close up"><br><sub>The first erase, close up</sub></td>
+    <td width="60%"><img src="docs/fix/erase.jpg" width="100%" alt="Erase: rough sea where the lighthouse was"></td>
   </tr>
   <tr>
-    <td width="40%" valign="top"><b>Clone at 85%</b><br>Sky from beside the lighthouse, copied over it. Late in a render, Clone keeps the picture's detail where an erase comes out soft.<br><br><img src="docs/fix/clone_painted.jpg" width="120" alt="The sky copied over the lighthouse"><br><sub>The copy as painted</sub></td>
-    <td width="60%"><img src="docs/fix/clone.jpg" width="100%" alt="Clone: sky and spray where the lighthouse was"></td>
+    <td width="40%" valign="top"><b>Clone at 80%</b><br>The tower on the far headland, covered with sky and ridge copied from its left, far enough off that nothing repeats. Disco carries the copy on, and it blends into the clouds. A faint streak that grew back where the tower stood was cloned over a few steps later. Late in a render, Clone keeps the picture's detail where an erase comes out soft.<br><br><img src="docs/fix/clone_painted.jpg" width="120" alt="The tower outlined, with a crosshair to its left where the copy came from"><br><sub>The area, and where the copy came from</sub></td>
+    <td width="60%"><img src="docs/fix/clone.jpg" width="100%" alt="Clone: the far headland with no tower"></td>
   </tr>
   <tr>
     <td width="40%" valign="top"><b>Inpaint at 60%</b><br><i>a small wooden sailboat</i>, painted in by Flux Fill, the second of two tries, then carried on by Disco, which works the sea over its hull and paints the boat in its own way.<br><br><img src="docs/fix/inpaint_painted.jpg" width="120" alt="Where the boat goes, painted in violet"><br><sub>Where the boat goes</sub><br><img src="docs/fix/inpaint_try.jpg" width="120" alt="Flux Fill's try: a wooden boat with a red sail"><br><sub>Flux Fill's try</sub></td>
@@ -640,10 +640,12 @@ The **Noise** slider beside Brush shows how much fresh noise this fix gives the 
 share that suits the step the render paused at. Each fix starts from that again, so you don't have to set
 it each time. If something keeps coming back, raise it. If a fixed area turns grainy, lower it.
 
-Fix once you can see the thing, from about a third of the way through. Before that the layout is still
-forming, and the change spreads to the rest of the picture. LaMa (0.2GB) downloads the first time you
-erase, or get it from Models in Settings. It runs for about a second and leaves the GPU straight after,
-so it adds nothing to the VRAM a render needs.
+The prompt can grow something back, above all what it asks for, as a lighthouse here. Erase it again each
+time it shows, with the brush just over it: early erases leave the most steps for Disco to paint the
+area, and each small one late costs little. Fix once you can see the thing, from about a third of the way
+through. Before that the layout is still forming, and the change spreads to the rest of the picture. LaMa
+(0.2GB) downloads the first time you erase, or get it from Models in Settings. It runs for about a second
+and leaves the GPU straight after, so it adds nothing to the VRAM a render needs.
 
 **On the start image.** Something that is in the start image fixes best there, before the render:
 otherwise the render begins with it in place, and from Denoise 50% it begins past the shapes phase, with
