@@ -1,4 +1,5 @@
-"""Pictures and masks between PIL, numpy and torch, and the few things done to masks everywhere: growing and blurring.
+"""Pictures and masks between PIL, numpy and torch, the few things done to masks everywhere, growing and blurring, and
+start images turned upright and fitted to the frame.
 
 A picture is a 1x3xHxW tensor of 0 to 1, or of -1 to 1 where `signed` says so, as diffusion models and their
 autoencoders work in. A mask is a 1x1xHxW tensor of 0 to 1, or a PIL "L" image of 0 to 255.
@@ -6,7 +7,7 @@ autoencoders work in. A mask is a 1x1xHxW tensor of 0 to 1, or a PIL "L" image o
 torch loads only when a function needs it, so the server can use the rest without it.
 """
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter, ImageOps
 
 
 def to_pil(picture, signed=False):
@@ -58,3 +59,24 @@ def blur(x, sigma):
     channels = x.shape[1]
     x = F.conv2d(F.pad(x, (radius, radius, 0, 0), mode="replicate"), kernel.view(1, 1, 1, -1).repeat(channels, 1, 1, 1), groups=channels)
     return F.conv2d(F.pad(x, (0, 0, radius, radius), mode="replicate"), kernel.view(1, 1, -1, 1).repeat(channels, 1, 1, 1), groups=channels)
+
+
+def upright(path):
+    """An image as it is meant to be seen. Phone photos store their rotation in a tag."""
+    with Image.open(path) as image:
+        return ImageOps.exif_transpose(image).convert("RGB")
+
+
+def size_start_image(image, width, height, mode):
+    """Fill stretches to the frame. Crop cuts the image to the frame's shape. Fit keeps the whole
+    image over a blurred copy of itself, because the renderer would paint flat bars as flat bars."""
+    size = (width, height)
+    if mode == "fill":
+        return image.resize(size, Image.LANCZOS)
+    cropped = ImageOps.fit(image, size, Image.LANCZOS)
+    if mode != "fit":
+        return cropped
+    canvas = cropped.filter(ImageFilter.GaussianBlur(max(size) / 24))
+    inner = ImageOps.contain(image, size, Image.LANCZOS)
+    canvas.paste(inner, ((width - inner.width) // 2, (height - inner.height) // 2))
+    return canvas

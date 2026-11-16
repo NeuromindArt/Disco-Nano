@@ -1,9 +1,10 @@
-"""Disco Diffusion's render path, for still images and animation frames.
+"""Disco Diffusion's render path, for still images and animation frames: one render or clip, from its settings to
+its saved images.
 
-Derived from Disco Diffusion, which is MIT licensed. See CREDITS.md and LICENSES/disco-diffusion.txt
-for its authors. Cutouts, the losses, guidance and the secondary model are theirs. Their animation,
-video and notebook code is not included; animation here comes from animate.py, which is Nano's own.
-renderer.py runs this in its own process.
+Derived from Disco Diffusion, which is MIT licensed. See CREDITS.md and LICENSES/disco-diffusion.txt for its authors.
+Their animation, video and notebook code is not included; animation here comes from animate.py, which is Nano's own.
+The cutouts and losses are in guidance.py, the secondary model in secondary.py, loading and keeping the models in
+loaders.py and the prompts in prompts.py. renderer.py runs this in its own process.
 """
 import gc
 import json
@@ -11,19 +12,12 @@ import math
 import os
 import random
 import re
-import traceback
-from dataclasses import dataclass
-from functools import partial
 
 import clip
 import numpy as np
 import torch
-import torchvision.transforms as T
 import torchvision.transforms.functional as TF
-from guided_diffusion.script_util import create_gaussian_diffusion, create_model_and_diffusion, model_and_diffusion_defaults
-from PIL import Image, ImageFilter, ImageOps
-from resize_right import resize
-from torch import nn
+from PIL import Image
 from torch.nn import functional as F
 
 import animate
@@ -41,442 +35,13 @@ import partner
 import paths
 import rules
 import tiles
+from guidance import MakeCutoutsDango, forget_lpips_sizes, lpips_distance, normalize, range_loss, spherical_dist_loss, tv_loss
+from imaging import size_start_image, upright
 from keyframes import POINTS, schedule, schedule_at
+from loaders import OnePassUNet, after_render, device, kept, load_clip_models, load_lpips, load_secondary, load_unet, put_away
+from prompts import encode_prompts, image_prompt_embed, parse_prompt, prompt_images
+from secondary import alpha_sigma_to_t
 from settings import DEFAULTS, handoff_parts, small_first_on, small_frame, uses_partner
-
-device = torch.device("cuda")
-normalize = T.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
-CLIP_NAMES = {"ViTB32": "ViT-B/32", "ViTB16": "ViT-B/16", "ViTL14": "ViT-L/14", "RN50": "RN50", "RN101": "RN101",
-              "RN50x4": "RN50x4", "RN50x16": "RN50x16", "RN50x64": "RN50x64"}
-
-
-def parse_prompt(prompt):
-    text, _, weight = prompt.rpartition(":")
-    try:
-        return (text, float(weight)) if text else (prompt, 1.0)
-    except ValueError:
-        return prompt, 1.0
-
-
-class CpuRotation:
-    """PyTorch's GPU backward for this transform is not repeatable, so Exact repeat runs it on the CPU."""
-
-    def __init__(self, rotation):
-        self.rotation = rotation
-
-    def __call__(self, cuts):
-        return self.rotation(cuts.cpu()).to(cuts.device)
-
-
-class MakeCutoutsDango(nn.Module):
-    def __init__(self, cut_size, overview, inner_crop, ic_size_pow, ic_grey_p, skip_augs, exact_repeat=False, evidence=None,
-                 extra=()):
-        super().__init__()
-        self.evidence, self.boxes, self.extra = evidence, [], list(extra)  # extra: (left, top, size) close-ups, such as faces
-        self.cut_size, self.overview, self.inner_crop = cut_size, overview, inner_crop
-        self.ic_size_pow, self.ic_grey_p, self.skip_augs = ic_size_pow, ic_grey_p, skip_augs
-        self.augs = T.Compose([
-            T.RandomHorizontalFlip(p=0.5),
-            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
-            T.RandomAffine(degrees=10, translate=(0.05, 0.05), interpolation=T.InterpolationMode.BILINEAR),
-            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
-            T.RandomGrayscale(p=0.1),
-            T.Lambda(lambda x: x + torch.randn_like(x) * 0.01),
-            T.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
-        ])
-        if exact_repeat:
-            self.augs.transforms[2] = CpuRotation(self.augs.transforms[2])
-
-    def forward(self, input, whole=None):
-        """Whole-image cutouts look at `whole` when it is given, and close-ups always look at `input`."""
-        cutouts = []
-        gray = T.Grayscale(3)
-        side_y, side_x = input.shape[2:4]
-        max_size = min(side_x, side_y)
-        min_size = min(side_x, side_y, self.cut_size)
-        output_shape = [1, 3, self.cut_size, self.cut_size]
-        seen = input if whole is None else whole
-        seen_y, seen_x = seen.shape[2:4]
-        seen_min = min(seen_x, seen_y)
-        pad_input = F.pad(seen, ((seen_y - seen_min) // 2, (seen_y - seen_min) // 2,
-                                 (seen_x - seen_min) // 2, (seen_x - seen_min) // 2))
-        cutout = resize(pad_input, out_shape=output_shape)
-        if 0 < self.overview <= 4:
-            cutouts.append(cutout)
-            if self.overview >= 2:
-                cutouts.append(gray(cutout))
-            if self.overview >= 3:
-                cutouts.append(TF.hflip(cutout))
-            if self.overview == 4:
-                cutouts.append(gray(TF.hflip(cutout)))
-        elif self.overview > 4:
-            cutouts += [cutout] * self.overview
-        for i in range(self.inner_crop):
-            size = int(torch.rand([]) ** self.ic_size_pow * (max_size - min_size) + min_size)
-            spot = self.evidence.pick(size, side_x, side_y) if self.evidence else None
-            if spot:
-                offset_x, offset_y = spot
-            else:
-                offset_x = torch.randint(0, side_x - size + 1, ())
-                offset_y = torch.randint(0, side_y - size + 1, ())
-            self.boxes.append((int(offset_x), int(offset_y), size))  # where each close-up is, for evidence and regions
-            cutout = input[:, :, offset_y:offset_y + size, offset_x:offset_x + size]
-            if i <= int(self.ic_grey_p * self.inner_crop):
-                cutout = gray(cutout)
-            cutouts.append(resize(cutout, out_shape=output_shape))
-        for offset_x, offset_y, size in self.extra:
-            self.boxes.append((offset_x, offset_y, size))
-            cutouts.append(resize(input[:, :, offset_y:offset_y + size, offset_x:offset_x + size], out_shape=output_shape))
-        cutouts = torch.cat(cutouts)
-        return cutouts if self.skip_augs else self.augs(cutouts)
-
-
-def spherical_dist_loss(x, y):
-    x = F.normalize(x, dim=-1)
-    y = F.normalize(y, dim=-1)
-    return (x - y).norm(dim=-1).div(2).arcsin().pow(2).mul(2)
-
-
-def tv_loss(input):
-    """L2 total variation loss, as in Mahendran et al."""
-    input = F.pad(input, (0, 1, 0, 1), "replicate")
-    x_diff = input[..., :-1, 1:] - input[..., :-1, :-1]
-    y_diff = input[..., 1:, :-1] - input[..., :-1, :-1]
-    return (x_diff**2 + y_diff**2).mean([1, 2, 3])
-
-
-# LPIPS runs VGG on the whole frame with gradients, about 3.9KB per pixel: 3.6GB at 1280x768, which an 8GB card
-# doesn't have to spare. There, frames larger than 768x512 are compared at 768x512, which was tested at every
-# size and still shows the start image's layout and colors that LPIPS guards. A larger card compares at the
-# largest size that fits in what is free at the first step, full size when it can.
-LPIPS_FLOOR_PIXELS = 768 * 512
-LPIPS_BYTES_PER_PIXEL = 3930  # what its forward and backward pass add per compared pixel, measured from 512x320 to 1280x768
-LPIPS_FIXED_UP_TO_GB = 8.5  # cards this size or smaller keep the tested 768x512
-_lpips_pixels = {}
-
-
-def lpips_pixels(pixels):
-    """How many pixels LPIPS compares at, worked out once per render: the next render may load other models."""
-    if pixels not in _lpips_pixels:
-        if torch.cuda.get_device_properties(0).total_memory <= LPIPS_FIXED_UP_TO_GB * 2**30:
-            _lpips_pixels[pixels] = min(pixels, LPIPS_FLOOR_PIXELS)
-            return _lpips_pixels[pixels]
-        free = (memory.cap_bytes or torch.cuda.mem_get_info()[0]) - torch.cuda.memory_allocated()
-        fits = int(free * 0.75 / LPIPS_BYTES_PER_PIXEL)  # slack for the allocator's rounding and later steps
-        _lpips_pixels[pixels] = min(pixels, max(fits, LPIPS_FLOOR_PIXELS))
-    return _lpips_pixels[pixels]
-
-
-def lpips_distance(model, image, target):
-    pixels = image.shape[-2] * image.shape[-1]
-    allowed = lpips_pixels(pixels)
-    if pixels > allowed:
-        scale = math.sqrt(allowed / pixels)
-        size = (max(round(image.shape[-2] * scale), 32), max(round(image.shape[-1] * scale), 32))
-        image = F.interpolate(image, size=size, mode="area")
-        target = F.interpolate(target, size=size, mode="area")
-    return model(image, target)
-
-
-def range_loss(input):
-    return (input - input.clamp(-1, 1)).pow(2).mean([1, 2, 3])
-
-
-# ---- secondary model ----
-def append_dims(x, n):
-    return x[(Ellipsis, *(None,) * (n - x.ndim))]
-
-
-def expand_to_planes(x, shape):
-    return append_dims(x, len(shape)).repeat([1, 1, *shape[2:]])
-
-
-def alpha_sigma_to_t(alpha, sigma):
-    return torch.atan2(sigma, alpha) * 2 / math.pi
-
-
-def t_to_alpha_sigma(t):
-    return torch.cos(t * math.pi / 2), torch.sin(t * math.pi / 2)
-
-
-@dataclass
-class DiffusionOutput:
-    v: torch.Tensor
-    pred: torch.Tensor
-    eps: torch.Tensor
-
-
-class ConvBlock(nn.Sequential):
-    def __init__(self, c_in, c_out):
-        super().__init__(nn.Conv2d(c_in, c_out, 3, padding=1), nn.ReLU(inplace=True))
-
-
-class SkipBlock(nn.Module):
-    def __init__(self, main, skip=None):
-        super().__init__()
-        self.main = nn.Sequential(*main)
-        self.skip = skip if skip else nn.Identity()
-
-    def forward(self, input):
-        return torch.cat([self.main(input), self.skip(input)], dim=1)
-
-
-class FourierFeatures(nn.Module):
-    def __init__(self, in_features, out_features, std=1.):
-        super().__init__()
-        assert out_features % 2 == 0
-        self.weight = nn.Parameter(torch.randn([out_features // 2, in_features]) * std)
-
-    def forward(self, input):
-        f = 2 * math.pi * input @ self.weight.T
-        return torch.cat([f.cos(), f.sin()], dim=-1)
-
-
-class SecondaryDiffusionImageNet2(nn.Module):
-    def __init__(self):
-        super().__init__()
-        c = 64  # The base channel count
-        cs = [c, c * 2, c * 2, c * 4, c * 4, c * 8]
-        self.timestep_embed = FourierFeatures(1, 16)
-        self.down = nn.AvgPool2d(2)
-        self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
-        self.net = nn.Sequential(
-            ConvBlock(3 + 16, cs[0]),
-            ConvBlock(cs[0], cs[0]),
-            SkipBlock([
-                self.down,
-                ConvBlock(cs[0], cs[1]),
-                ConvBlock(cs[1], cs[1]),
-                SkipBlock([
-                    self.down,
-                    ConvBlock(cs[1], cs[2]),
-                    ConvBlock(cs[2], cs[2]),
-                    SkipBlock([
-                        self.down,
-                        ConvBlock(cs[2], cs[3]),
-                        ConvBlock(cs[3], cs[3]),
-                        SkipBlock([
-                            self.down,
-                            ConvBlock(cs[3], cs[4]),
-                            ConvBlock(cs[4], cs[4]),
-                            SkipBlock([
-                                self.down,
-                                ConvBlock(cs[4], cs[5]),
-                                ConvBlock(cs[5], cs[5]),
-                                ConvBlock(cs[5], cs[5]),
-                                ConvBlock(cs[5], cs[4]),
-                                self.up,
-                            ]),
-                            ConvBlock(cs[4] * 2, cs[4]),
-                            ConvBlock(cs[4], cs[3]),
-                            self.up,
-                        ]),
-                        ConvBlock(cs[3] * 2, cs[3]),
-                        ConvBlock(cs[3], cs[2]),
-                        self.up,
-                    ]),
-                    ConvBlock(cs[2] * 2, cs[2]),
-                    ConvBlock(cs[2], cs[1]),
-                    self.up,
-                ]),
-                ConvBlock(cs[1] * 2, cs[1]),
-                ConvBlock(cs[1], cs[0]),
-                self.up,
-            ]),
-            ConvBlock(cs[0] * 2, cs[0]),
-            nn.Conv2d(cs[0], 3, 3, padding=1),
-        )
-
-    def forward(self, input, t):
-        timestep_embed = expand_to_planes(self.timestep_embed(t[:, None]), input.shape)
-        v = self.net(torch.cat([input, timestep_embed], dim=1))
-        alphas, sigmas = map(partial(append_dims, n=v.ndim), t_to_alpha_sigma(t))
-        pred = input * alphas - v * sigmas
-        eps = input * sigmas + v * alphas
-        return DiffusionOutput(v, pred, eps)
-
-
-# ---- loading ----
-# ---- models kept between renders ----
-# The render worker stays open between renders, and keeps the models it loaded in RAM for the next one. Each
-# render brings what it needs to the GPU, and put_away sends it all back to RAM when the render ends, so a
-# waiting worker holds no VRAM beyond its CUDA context. Closing the app ends the worker and frees it all. Models the
-# last render didn't use are let go, so switching checkpoints or settings doesn't pile up copies in RAM. A model only
-# Fix's Inpaint used is let go too: it's needed now and then, and holds many GB that the next render may want.
-_kept = {}
-_used = set()  # keys asked for during this render, to keep for the next one
-_after_render = []  # undoes what a render changed in kept models or shared code, such as hooks
-
-
-def kept(key, build, brief=False):
-    """The model kept under key, built the first time it is asked for. A `brief` one is let go when the render ends,
-    unless the render also asked for it to keep."""
-    if not brief:
-        _used.add(key)
-    if key not in _kept:
-        _kept[key] = build()
-    return _kept[key]
-
-
-def put_away():
-    while _after_render:
-        try:
-            _after_render.pop()()
-        except Exception:  # every undo still runs, and what went wrong goes to the job's log
-            traceback.print_exc()
-    for key in [k for k in _kept if k not in _used]:
-        del _kept[key]
-    _used.clear()
-    gc.collect()  # what was let go leaves RAM before the rest comes back to it from the GPU
-    for item in _kept.values():
-        for module in (item.parts() if hasattr(item, "parts") else [item]):
-            module.to("cpu")
-    gc.collect()
-    torch.cuda.empty_cache()
-
-
-def load_unet(cfg, hooks):
-    name, steps = cfg["diffusion_model"], cfg["steps"]
-    config = model_and_diffusion_defaults()
-    config.update(models.config(name))
-    config.update({
-        "diffusion_steps": (1000 // steps) * steps if steps < 1000 else steps,
-        "timestep_respacing": f"ddim{steps}",
-        # With the secondary model the UNet never runs backward, so checkpointing does nothing useful.
-        "use_checkpoint": not cfg["use_secondary_model"],
-    })
-
-    def build():
-        path = models.ensure(name, hooks.status)
-        model, _ = create_model_and_diffusion(**config)
-        model.load_state_dict(torch.load(path, map_location="cpu"))
-        # Disco Diffusion turns gradients on for the norm, qkv and proj weights. Nothing uses them, they cost
-        # memory in every backward pass, and memory.lean_unet needs every weight frozen.
-        model.requires_grad_(False).eval()
-        model.convert_to_fp16()  # before moving, so the 32-bit weights never reach the GPU
-        return model
-
-    # The weights don't depend on the steps, so a kept model serves any number of them with a new schedule.
-    model = kept(("unet", name, config["use_checkpoint"]), build)
-    diffusion = create_gaussian_diffusion(
-        steps=config["diffusion_steps"], learn_sigma=config["learn_sigma"], noise_schedule=config["noise_schedule"],
-        use_kl=config["use_kl"], predict_xstart=config["predict_xstart"], rescale_timesteps=config["rescale_timesteps"],
-        rescale_learned_sigmas=config["rescale_learned_sigmas"], timestep_respacing=config["timestep_respacing"])
-    return model.to(device), diffusion
-
-
-def load_secondary(hooks):
-    def build():
-        model = SecondaryDiffusionImageNet2()
-        model.load_state_dict(torch.load(models.ensure("secondary", hooks.status), map_location="cpu"))
-        return model.eval().requires_grad_(False)
-
-    return kept(("secondary",), build).to(device)
-
-
-def load_clip_models(cfg, status=print):
-    weights = paths.local_settings().get("vit_l14_weights", [])
-    loaded = []
-    for key, name in CLIP_NAMES.items():
-        if cfg.get(key):
-            def build(key=key, name=name):
-                model = memory.load_vit_l14(clip, weights) if key == "ViTL14" else clip.load(name, jit=False)[0]
-                return model.eval().requires_grad_(False)
-
-            loaded.append(kept(("clip", key), build).to(device))
-    robust = cfg.get("robust_critic", "Off")
-    if robust != "Off":
-        loaded.append(kept(("clip", robust), lambda: critic.load_robust(robust, "cpu", status)).to(device))
-    if not loaded:
-        raise ValueError("Choose at least one CLIP model (prompt checker).")
-    return loaded
-
-
-def load_lpips():
-    import lpips  # loaded only when used: it takes VRAM and a few seconds
-    return kept(("lpips",), lambda: lpips.LPIPS(net="vgg", verbose=False).eval().requires_grad_(False)).to(device)
-
-
-def upright(path):
-    """An image as it is meant to be seen. Phone photos store their rotation in a tag."""
-    with Image.open(path) as image:
-        return ImageOps.exif_transpose(image).convert("RGB")
-
-
-def size_start_image(image, width, height, mode):
-    """Fill stretches to the frame. Crop cuts the image to the frame's shape. Fit keeps the whole
-    image over a blurred copy of itself, because the renderer would paint flat bars as flat bars."""
-    size = (width, height)
-    if mode == "fill":
-        return image.resize(size, Image.LANCZOS)
-    cropped = ImageOps.fit(image, size, Image.LANCZOS)
-    if mode != "fit":
-        return cropped
-    canvas = cropped.filter(ImageFilter.GaussianBlur(max(size) / 24))
-    inner = ImageOps.contain(image, size, Image.LANCZOS)
-    canvas.paste(inner, ((width - inner.width) // 2, (height - inner.height) // 2))
-    return canvas
-
-
-IMAGE_TYPES = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
-MAX_PROMPT_IMAGES = 200
-
-
-def prompt_images(folder):
-    """The images in an image prompt folder, at most MAX_PROMPT_IMAGES of them, in name order."""
-    if not folder:
-        return []
-    if not os.path.isdir(folder):
-        raise ValueError("The image prompt folder can't be found. Choose it again under Prompt.")
-    found = sorted(os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(IMAGE_TYPES))
-    if not found:
-        raise ValueError("The image prompt folder has no PNG, JPEG or WebP images.")
-    return found[:MAX_PROMPT_IMAGES]
-
-
-@torch.no_grad()
-def image_prompt_embed(model, files):
-    """What a folder of images has in common, as one CLIP model sees it: the average of every image's
-    embedding, each read whole and mirrored. Like a learned embedding, but nothing is trained."""
-    side = model.visual.input_resolution
-    total = None
-    for path in files:
-        image = ImageOps.fit(upright(path), (side, side), Image.LANCZOS)
-        batch = TF.to_tensor(image).unsqueeze(0)
-        batch = normalize(torch.cat([batch, batch.flip(3)])).to(device)
-        embeds = F.normalize(model.encode_image(batch).float(), dim=-1).sum(0, keepdim=True)
-        total = embeds if total is None else total + embeds
-    return F.normalize(total, dim=-1)
-
-
-def encode_prompts(clip_models, prompts, cfg, image_embeds=None, roles=None):
-    """roles, when prompts are routed by cut scale, says whether each line is subject or style."""
-    stats = []
-    for index, model in enumerate(clip_models):
-        embeds, weights, kinds = [], [], []
-        if image_embeds:
-            embeds.append(image_embeds[index])
-            weights.append(float(cfg["image_prompt_weight"]))
-            kinds.append(critic.BOTH)
-        for number, prompt in enumerate(prompts):
-            text, weight = parse_prompt(prompt)
-            embed = model.encode_text(clip.tokenize(text, truncate=True).to(device)).float()
-            kind = roles[number] if roles else critic.BOTH
-            if cfg["fuzzy_prompt"]:
-                for _ in range(25):
-                    embeds.append((embed + torch.randn(embed.shape, device=device) * cfg["rand_mag"]).clamp(0, 1))
-                    weights.append(weight)
-                    kinds.append(kind)
-            else:
-                embeds.append(embed)
-                weights.append(weight)
-                kinds.append(kind)
-        weights = torch.tensor(weights, device=device)
-        if weights.sum().abs() < 1e-3:
-            raise ValueError("The prompt weights must not add up to 0.")
-        stats.append({"model": model, "embeds": torch.cat(embeds), "weights": weights / weights.sum().abs(),
-                      **({"roles": torch.tensor(kinds)} if roles else {})})
-    return stats
 
 
 def next_run_number(folder, batch_name):
@@ -484,33 +49,6 @@ def next_run_number(folder, batch_name):
     while os.path.exists(os.path.join(folder, f"{batch_name}({number})_settings.txt")):
         number += 1
     return number
-
-
-class OnePassUNet:
-    """Stops ddim running the UNet twice a step.
-
-    The sampler asks for a prediction, then guidance asks for the same prediction with gradients.
-    This does the second kind the first time and hands both callers the same result.
-    """
-
-    def __init__(self, model):
-        self.model, self.leaf, self.output = model, None, None
-
-    def parameters(self):
-        return self.model.parameters()  # the sampler reads the device from these
-
-    def __call__(self, x, t, **kwargs):
-        if x is self.leaf:
-            return self.output
-        self.leaf = self.output = None
-        if x.shape[-1] * x.shape[-2] >= 500_000:
-            # Big renders fragment VRAM a little more every step. At 1280x768, 2.2GB sat reserved but
-            # unusable by step 19, so each step hands the cached memory back and starts clean (about 5ms).
-            torch.cuda.empty_cache()
-        with torch.enable_grad():
-            self.leaf = x.detach().requires_grad_()
-            self.output = self.model(self.leaf, t, **{k: v for k, v in kwargs.items() if v is not None})
-        return self.output
 
 
 # ---- rendering ----
@@ -532,7 +70,7 @@ def render(job_settings, prompts, hooks, offload=False, init_fit="crop", output_
 
 def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     cfg = {**DEFAULTS, **job_settings}
-    _lpips_pixels.clear()
+    forget_lpips_sizes()
     style = models.cut_style(cfg["diffusion_model"])
     if style:
         cfg.update({k: v for k, v in models.CUT_SCHEDULES[style].items() if k not in job_settings})
@@ -690,14 +228,14 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         weights = kept(("partner", source, file, os.path.getmtime(file) if os.path.isfile(file) else 0),
                        lambda: partner.Weights(source, file, hooks.status))
         experiment.partner = partner.Partner(weights, text, side_y, side_x, cfg["partner_follow"], device)
-        _after_render.append(experiment.partner.release)
+        after_render(experiment.partner.release)
         scales = critic.GRIDS.get(cfg["borrow_grids"], critic.GRIDS["All"])
         experiment.partner.lengths = {(side_y // s) * (side_x // s) for s in scales}
         partner.install(experiment.partner)
-        _after_render.append(partner.uninstall)
+        after_render(partner.uninstall)
     if cfg["prompt_graft"]:
         experiment.graft = graft.Graft(schedule(cfg["graft_curve"]), device)
-        _after_render.append(experiment.graft.install(model))
+        after_render(experiment.graft.install(model))
         experiment.partner.watch(graft.sd_blocks(experiment.partner.unet))
     if cfg["ghost_image"] or cfg["style_image"] or drawing or frame_ghost:
         def sized(path):

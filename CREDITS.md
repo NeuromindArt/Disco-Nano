@@ -5,7 +5,8 @@ affiliated with or endorsed by any of them.
 
 ## Disco Diffusion
 
-`app/disco.py` and the model list in `app/models.py` are derived from
+`app/disco.py`, with its parts in `app/guidance.py`, `app/secondary.py`, `app/loaders.py` and `app/prompts.py`, and the
+model list in `app/models.py` are derived from
 [Disco Diffusion](https://github.com/alembics/disco-diffusion), which is MIT licensed. Its license is
 in [LICENSES/disco-diffusion.txt](LICENSES/disco-diffusion.txt). These credits follow its notebook.
 

@@ -436,7 +436,7 @@ class Handoff(HandoffModel):
 
 def words(lines, negative):
     """The checkpoint's prompt from Disco's prompt lines. A line with a negative weight steers away."""
-    from disco import parse_prompt
+    from prompts import parse_prompt
     parsed = [parse_prompt(line) for line in lines]
     away = [text for text, weight in parsed if weight < 0]
     return ", ".join(text for text, weight in parsed if weight > 0), ", ".join([negative] * bool(negative) + away)
