@@ -29,13 +29,15 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 
 print("Checking folders", flush=True)
+import atomic
 import budget
-import inpaint
 import finder
 import flowfiles
+import inpaint
 import keyframes
 import models
 import paths
+import procs
 import rules
 from renderer import signature as renderer_signature
 from settings import DEFAULTS, FIELDS, TERMS, handoff_parts, uses_partner
@@ -117,60 +119,36 @@ class Worker:
         self.ending = False  # closing, or about to exit after a failed render: it takes no more jobs
         self.pid = None  # the Python process itself, which a venv's launcher starts as a child of proc
         self.jobs = 0  # renders handed to it, so a stop knows whether models from an earlier one wait in it
-        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT,
-                   NANO_EXACT="1" if sig["exact_repeat"] else "0", NANO_LARGE="1" if sig["large"] else "0")
-        # Below normal priority: a render still gets every idle cycle, but Windows serves the desktop first,
-        # so the PC stays usable while it runs.
-        self.proc = subprocess.Popen([PYTHON, "-B", os.path.join(APP_DIR, "renderer.py"), "--serve"],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                     encoding="utf-8", errors="replace", cwd=ROOT, env=env,
-                                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
-        threading.Thread(target=self.read, daemon=True).start()
+        self.child = procs.Child("renderer.py", "--serve", stdin=True, on_line=self.read, on_exit=self.exited,
+                                 env={"NANO_EXACT": "1" if sig["exact_repeat"] else "0", "NANO_LARGE": "1" if sig["large"] else "0"})
+        self.proc = self.child.proc
 
     def alive(self):
-        return self.proc.poll() is None and not self.ending
+        return self.child.alive() and not self.ending
 
     def run(self, task):
         # the log first: the reader writes to it as soon as it sees a task
         self.log = open(os.path.join(task.job_dir, "run.log"), "a", encoding="utf-8", errors="replace")
         self.task = task
         self.jobs += 1
-        self.proc.stdin.write(task.job_dir + "\n")
-        self.proc.stdin.flush()
+        self.child.write(task.job_dir)
 
-    def read(self):
-        for raw in self.proc.stdout:
-            line = raw.rstrip("\r\n")
-            if line.startswith("@@EVT ") and '"ready"' in line:
-                try:
-                    self.pid = int(json.loads(line[6:]).get("pid") or 0) or None
-                except (ValueError, AttributeError):
-                    pass
-            task, log = self.task, self.log
-            if task is None:
-                continue  # between renders, such as its ready line
-            log.write(line + "\n")
-            log.flush()
-            marker = line.find("@@EVT ")
-            if marker < 0:
-                if line.strip():
-                    task.log.append(line[-300:])
-                continue
-            try:
-                event = json.loads(line[marker + 6:])
-                handle_event(task, event)
-            except ValueError:
-                continue
-            if event.get("type") == "finished":
-                self.done(task)
-        code = self.proc.wait()
+    def read(self, line, event):
+        if event and event.get("type") == "ready":
+            self.pid = event.get("pid") if isinstance(event.get("pid"), int) else None
+        task, log = self.task, self.log
+        if task is None:
+            return  # between renders, such as its ready line
+        log.write(line + "\n")
+        log.flush()
+        follow(task, line, event)
+        if event and event.get("type") == "finished":
+            self.done(task)
+
+    def exited(self, code):
         task = self.task
         if task is not None and not task.ended:
-            with lock:
-                if task.state not in ("done", "stopped", "oom", "error"):
-                    task.state = "error"  # the worker died without reporting why
-                    task.message = FRIENDLY["error"]
-                    task.error = f"Worker exited unexpectedly (code {code})."
+            ended_unexpectedly(task, code)
             self.done(task)
 
     def done(self, task):
@@ -188,14 +166,10 @@ class Worker:
             self.close()
 
     def close(self):
-        """Ends the worker. Closing stdin lets it finish cleanly; one still busy loading is ended outright."""
+        """Ends the worker. Closing stdin lets it finish cleanly; one still busy loading is ended outright, and one
+        paused ends at once, as it sees its stdin close."""
         self.ending = True
-        try:
-            self.proc.stdin.close()
-        except OSError:
-            pass
-        if self.task is not None:
-            self.proc.terminate()
+        self.child.close(grace=0 if self.task is not None else 10)
 
 
 _worker = None
@@ -207,8 +181,7 @@ def render_in_worker(label, job_id, job_dir, sig, keep_models):
     if _worker is not None and (not _worker.alive() or _worker.sig != sig):
         _worker.close()
         _worker = None
-    close_tries()  # the start image's Inpaint model leaves the GPU and RAM to the render
-    take_idle_reading()
+    starting_job()
     if _worker is None:
         _worker = Worker(sig)
     current = Task("render", job_id, job_dir, _worker.proc, label, worker=_worker)
@@ -245,35 +218,26 @@ def run_downloads():
             downloads["errors"][name] = "The download failed. Check your connection and try again."
 
 
-def pump(task):
-    """Follows a worker's stdout, turning @@EVT lines into task state."""
-    log_path = os.path.join(task.job_dir, "run.log")
-    with open(log_path, "a", encoding="utf-8", errors="replace") as log:
-        for raw in task.proc.stdout:
-            line = raw.rstrip("\r\n")
-            log.write(line + "\n")
-            log.flush()
-            marker = line.find("@@EVT ")
-            if marker < 0:
-                if line.strip():
-                    task.log.append(line[-300:])
-                continue
-            try:
-                handle_event(task, json.loads(line[marker + 6:]))
-            except ValueError:
-                continue
-    code = task.proc.wait()
+def follow(task, line, event):
+    """A line of a job's output: an event changes the task, and the rest is kept for the log the page shows when it
+    fails."""
+    if event is not None:
+        handle_event(task, event)
+    elif line.strip():
+        task.log.append(line[-300:])
+
+
+def ended_unexpectedly(task, code):
+    """A job's process ended. One that never said how it ended failed, and says so."""
     with lock:
         if task.state not in ("done", "stopped", "oom", "error"):
-            task.state = "error"  # the worker died without reporting why
+            task.state = "error"
             task.message = FRIENDLY["error"]
             task.error = f"Worker exited unexpectedly (code {code})."
-        task.finished_at = time.time()
-        _gpu_seen["at"] = 0.0  # the last reading still counts the worker's memory
 
 
 def handle_event(task, e):
-    kind = e["type"]
+    kind = e.get("type")
     with lock:
         if kind == "status":
             if task.holding:  # an inpaint try painting during a pause: the render is still paused
@@ -532,26 +496,35 @@ def image_url(path):
 
 def safe_output_path(rel):
     path = os.path.realpath(os.path.join(OUT_DIR, rel))
-    root = os.path.realpath(OUT_DIR)
-    if os.path.splitdrive(path)[0].lower() != os.path.splitdrive(root)[0].lower() or os.path.commonpath([path, root]) != root:
+    if not inside(path, OUT_DIR):
         raise HTTPException(400, "That file is outside the output folder.")
     if not os.path.isfile(path):
         raise HTTPException(404, "File not found.")
     return path
 
 
-def spawn(kind, label, cmd, job_id, job_dir):
+def spawn(kind, label, script, args, job_id, job_dir):
+    """Starts a job in a process of its own, such as an upscale, as the one running task."""
     global current
-    close_tries()  # the start image's Inpaint model leaves the GPU and RAM to the job
+    starting_job()
+    task = Task(kind, job_id, job_dir, None, label)
+
+    def ended(code):
+        ended_unexpectedly(task, code)
+        with lock:
+            task.finished_at = time.time()
+            _gpu_seen["at"] = 0.0  # the last reading still counts the job's memory
+
+    task.proc = procs.Child(script, *args, log_path=os.path.join(job_dir, "run.log"), on_line=lambda line, event: follow(task, line, event),
+                            on_exit=ended).proc
+    current = task
+
+
+def starting_job():
+    """Before a render or upscale starts: the start image's Inpaint model leaves the GPU and RAM to it, and what the
+    PC uses without it is read, so what the job adds is measured from there."""
+    close_tries()
     take_idle_reading()
-    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT)
-    # Below normal priority: a render still gets every idle cycle, but Windows serves the desktop first,
-    # so the PC stays usable while it runs.
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                            errors="replace", cwd=ROOT, env=env,
-                            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
-    current = Task(kind, job_id, job_dir, proc, label)
-    threading.Thread(target=pump, args=(current,), daemon=True).start()
 
 
 def new_job_dir(prefix):
@@ -668,16 +641,15 @@ async def only_this_app(request: Request, call_next):
 
 
 @app.post("/api/connect")
-async def connect(request: Request):
+async def connect(body: dict, request: Request):
     """A browser on another PC gives the code once, and keeps it in a cookie."""
-    body = await request.json()
     who = request.client.host if request.client else "?"
     if _wrong.get(who, 0) >= 20:
         raise HTTPException(429, "Too many wrong codes. Restart Nano on the PC that renders to try again.")
     code = re.sub(r"[^A-Z0-9]", "", str(body.get("code", "")).upper())
     if code != share_code():
         _wrong[who] = _wrong.get(who, 0) + 1
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)  # slows guessing without holding up the server
         raise HTTPException(403, "That code doesn't match. It's in Settings, under Share this PC, on the PC that renders.")
     _wrong.pop(who, None)
     response = JSONResponse({"ok": True})
@@ -691,10 +663,9 @@ def network():
 
 
 @app.post("/api/network")
-async def set_network(request: Request):
+def set_network(body: dict, request: Request):
     """Turns sharing on or off, or makes a new code, which signs out every other PC."""
     local_only(request)
-    body = await request.json()
     if body.get("new_code"):
         LOCAL.pop("share_code", None)
         paths.save_local_settings({"share_code": None})
@@ -703,7 +674,7 @@ async def set_network(request: Request):
         on = bool(body["on"])
         LOCAL["share_on_network"] = on
         paths.save_local_settings({"share_on_network": on})
-        await asyncio.to_thread(start_sharing if on else stop_sharing)
+        (start_sharing if on else stop_sharing)()
     return network_json()
 
 
@@ -777,10 +748,19 @@ def status(request: Request):
             "version": paths.VERSION, "system_free_gb": round(system_free / 2**30, 1), "task": task, "downloads": fetching, "image_tries": tried}
 
 
+def settings_from(body):
+    """The settings a page sent, with only the ones Nano knows."""
+    settings = body.get("settings", {})
+    if not isinstance(settings, dict):
+        raise HTTPException(400, "The settings aren't readable.")
+    return {k: v for k, v in settings.items() if k in KNOWN_FIELDS}
+
+
 @app.post("/api/plan")
-def render_plan(body: dict):
+def render_plan(body: dict, request: Request):
     """The memory plan for these settings, and the settings the others rule out, for the page to show."""
-    settings = {k: v for k, v in body.get("settings", {}).items() if k in KNOWN_FIELDS}
+    no_network_paths(request, body)
+    settings = settings_from(body)
     with lock:
         result = memory_plan(settings)
         idle = not (current and current.running())
@@ -790,15 +770,17 @@ def render_plan(body: dict):
 
 
 @app.post("/api/render")
-async def render(request: Request):
-    body = await request.json()
-    prompts = [p.strip() for p in body.get("prompts", []) if isinstance(p, str) and p.strip()]
+def render(body: dict, request: Request):
+    no_network_paths(request, body)
+    prompts = body.get("prompts")
+    prompts = [p.strip() for p in prompts if isinstance(p, str) and p.strip()] if isinstance(prompts, list) else []
     if not prompts:
         raise HTTPException(400, "Add a prompt first.")
     with lock:
-        if current and current.running():
-            raise HTTPException(409, "Something is already running.")
-        settings = {k: v for k, v in body.get("settings", {}).items() if k in KNOWN_FIELDS}
+        busy = why_busy()
+        if busy:
+            raise HTTPException(409, busy)
+        settings = settings_from(body)
         settings["regions"] = clean_regions(settings.get("regions"))
         if not settings["regions"]:
             del settings["regions"]
@@ -818,19 +800,8 @@ async def render(request: Request):
                 raise HTTPException(400, str(e)) from None
             if animation == "Video Input" and not os.path.isfile(str(settings.get("video_init_path", ""))):
                 raise HTTPException(400, "Choose a video file for Video Input.")
-        handoff_file = str(settings.get("handoff_file") or "")
         if any(handoff_parts(settings)):
-            if not handoff_file.lower().endswith(MODEL_FILES) or not os.path.isfile(handoff_file):
-                raise HTTPException(400, "The handoff model must be a .safetensors or .gguf file that exists. Choose it again in Handoff.")
-            kind = budget.checkpoint_kind(handoff_file)
-            if not kind:
-                raise HTTPException(400, HANDOFF_KINDS)
-            if (budget.describe_checkpoint(handoff_file) or {}).get("inpaint_only"):
-                raise HTTPException(400, "That model is made for inpainting. Use it as the Inpaint model in Settings, and choose another for Handoff.")
-            missing = flowfiles.missing_parts(handoff_file, kind) if kind in flowfiles.KINDS else []
-            if missing:
-                raise HTTPException(400, f"{flowfiles.KINDS[kind]} also needs its {' and '.join(missing)}. Nano looks for "
-                                         "them in the models folder the model is in, subfolders included, as ComfyUI keeps them.")
+            checked_model(settings.get("handoff_file"), "handoff")
         for name in needed:
             if name in models.FILES and not os.path.exists(models.path_of(name)):
                 raise HTTPException(400, f"{name} isn't downloaded yet. Get it from Models in Settings.")
@@ -849,8 +820,7 @@ async def render(request: Request):
         options = {"offload": bool(offload),
                    "init_fit": requested.get("init_fit") if requested.get("init_fit") in ("fit", "fill") else "crop",
                    "output_dir": OUT_DIR}
-        with open(os.path.join(job_dir, "job.json"), "w", encoding="utf-8") as f:
-            json.dump({"settings": settings, "prompts": prompts, "options": options}, f, indent=1)
+        atomic.write_json(os.path.join(job_dir, "job.json"), {"settings": settings, "prompts": prompts, "options": options}, indent=1)
         render_in_worker(prompts[0][:90], job_id, job_dir, renderer_signature(settings),
                          bool(settings.get("keep_models_loaded", DEFAULTS["keep_models_loaded"])))
     return {"id": job_id}
@@ -881,7 +851,10 @@ def clean_regions(value):
     if not isinstance(value, dict):
         return None
     boxes = []
-    for box in value.get("boxes", [])[:12]:
+    listed = value.get("boxes")
+    for box in listed[:12] if isinstance(listed, list) else []:
+        if not isinstance(box, dict):
+            continue
         try:
             x, y, w, h = (min(max(float(box[k]), 0.0), 1.0) for k in ("x", "y", "w", "h"))
         except (KeyError, TypeError, ValueError):
@@ -920,10 +893,7 @@ def resume(body: dict):
             return {"ok": False}
         regions = clean_regions(body.get("regions"))
         if "regions" in body:  # without them, it carries on with the regions it had
-            temp = os.path.join(current.job_dir, "regions.tmp")
-            with open(temp, "w", encoding="utf-8") as f:
-                json.dump(regions, f)
-            os.replace(temp, os.path.join(current.job_dir, "regions.json"))  # whole before the worker reads it
+            atomic.write_json(os.path.join(current.job_dir, "regions.json"), regions)
         try:
             os.remove(os.path.join(current.job_dir, "pause"))
         except FileNotFoundError:
@@ -944,43 +914,59 @@ def job_settings(task):
 
 
 @app.post("/api/erase-image")
-def erase_image(body: dict):
+def erase_image(body: dict, request: Request):
     """Fixes a start image before a render: erases what the mask marks, so the render never has it to bring back,
     and clones the layers over it. The result is a new image beside the start images, so the original is kept. LaMa
     runs in a process of its own: on the GPU when nothing is rendering, and on the CPU while a render is, so the two
     don't compete for VRAM."""
+    global _fixing
+    no_network_paths(request, body)
     path = start_image(body)
     mask, clones, inpainting = fix_from(body)
     out = fixed_path(path)
     with tempfile.TemporaryDirectory() as temp:
-        cmd = [PYTHON, "-B", os.path.join(APP_DIR, "erase.py"), "--image", path, "--out", out]
+        args = ["--image", path, "--out", out]
         if mask is not None:
             mask.save(os.path.join(temp, "mask.png"))
-            cmd += ["--mask", os.path.join(temp, "mask.png")]
+            args += ["--mask", os.path.join(temp, "mask.png")]
         if clones:
-            with open(os.path.join(temp, "clones.json"), "w", encoding="utf-8") as f:
-                json.dump(save_clones(clones, temp, "clone"), f)
-            cmd += ["--clones", os.path.join(temp, "clones.json")]
-        with lock:
-            busy = bool(current and current.running())
+            atomic.write_json(os.path.join(temp, "clones.json"), save_clones(clones, temp, "clone"))
+            args += ["--clones", os.path.join(temp, "clones.json")]
         if inpainting:
-            if busy:  # the model and a render won't share the GPU, and on the CPU it would take many minutes
-                raise HTTPException(409, "Inpaint the start image when no render is running.")
             inpainting["mask"].save(os.path.join(temp, "inpaint.png"))
-            with open(os.path.join(temp, "inpaint.json"), "w", encoding="utf-8") as f:
-                json.dump({**inpainting, "mask": os.path.join(temp, "inpaint.png")}, f)
-            cmd += ["--inpaint", os.path.join(temp, "inpaint.json")]
-        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT)
+            atomic.write_json(os.path.join(temp, "inpaint.json"), {**inpainting, "mask": os.path.join(temp, "inpaint.png")})
+            args += ["--inpaint", os.path.join(temp, "inpaint.json")]
+        with lock:
+            on_gpu = not (current and current.running())
+            if inpainting and not on_gpu:  # the model and a render won't share the GPU, and on the CPU it would take many minutes
+                raise HTTPException(409, "Inpaint the start image when no render is running.")
+            if on_gpu:
+                _fixing += 1  # a render or upscale waits for it
         try:
-            run = subprocess.run(cmd + (["--device", "cpu"] if busy else []), capture_output=True, text=True, encoding="utf-8",
-                                 errors="replace", cwd=ROOT, env=env, timeout=900,
-                                 creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+            run = procs.run_once("erase.py", *args, *([] if on_gpu else ["--device", "cpu"]), timeout=900)
         except subprocess.TimeoutExpired:
-            raise HTTPException(500, "Fixing took too long and was stopped.")
+            raise HTTPException(500, "Fixing took too long and was stopped.") from None
+        finally:
+            if on_gpu:
+                with lock:
+                    _fixing -= 1
+                    _gpu_seen["at"] = 0.0  # the last reading still counts its memory
     if run.returncode or not os.path.isfile(out):
-        lines = [l for l in (run.stderr or run.stdout or "").splitlines() if l.strip()]
-        raise HTTPException(500, "Fixing failed" + (f": {lines[-1][-300:]}" if lines else "."))
+        reason = procs.last_line(run)
+        raise HTTPException(500, "Fixing failed" + (f": {reason}" if reason else "."))
     return start_image_json(out)
+
+
+_fixing = 0  # fixes of the start image on the GPU now, which a render or upscale waits for
+
+
+def why_busy():
+    """Why a render or upscale can't start now, or None. Called holding the lock."""
+    if current and current.running():
+        return "Something is already running."
+    if _fixing:
+        return "The start image is being fixed. Start once it's done."
+    return None
 
 
 def start_image(body):
@@ -1012,38 +998,26 @@ class Tries:
 
     def __init__(self):
         self.job_id, self.folder = new_job_dir("tries")
-        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT)
-        self.proc = subprocess.Popen([PYTHON, "-B", os.path.join(APP_DIR, "erase.py"), "--serve", self.folder],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                     encoding="utf-8", errors="replace", cwd=ROOT, env=env,
-                                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
         self.id, self.made, self.asked, self.error, self.message, self.last = 0, [], 0, None, "", None
-        threading.Thread(target=self.read, daemon=True).start()
+        self.child = procs.Child("erase.py", "--serve", self.folder, stdin=True, log_path=os.path.join(self.folder, "run.log"),
+                                 on_line=self.read, on_exit=self.exited)
 
     def alive(self):
-        return self.proc.poll() is None
+        return self.child.alive()
 
-    def read(self):
-        with open(os.path.join(self.folder, "run.log"), "a", encoding="utf-8", errors="replace") as log:
-            for raw in self.proc.stdout:
-                line = raw.rstrip("\r\n")
-                log.write(line + "\n")
-                log.flush()
-                if not line.startswith("@@EVT "):
-                    continue
-                try:
-                    e = json.loads(line[6:])
-                except ValueError:
-                    continue
-                with lock:
-                    if e.get("type") == "status":
-                        self.message = str(e.get("message") or "")
-                    elif e.get("type") == "tried" and e.get("id") == self.id:
-                        if e.get("error"):
-                            self.error, self.asked = e["error"], len(self.made)
-                        else:
-                            self.made.append(e["k"])
-        code = self.proc.wait()
+    def read(self, line, e):
+        if e is None:
+            return
+        with lock:
+            if e.get("type") == "status":
+                self.message = str(e.get("message") or "")
+            elif e.get("type") == "tried" and e.get("id") == self.id:
+                if e.get("error"):
+                    self.error, self.asked = e["error"], len(self.made)
+                else:
+                    self.made.append(e["k"])
+
+    def exited(self, code):
         with lock:
             if self.asked > len(self.made):  # it ended in the middle of a try
                 self.error, self.asked = f"Inpainting stopped unexpectedly (code {code}).", len(self.made)
@@ -1063,10 +1037,7 @@ class Tries:
                          "inpaint": {**{k: v for k, v in inpainting.items() if k != "chosen"}, "mask": stem + "-inpaint.png"}}
         self.asked += count
         self.error = None
-        temp = os.path.join(self.folder, "ask.tmp")
-        with open(temp, "w", encoding="utf-8") as f:
-            json.dump({**self.last, "upto": self.asked}, f)
-        os.replace(temp, os.path.join(self.folder, "ask.json"))  # whole before the process reads it
+        atomic.write_json(os.path.join(self.folder, "ask.json"), {**self.last, "upto": self.asked})
         return self.id
 
     def json(self):
@@ -1074,14 +1045,8 @@ class Tries:
                 "painting": self.asked > len(self.made), "error": self.error, "message": self.message}
 
     def close(self):
-        """Ends the process, which lets the model go. Closing its stdin ends it between a try's steps; one still
-        loading the model can't see that, and is ended outright. The venv's launcher takes the Python it started
-        with it."""
-        try:
-            self.proc.stdin.close()
-        except OSError:
-            pass
-        threading.Timer(10, lambda: self.proc.poll() is None and self.proc.terminate()).start()
+        """Ends the process, which lets the model go: between a try's steps, or outright when it's still loading."""
+        self.child.close()
 
 
 _tries = None
@@ -1095,10 +1060,11 @@ def close_tries():
 
 
 @app.post("/api/image-tries")
-def image_tries(body: dict):
+def image_tries(body: dict, request: Request):
     """Paints `count` tries, 1 to 4, of a fix of the start image with an inpaint, for the page to choose from: each is
     the whole fix, erase and clones too. `more` adds them to the tries already painted for the same ask; otherwise they
     start over. Each shows in the status's image_tries as it's ready."""
+    no_network_paths(request, body)
     global _tries
     path = start_image(body)
     mask, clones, inpainting = fix_from(body)
@@ -1165,16 +1131,7 @@ def inpaint_from(asked):
     path = str(asked.get("file") or "")
     if not path:
         raise HTTPException(400, "Choose an Inpaint model in Settings first.")
-    if not os.path.isfile(path):
-        raise HTTPException(400, f"The Inpaint model isn't there any more: {path}")
-    about = budget.describe_checkpoint(path)
-    if not about:
-        raise HTTPException(400, "The Inpaint model isn't one Inpaint can use: an SD 1.5, SDXL, Z-Image, Flux.1 or Flux.2 Klein model.")
-    if about["kind"] not in ("sd15", "sdxl"):
-        import flowfiles
-        missing = flowfiles.missing_parts(path, about["kind"])
-        if missing:
-            raise HTTPException(400, f"The Inpaint model needs its {' and '.join(missing)}, which weren't found in the models folder around it.")
+    checked_model(path, "inpaint")
     mode, strength, steps, guidance = asked.get("mode"), asked.get("strength"), asked.get("steps"), asked.get("guidance")
     if mode not in INPAINT_MODES:
         raise HTTPException(400, "Inpaint starts from remove, fresh or rework.")
@@ -1230,11 +1187,12 @@ def save_clones(layers, folder, stem):
 
 
 @app.post("/api/erase")
-def erase_mask(body: dict):
+def erase_mask(body: dict, request: Request):
     """What was painted over a paused render: an erase mask, white where to erase, and clone layers, as fix_from()
     reads them. The render fixes them as it carries on, after the step it paused at. Send it before /api/resume.
     `fresh`, 0 to 1, is the share of fresh noise the areas get; without it, the renderer picks one by how far through
     the render it is."""
+    no_network_paths(request, body)
     mask, clones, inpainting = fix_from(body)
     fresh = body.get("fresh")
     if fresh is not None:
@@ -1256,18 +1214,16 @@ def erase_mask(body: dict):
         if inpainting:
             inpainting["mask"].save(os.path.join(current.job_dir, f"inpaint-{n}.png"))
             inpainting["mask"] = os.path.join(current.job_dir, f"inpaint-{n}.png")
-        temp = os.path.join(current.job_dir, "erase.tmp")
-        with open(temp, "w", encoding="utf-8") as f:
-            json.dump({"mask": path, "clones": clones, "inpaint": inpainting, "n": n, "fresh": fresh}, f)
-        os.replace(temp, os.path.join(current.job_dir, "erase.json"))  # whole before the worker reads it
+        atomic.write_json(os.path.join(current.job_dir, "erase.json"), {"mask": path, "clones": clones, "inpaint": inpainting, "n": n, "fresh": fresh})
     return {"ok": True}
 
 
 @app.post("/api/inpaint-tries")
-def inpaint_tries(body: dict):
+def inpaint_tries(body: dict, request: Request):
     """Paints `count` inpaint tries, 1 to 4, while a render is paused for Fix, for the page to choose from. `more`
     adds them to the tries already painted for the same ask; otherwise they start over. Each shows in the status's
     tries as it's ready, and Apply sends the chosen one with the fix."""
+    no_network_paths(request, body)
     inpainting = inpaint_from(body.get("inpaint"))
     count = body.get("count")
     if inpainting is None or isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 4:
@@ -1282,20 +1238,22 @@ def inpaint_tries(body: dict):
         tries["asked"], tries["error"] = len(tries["made"]) + count, None
         inpainting["mask"].save(os.path.join(current.job_dir, f"tries-{tries['id']}.png"))
         ask = {"id": tries["id"], "count": count, "inpaint": {**inpainting, "mask": os.path.join(current.job_dir, f"tries-{tries['id']}.png")}}
-        temp = os.path.join(current.job_dir, "tries.tmp")
-        with open(temp, "w", encoding="utf-8") as f:
-            json.dump(ask, f)
-        os.replace(temp, os.path.join(current.job_dir, "tries.json"))  # whole before the worker reads it
+        atomic.write_json(os.path.join(current.job_dir, "tries.json"), ask)
         return {"id": tries["id"]}
+
+
+def job_folder(job_id):
+    """A job's folder, from an id the page sent."""
+    if not re.fullmatch(r"[0-9A-Za-z-]+", job_id):
+        raise HTTPException(400, "Bad job id.")
+    return os.path.join(JOBS_DIR, job_id)
 
 
 @app.get("/api/try/{job_id}/{ask}/{k}")
 def inpaint_try(job_id: str, ask: int, k: int):
     """One inpaint try's picture, the size of the render or the start image."""
-    if not re.fullmatch(r"[0-9A-Za-z-]+", job_id):
-        raise HTTPException(400, "Bad job id.")
     for ext in ("jpg", "png"):  # a render's tries, or the start image's, which become start images
-        path = os.path.join(JOBS_DIR, job_id, f"try-{ask}-{k}.{ext}")
+        path = os.path.join(job_folder(job_id), f"try-{ask}-{k}.{ext}")
         if os.path.isfile(path):
             return FileResponse(path, headers={"Cache-Control": "no-store"})
     raise HTTPException(404, "No such try.")
@@ -1303,9 +1261,7 @@ def inpaint_try(job_id: str, ask: int, k: int):
 
 @app.get("/api/preview/{job_id}")
 def preview(job_id: str):
-    if not re.fullmatch(r"[0-9A-Za-z-]+", job_id):
-        raise HTTPException(400, "Bad job id.")
-    path = os.path.join(JOBS_DIR, job_id, "preview.jpg")
+    path = os.path.join(job_folder(job_id), "preview.jpg")
     # Read whole, in one go: the renderer replaces this file at every step, and a file sent in pieces could change
     # partway, which breaks the picture and blanks the page's preview for a moment.
     try:
@@ -1464,11 +1420,10 @@ def writable_folder(path):
 
 
 @app.post("/api/folders")
-async def set_folders(request: Request):
+def set_folders(body: dict, request: Request):
     """Model folders can be set from a browser on another PC too, since they only say where to read. Where
     images are saved is set on the PC that renders."""
     global OUT_DIR, UPSCALE_DIRS, CHECKPOINT_DIRS, current
-    body = await request.json()
     with lock:
         if current and current.running():
             raise HTTPException(409, "Wait for the current job to finish.")
@@ -1479,11 +1434,11 @@ async def set_folders(request: Request):
             raise HTTPException(403, "Choose where images are saved on the PC that renders.")
         output_dir = writable_folder(wanted)
         dirs = [d.strip() for d in body.get("upscale_dirs", UPSCALE_DIRS) if isinstance(d, str) and d.strip()]
+        checkpoint_dirs = [d.strip() for d in body.get("checkpoint_dirs", CHECKPOINT_DIRS) if isinstance(d, str) and d.strip()]
+        no_network_paths(request, [d for d in dirs + checkpoint_dirs if d not in UPSCALE_DIRS + CHECKPOINT_DIRS])
         for d in dirs:
             if d not in UPSCALE_DIRS and not os.path.isdir(d):  # a known drive may just be unplugged
                 raise HTTPException(400, f"Folder not found: {d}")
-        checkpoint_dirs = [d.strip() for d in body.get("checkpoint_dirs", CHECKPOINT_DIRS) if isinstance(d, str) and d.strip()]
-        no_network_paths(request, *[d for d in dirs + checkpoint_dirs if d not in UPSCALE_DIRS + CHECKPOINT_DIRS])
         for d in checkpoint_dirs:
             if d not in CHECKPOINT_DIRS and not os.path.isdir(d):
                 raise HTTPException(400, f"Folder not found: {d}")
@@ -1553,10 +1508,24 @@ def local_only(request: Request):
 
 
 def no_network_paths(request: Request, *chosen):
-    """A browser on another PC can choose folders on this one, but not network paths, a shared folder on another
-    PC: opening one makes Windows connect to that PC and offer this PC's login."""
-    if not is_local(request) and any(str(p).strip().replace("/", "\\").startswith("\\\\") for p in chosen):
-        raise HTTPException(403, "Choose network folders on the PC that renders.")
+    """A browser on another PC can choose files and folders on this one, but not network paths, a shared folder on
+    another PC: opening one makes Windows connect to that PC and offer this PC's login. `chosen` can be whole request
+    bodies: every string in them is checked, so a path in a setting is never missed. Call it before anything opens
+    one, even to see that it's there."""
+    if not is_local(request) and any(s.strip().replace("/", "\\").startswith("\\\\") for s in strings_in(chosen)):
+        raise HTTPException(403, "Choose network files and folders on the PC that renders.")
+
+
+def strings_in(value):
+    """Every string in a JSON value, however deep."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from strings_in(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from strings_in(v)
 
 
 @app.post("/api/pick-folder")
@@ -1588,21 +1557,50 @@ def pick_checkpoint(body: dict, request: Request):
     local_only(request)
     picked = pick_file(body.get("start", ""), "Choose an SD 1.5, SDXL, Z-Image, Flux or Flux.2 Klein model", "Models|*.safetensors;*.gguf")
     if picked["path"]:
-        if not budget.checkpoint_kind(picked["path"]):
-            raise HTTPException(400, HANDOFF_KINDS)
+        checked_model(picked["path"], "checkpoint")
         add_checkpoint_dir(os.path.dirname(picked["path"]))
     return picked
 
 
 MODEL_FILES = (".safetensors", ".gguf")
-HANDOFF_KINDS = "Handoff takes SD 1.5, SDXL, Z-Image, Flux.1 and Flux.2 Klein models, and this is another kind of model."
+MODEL_KINDS = "an SD 1.5, SDXL, Z-Image, Flux.1 or Flux.2 Klein model"
+MODEL_MISSING = {  # what's wrong with a model chosen for each use that isn't a model file there
+    "handoff": "The handoff model must be a .safetensors or .gguf file that exists. Choose it again in Handoff.",
+    "inpaint": "The Inpaint model isn't there any more: {path}",
+    "checkpoint": "Choose a .safetensors or .gguf model.",
+}
+
+
+def checked_model(path, use):
+    """A model file the page chose, checked before anything loads it: for "handoff", for "inpaint", or as a
+    "checkpoint" for either, as Browse adds one. Returns what budget.describe_checkpoint() makes of it, and raises
+    an HTTPException that says what's wrong otherwise."""
+    path = str(path or "")
+    if not path.lower().endswith(MODEL_FILES) or not os.path.isfile(path):
+        raise HTTPException(400, MODEL_MISSING[use].format(path=path))
+    about = budget.describe_checkpoint(path)
+    if not about:
+        what = {"handoff": "Handoff", "inpaint": "Inpaint"}.get(use, "Nano")
+        raise HTTPException(400, f"{what} takes {MODEL_KINDS}, and this is another kind of model.")
+    if use == "handoff" and about.get("inpaint_only"):
+        raise HTTPException(400, "That model is made for inpainting. Use it as the Inpaint model in Settings, and choose another for Handoff.")
+    missing = flowfiles.missing_parts(path, about["kind"]) if use != "checkpoint" and about["kind"] in flowfiles.KINDS else []
+    if missing:
+        raise HTTPException(400, f"{flowfiles.KINDS[about['kind']]} also needs its {' and '.join(missing)}. Nano looks for "
+                                 "them in the models folder the model is in, subfolders included, as ComfyUI keeps them.")
+    return about
 
 
 def add_checkpoint_dir(folder):
+    """Adds a folder to the checkpoint folders. Under the lock, as Settings' own change of the folders is, so one
+    never undoes the other."""
     global CHECKPOINT_DIRS
-    if folder and os.path.isdir(folder) and folder not in CHECKPOINT_DIRS:
-        CHECKPOINT_DIRS = CHECKPOINT_DIRS + [folder]
-        paths.save_local_settings({"checkpoint_dirs": CHECKPOINT_DIRS})
+    if not folder or not os.path.isdir(folder):
+        return
+    with lock:
+        if folder not in CHECKPOINT_DIRS:
+            CHECKPOINT_DIRS = CHECKPOINT_DIRS + [folder]
+            paths.save_local_settings({"checkpoint_dirs": CHECKPOINT_DIRS})
 
 
 HIDDEN_FOLDERS = {"$recycle.bin", "system volume information", "recovery", "config.msi"}
@@ -1645,10 +1643,7 @@ def add_checkpoint(body: dict, request: Request):
     """A checkpoint chosen in the page's own browser. Its folder joins the checkpoint folders, as with Browse."""
     no_network_paths(request, body.get("path", ""))
     path = os.path.abspath(str(body.get("path", "")))
-    if not path.lower().endswith(MODEL_FILES) or not os.path.isfile(path):
-        raise HTTPException(400, "Choose a .safetensors or .gguf model.")
-    if not budget.checkpoint_kind(path):
-        raise HTTPException(400, HANDOFF_KINDS)
+    checked_model(path, "checkpoint")
     add_checkpoint_dir(os.path.dirname(path))
     return {"path": path}
 
@@ -1758,20 +1753,19 @@ def upscalers():
 
 
 @app.post("/api/upscale")
-async def upscale(request: Request):
-    body = await request.json()
+def upscale(body: dict):
     path = safe_output_path(str(body.get("rel", "")))
     model = next((os.path.join(d, str(body.get("model", ""))) for d in UPSCALE_DIRS + [BUILT_IN_UPSCALERS]
                   if os.path.isfile(os.path.join(d, os.path.basename(str(body.get("model", "")))))), None)
     if model is None or os.path.basename(model) != str(body.get("model")):
         raise HTTPException(400, "Upscaler not found.")
     with lock:
-        if current is None or not current.running():
-            job_id, job_dir = new_job_dir("upscale")
-            spawn("upscale", os.path.basename(path),
-                  [PYTHON, "-B", os.path.join(APP_DIR, "upscale.py"), "--input", path, "--model", model], job_id, job_dir)
-            return {"id": job_id}
-    raise HTTPException(409, "Something is already running.")
+        busy = why_busy()
+        if busy:
+            raise HTTPException(409, busy)
+        job_id, job_dir = new_job_dir("upscale")
+        spawn("upscale", os.path.basename(path), "upscale.py", ["--input", path, "--model", model], job_id, job_dir)
+        return {"id": job_id}
 
 
 def image_size(path):
@@ -1793,11 +1787,16 @@ def safe_name(name):
 async def receive(request, path):
     """Streams an upload to disk, so a long video never sits in memory whole."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    part = path + ".part"
-    with open(part, "wb") as f:
-        async for chunk in request.stream():
-            f.write(chunk)
-    os.replace(part, path)
+    part = atomic.temp_of(path)
+    try:
+        with open(part, "wb") as f:
+            async for chunk in request.stream():
+                f.write(chunk)
+    except BaseException:  # the browser went away partway
+        os.remove(part)
+        raise
+    if not atomic.replace(part, path):
+        raise HTTPException(409, f"{os.path.basename(path)} is open elsewhere. Close it, or rename the file, and drop it again.")
 
 
 @app.post("/api/init-image")
@@ -1841,8 +1840,9 @@ async def prompt_image(request: Request, name: str, group: str = ""):
 
 
 @app.get("/api/prompt-images")
-def prompt_image_list(folder: str):
+def prompt_image_list(folder: str, request: Request):
     """The images in an image prompt folder, with previews when they were uploaded here."""
+    no_network_paths(request, folder)
     if not os.path.isdir(folder):
         return {"images": [], "missing": True}
     names = sorted(n for n in os.listdir(folder) if n.lower().endswith(IMAGE_KINDS))
@@ -1857,8 +1857,9 @@ def input_url(path):
 
 
 @app.get("/api/input-preview")
-def input_preview(path: str):
+def input_preview(path: str, request: Request):
     """A preview URL and the size of an image the settings name, such as a ghost image."""
+    no_network_paths(request, path)
     found = os.path.isfile(path)
     return {"url": input_url(path) if found else None, "size": image_size(path) if found else None, "missing": not found}
 
@@ -1872,8 +1873,7 @@ def inputs(rel: str):
 
 
 @app.post("/api/init-from-output")
-async def init_from_output(request: Request):
-    body = await request.json()
+def init_from_output(body: dict):
     path = safe_output_path(str(body.get("rel", "")))
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename(path))
     target = os.path.join(INIT_DIR, name)
@@ -1940,9 +1940,9 @@ def thumbs(rel: str):
             image.draft("RGB", (THUMB_SIZE * 2, THUMB_SIZE * 2))
             small = image.convert("RGB")
             small.thumbnail((THUMB_SIZE, THUMB_SIZE), Image.LANCZOS)
-        part = thumb + ".part"
-        small.save(part, "JPEG", quality=86)
-        os.replace(part, thumb)
+        # Another request may have made it meanwhile, and be sending it, so this one can't replace it: that one is used.
+        if not atomic.save_image(small, thumb, quality=86) and not os.path.isfile(thumb):
+            raise HTTPException(503, "The thumbnail is busy. Try again.")
     return FileResponse(thumb, headers={"Cache-Control": "max-age=31536000, immutable"})
 
 

@@ -13,6 +13,9 @@ own choices there, such as output_dir and upscale_dirs. For example:
 """
 import json
 import os
+import threading
+
+import atomic
 
 VERSION = "1.2.0"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,9 +53,9 @@ def local_settings():
         return json.load(f)
 
 
+_saving = threading.Lock()  # each save reads the file and writes it back, so two at once would lose one's changes
+
+
 def save_local_settings(changes):
-    settings = {**local_settings(), **changes}
-    path = os.path.join(HOME, "local.json")
-    with open(path + ".tmp", "w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2)
-    os.replace(path + ".tmp", path)
+    with _saving:
+        atomic.write_json(os.path.join(HOME, "local.json"), {**local_settings(), **changes}, indent=2)

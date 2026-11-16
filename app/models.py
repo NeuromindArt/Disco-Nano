@@ -4,6 +4,7 @@ import json
 import os
 import urllib.request
 
+import atomic
 import paths
 
 MAIN = "512x512_diffusion_uncond_finetune_008100"
@@ -334,7 +335,8 @@ def find_copies(roots, report=lambda message: None):
         for name in wanted[os.path.basename(path).lower()]:
             expected = ALL_FILES[name].get("size_gb")
             # The size rules out most files that only share a name, such as model.safetensors, before the slow part.
-            if name in new or (expected is None and size > 50 * 2**20) or                     (expected is not None and abs(size / 1e9 - expected) > max(0.03, expected * 0.15)):
+            if name in new or (expected is None and size > 50 * 2**20) or \
+                    (expected is not None and abs(size / 1e9 - expected) > max(0.03, expected * 0.15)):
                 continue
             report(f"Checking {os.path.basename(path)}")
             try:
@@ -346,10 +348,7 @@ def find_copies(roots, report=lambda message: None):
                 new.append(name)
     if new:
         os.makedirs(paths.MODELS, exist_ok=True)
-        temp = FOUND + ".tmp"
-        with open(temp, "w", encoding="utf-8") as f:
-            json.dump(copies, f, indent=1)
-        os.replace(temp, FOUND)
+        atomic.write_json(FOUND, copies, indent=1)
     return new
 
 
@@ -362,26 +361,44 @@ def ensure(name, report):
         return path
     path = own_path(name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    part, label = path + ".part", os.path.basename(path)
+    label = os.path.basename(path)
     for url in ALL_FILES[name]["urls"]:
-        shown = [None]
-
-        def progress(blocks, block_size, total):
-            percent = min(blocks * block_size * 100 // total, 100) if total > 0 else 0
-            if percent != shown[0]:
-                shown[0] = percent
-                report(f"Downloading {label} ({percent}%)")
-
+        # A file of its own, so the server and a render fetching the same model at once don't write into one file.
+        part = atomic.temp_of(path)
         try:
-            urllib.request.urlretrieve(url, part, progress)
-        except OSError:
-            continue
-        report(f"Checking {label}")
-        if sha256_of(part) == ALL_FILES[name]["sha256"]:
-            os.replace(part, path)
+            download(url, part, lambda percent: report(f"Downloading {label} ({percent}%)"))
+            report(f"Checking {label}")
+            same = sha256_of(part) == ALL_FILES[name]["sha256"]
+        except OSError:  # no connection, a stalled one, or a full disk: the next URL, if there is one
+            same = False
+        if same and (atomic.replace(part, path) or os.path.exists(path)):  # or the other one got there first
             return path
-        os.remove(part)
+        try:
+            os.remove(part)
+        except OSError:
+            pass
     raise RuntimeError(f"Could not download {name}.")
+
+
+STALLED = 60  # seconds without a byte before a download gives up
+
+
+def download(url, path, progress):
+    """Fetches `url` into `path`, calling progress(percent) as it goes. Raises OSError when it fails or stalls."""
+    with urllib.request.urlopen(url, timeout=STALLED) as response, open(path, "wb") as f:
+        total, done, shown = int(response.headers.get("Content-Length") or 0), 0, None
+        while True:
+            chunk = response.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+            done += len(chunk)
+            percent = min(done * 100 // total, 100) if total else 0
+            if percent != shown:
+                shown = percent
+                progress(percent)
+    if total and done < total:
+        raise OSError(f"The download of {url} ended early.")
 
 
 def config(name):

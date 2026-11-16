@@ -12,13 +12,9 @@ import sys
 import time
 import traceback
 
+import atomic
 import paths
-
-
-def emit(kind, **data):
-    data["type"] = kind
-    data["t"] = round(time.time(), 2)
-    print("\n@@EVT " + json.dumps(data), flush=True)  # leading newline: a library may have left a part line
+from procs import emit, failure, stdin_closed
 
 
 class Hooks:
@@ -69,7 +65,8 @@ class Hooks:
         return os.path.exists(self.pause_file)
 
     def hold(self):
-        """Waits while the pause file is there, so regions can be drawn on the preview."""
+        """Waits while the pause file is there, so regions can be drawn on the preview. A server that closes meanwhile
+        ends the render, so a paused one never holds the GPU with no app left to carry it on."""
         torch = sys.modules.get("torch")
         if torch is not None and torch.cuda.is_available():
             # VRAM the render keeps for its next step goes back while it waits: with the card nearly full, the
@@ -77,7 +74,7 @@ class Hooks:
             torch.cuda.empty_cache()
         emit("paused")
         while os.path.exists(self.pause_file):
-            if os.path.exists(self.stop_file):
+            if os.path.exists(self.stop_file) or stdin_closed():
                 raise KeyboardInterrupt
             if self.while_paused:
                 self.while_paused()
@@ -112,18 +109,10 @@ class Hooks:
             frame = os.path.join(self.progress, f"{len(self.frames):05d}.jpg")
             image.save(frame, quality=92)
             self.frames.append(frame)
-        # JPEG, because a preview is written every step: a large PNG takes several times longer to write.
-        temp = os.path.join(self.job_dir, "preview.tmp.jpg")
-        image.save(temp, quality=90)
-        for _ in range(3):
-            try:
-                os.replace(temp, os.path.join(self.job_dir, "preview.jpg"))
-                break
-            except PermissionError:  # the server is sending the last preview, and Windows won't replace an open file
-                time.sleep(0.05)
-        else:
-            return  # this preview is skipped, and the next one will get through
-        emit("preview")
+        # JPEG, because a preview is written every step: a large PNG takes several times longer to write. One the server
+        # is still sending can't be replaced; this one is then skipped, and the next gets through.
+        if atomic.save_image(image, os.path.join(self.job_dir, "preview.jpg"), tries=3, quality=90):
+            emit("preview")
 
     def image(self, path):
         if self.frames:
@@ -195,9 +184,7 @@ def run_job(job_dir):
     except KeyboardInterrupt:
         outcome = "stopped"
     except BaseException as e:  # out of memory included; every failure must reach the UI as an event
-        is_oom = type(e).__name__ == "OutOfMemoryError" or "out of memory" in str(e).lower()
-        outcome = "oom" if is_oom else "error"
-        detail = {"error": repr(e)[:600]}
+        outcome, detail = failure(e)
         print(traceback.format_exc()[-1800:], flush=True)
     # disco.render puts its models away in a finally, but after a Stop that runs while the stop is still on its way
     # out, holding the render's last tensors. They are let go only now, so the GPU is given back here as well, or

@@ -32,11 +32,11 @@ def main():
 
     with zipfile.ZipFile(out) as z:
         names = z.namelist()
-        bat = z.read("Disco Diffusion Nano/setup.bat")
+        # cmd.exe misreads a .bat with Unix line endings, so every one is checked
+        unix = [n.split("/", 1)[1] for n in names if n.lower().endswith(".bat") and b"\n" in z.read(n).replace(b"\r\n", b"")]
     problems = [p for p in ("setup.bat", "Start Disco Nano.bat", "app/server.py", "LICENSE")
                 if f"Disco Diffusion Nano/{p}" not in names]
-    if b"\n" in bat.replace(b"\r\n", b""):
-        problems.append("setup.bat has Unix line endings")
+    problems += [f"{name} has Unix line endings" for name in unix]
     if any("/docs/" in n or "/tools/" in n for n in names):
         problems.append("docs or tools were packed")
     if problems:

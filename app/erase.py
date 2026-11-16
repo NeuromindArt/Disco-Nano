@@ -59,6 +59,7 @@ import torch.nn.functional as F
 from PIL import Image, ImageFilter
 
 import models
+from procs import emit, stdin_closed
 
 # How far through the schedule, 0 to 1, an erase's fresh noise starts to fall, and where none is left
 FRESH_FROM, FRESH_TO = 0.7, 0.8
@@ -430,20 +431,6 @@ def erase_image(image_path, mask_path, clones, out_path, device, status=print, i
 IDLE = 600  # seconds the tries server waits for an ask before it ends, and lets the model go
 
 
-def stdin_closed():
-    """Whether the server closed this process's stdin, or ended, seen without reading it: on Windows, a read waiting
-    on a pipe holds up everything else that touches it, such as starting a process, which loading a model does."""
-    import sys
-    if os.name == "nt":
-        import ctypes
-        import msvcrt
-        waiting = ctypes.c_ulong()
-        return not ctypes.windll.kernel32.PeekNamedPipe(msvcrt.get_osfhandle(sys.stdin.fileno()), None, 0, None,
-                                                        ctypes.byref(waiting), None)
-    import select
-    return bool(select.select([sys.stdin], [], [], 0)[0]) and not sys.stdin.read(1)
-
-
 def serve(folder, device):
     """Paints the start image's inpaint tries as the server asks for them, with the Inpaint model kept loaded between
     asks, so More tries and the next fix don't wait for it to load again.
@@ -451,16 +438,13 @@ def serve(folder, device):
     The server writes each ask to ask.json in `folder`: {"id", "upto": how many tries it wants in all, "image",
     "mask", "clones", "inpaint"}, as the CLI reads them. A new id starts over, and stops a try being painted for the
     one before; the same id with a higher `upto` paints more. Each try is the whole fix, erase and clones too, saved
-    as try-{id}-{k}.png and told on stdout as an @@EVT line. It ends when its stdin closes, which the server does when
+    as try-{id}-{k}.png and reported as a "tried" event. It ends when its stdin closes, which the server does when
     the editor or the app closes, stopping a try between its steps, or after IDLE seconds without an ask."""
     import gc
     import time
     import handoff
 
-    def event(**e):
-        print("@@EVT " + json.dumps(e), flush=True)
-
-    status = lambda message: event(type="status", message=message)
+    status = lambda message: emit("status", message=message)
     path, seen, ask = os.path.join(folder, "ask.json"), None, None
 
     def latest():
@@ -499,7 +483,7 @@ def serve(folder, device):
             if prepared["area"] is not None:
                 painted = inpaint_image(model, painted, prepared["area"], asked["inpaint"], status, superseded)
             save_png(with_clones(prepared["original"], painted, asked.get("clones") or []), os.path.join(folder, f"try-{asked['id']}-{made}.png"))
-            event(type="tried", id=asked["id"], k=made)
+            emit("tried", id=asked["id"], k=made)
             made += 1
         except KeyboardInterrupt:
             if not superseded():
@@ -507,7 +491,7 @@ def serve(folder, device):
         except Exception as e:
             traceback.print_exc()
             reason = str(e).strip().splitlines()[0][:200] if str(e).strip() else type(e).__name__
-            event(type="tried", id=asked["id"], error=f"Inpainting failed: {reason}")
+            emit("tried", id=asked["id"], error=f"Inpainting failed: {reason}")
             failed = (asked["id"], asked["upto"])
 
 

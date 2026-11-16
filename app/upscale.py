@@ -1,26 +1,20 @@
 """Upscales one finished image with any ESRGAN, DAT or HAT model that Spandrel can load.
 
-Runs as its own process, so its VRAM is released when it ends. Reports the same @@EVT
-lines as renderer.py. Works in overlapping tiles so large models fit in 8GB.
+Runs as its own process, so its VRAM is released when it ends. Reports the same events as
+renderer.py, through procs.emit. Works in overlapping tiles so large models fit in 8GB.
 """
 import argparse
-import json
 import os
 import sys
-import time
 
 import numpy as np
 import torch
 from PIL import Image
 from spandrel import ModelLoader
 
+from procs import emit, failure
+
 TILE, OVERLAP = 384, 24
-
-
-def emit(kind, **data):
-    data["type"] = kind
-    data["t"] = round(time.time(), 2)
-    print("@@EVT " + json.dumps(data), flush=True)
 
 
 def tiles(size):
@@ -83,9 +77,7 @@ def main():
         Image.fromarray(array).save(path)
         emit("image", path=path)
     except BaseException as e:
-        is_oom = type(e).__name__ == "OutOfMemoryError" or "out of memory" in str(e).lower()
-        outcome = "oom" if is_oom else "error"
-        detail = {"error": repr(e)[:600]}
+        outcome, detail = failure(e)
     try:
         detail["peak_vram_gb"] = round(torch.cuda.max_memory_reserved() / 2**30, 2)
     except Exception:
