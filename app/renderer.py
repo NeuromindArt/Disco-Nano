@@ -28,10 +28,6 @@ class Hooks:
         self.regions, self.regions_rev, self.regions_read = regions, 0, None
         self.started = False
         self.while_paused = None  # called over and over while a pause holds, for Fix's inpaint tries
-        # While a keep_steps file is in Nano's data folder, every preview is kept in the job's steps folder, named by
-        # the step it came after, to see afterward what a render did step by step.
-        self.steps = os.path.join(job_dir, "steps") if os.path.exists(os.path.join(paths.HOME, "keep_steps")) else None
-        self.last_step = 0
         # With Save progress video, every preview is also kept as a frame until its image is saved.
         self.progress = os.path.join(job_dir, "progress") if progress else None
         self.frames = []
@@ -54,7 +50,6 @@ class Hooks:
             self.started = True
             emit("sampling", total_steps=total, n_batches=n_batches, seed=seed)
         emit("step", step=j + 1, total=total, batch=batch, n_batches=n_batches, **({} if at is None else {"at": round(at, 3)}))
-        self.last_step = j + 1
         if os.path.exists(self.stop_file):
             raise KeyboardInterrupt
         if can_hold and os.path.exists(self.pause_file):
@@ -98,12 +93,6 @@ class Hooks:
 
     def preview(self, image):
         image = image.convert("RGB")
-        if self.steps:
-            os.makedirs(self.steps, exist_ok=True)
-            name = f"{self.last_step:05d}.jpg"
-            while os.path.exists(os.path.join(self.steps, name)):  # an erase shows a second preview after the same step
-                name = name[:-4] + "b.jpg"
-            image.save(os.path.join(self.steps, name), quality=90)
         if self.progress:
             os.makedirs(self.progress, exist_ok=True)
             frame = os.path.join(self.progress, f"{len(self.frames):05d}.jpg")
