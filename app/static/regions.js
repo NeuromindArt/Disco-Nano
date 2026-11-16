@@ -29,7 +29,7 @@ function showRegionsButton(t) {
   $("regionsMore").hidden = !r.on;
   $("regionsOff").hidden = r.on;
   const btn = $("regionsBtn");
-  btn.disabled = !!regionMode || eraseMode || (!!t?.active && (!rendering || !t.total));
+  btn.disabled = stageEditor() || (!!t?.active && (!rendering || !t.total));
   btn.textContent = rendering ? "Pause and edit regions" : "Edit regions";
   if (document.activeElement !== $("regionStrength")) $("regionStrength").value = r.strength;
   const range = document.querySelector('[data-for="regionStrength"]');
@@ -55,7 +55,7 @@ function showRegionsButton(t) {
 /* Called with every status: keeps the editor in step with the render it paused. */
 function showRegionsTask(t) {
   const running = !!t?.active && t.kind === "render";
-  if (!regionMode && !eraseMode && running && t.state === "paused" && t.pause_for !== "erase") openRegions();  // paused from another tab, or before a reload
+  if (!stageEditor() && running && t.state === "paused" && t.pause_for !== "erase") openRegions();  // paused from another tab, or before a reload
   // The editor is for a paused render, or for setting boxes before one. A render that ends, or one that starts
   // from elsewhere while the boxes are being set, closes it so the preview shows.
   if ((regionMode === "run" && !running) || (regionMode === "set" && running)) closeRegions();
@@ -77,27 +77,26 @@ function regionsReady() {
 }
 
 function openRegions() {
-  if (regionMode || eraseMode) return;
   const t = lastStatus?.task;
-  regionMode = t?.active && t.kind === "render" ? "run" : "set";
+  const run = !!t?.active && t.kind === "render";
+  if (!openStageEditor({ name: "regions", followsRender: run, picture: null, keys: regionKeys, beforeRender: regionsBeforeRender })) return;
+  regionMode = run ? "run" : "set";
   regionHeld = false;
-  if (regionMode === "run" && t.state !== "paused") post("/api/pause").catch((e) => { formError(e.message); closeRegions(); });
+  if (run && t.state !== "paused") post("/api/pause").catch((e) => { formError(e.message); closeRegions(); });
   regionDraft = { boxes: structuredClone(regionsState().boxes) };
   regionPicked = -1;
-  document.querySelector(".canvas").classList.add("editing");
   $("regionEditor").hidden = false;
-  $("stageEmpty").hidden = true;
   showRegionBar(t);
   drawRegions();
   requestAnimationFrame(placeRegionFrame);
 }
 
 function closeRegions() {
+  if (!regionMode) return;
   regionMode = null;
   regionDraft = null;
   $("regionEditor").hidden = true;
-  document.querySelector(".canvas").classList.remove("editing");
-  $("stageEmpty").hidden = !($("stageImg").hidden && $("stageVideo").hidden);
+  closeStageEditor("regions");
   showRegionsButton(lastStatus?.task);
 }
 
@@ -186,6 +185,7 @@ function drawRegions() {
     del.type = "button";
     del.className = "region-del";
     del.title = "Remove this box";
+    del.setAttribute("aria-label", "Remove this box");
     del.textContent = "×";
     del.addEventListener("click", () => { regionDraft.boxes.splice(i, 1); regionPicked = -1; drawRegions(); });
     const grip = document.createElement("div");
@@ -232,7 +232,6 @@ function startRegionDrag(e) {
   const b = regionDraft.boxes[index];
   const el = frame.querySelector(`.region-box[data-index="${index}"]`);
   e.preventDefault();
-  try { frame.setPointerCapture(e.pointerId); } catch { /* a pointer that is already gone */ }
   const move = (ev) => {
     const p = at(ev);
     if (kind === "draw") {
@@ -247,9 +246,6 @@ function startRegionDrag(e) {
     sizeRegionBox(el, b);
   };
   const end = () => {
-    frame.removeEventListener("pointermove", move);
-    frame.removeEventListener("pointerup", end);
-    frame.removeEventListener("pointercancel", end);
     if (kind === "draw") {
       if (b.w < REGION_MIN || b.h < REGION_MIN) {
         regionDraft.boxes.splice(index, 1);
@@ -260,15 +256,16 @@ function startRegionDrag(e) {
       }
     }
   };
-  frame.addEventListener("pointermove", move);
-  frame.addEventListener("pointerup", end);
-  frame.addEventListener("pointercancel", end);
+  followPointer(frame, e, move, end);
 }
 
 function regionKeys(e) {
-  if (!regionMode) return;
-  if (e.key === "Escape") { e.preventDefault(); regionsCancel(); }
-  const typing = e.target.closest?.("textarea, input");
+  const typing = e.target.closest?.("textarea, input, select");
+  if (e.key === "Escape") {  // leaves a box's prompt first, then the editor
+    e.preventDefault();
+    if (typing) e.target.blur(); else regionsCancel();
+    return;
+  }
   if (!typing && (e.key === "Delete" || e.key === "Backspace") && regionPicked >= 0 && regionsReady()) {
     regionDraft.boxes.splice(regionPicked, 1);
     regionPicked = -1;
@@ -282,9 +279,10 @@ function regionKeys(e) {
 
 /* Render while the editor is open before a render keeps its boxes first. */
 function regionsBeforeRender() {
-  if (regionMode !== "set") return;
+  if (regionMode !== "set") return "";
   keepRegions();
   closeRegions();
+  return "";
 }
 
 function setUpRegions() {
@@ -311,7 +309,6 @@ function setUpRegions() {
   $("regionCancel").addEventListener("click", regionsCancel);
   $("regionClear").addEventListener("click", () => { if (!regionsReady()) return; regionDraft.boxes = []; regionPicked = -1; drawRegions(); });
   $("regionFrame").addEventListener("pointerdown", startRegionDrag);
-  document.addEventListener("keydown", regionKeys);
   $("stageImg").addEventListener("load", placeRegionFrame);
   new ResizeObserver(placeRegionFrame).observe(document.querySelector(".canvas"));
   showRegionsButton(lastStatus?.task);

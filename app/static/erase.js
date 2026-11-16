@@ -15,7 +15,7 @@ let eraseMode = null;     // "render" while the editor is over a render it pause
 let eraseHeld = false;    // the render has reached its pause, or been asked for one
 let erasePainted = false;
 let eraseBusy = false;    // the start image is being fixed
-let eraseStage = null;    // what the stage showed before the start image took its place
+let fixImage = "";        // the start image the editor is over, so a new one dropped meanwhile closes it
 const eraseUndo = [];     // each stroke, with what it changed as it was before, for Undo
 const ERASE_UNDO = 20;
 const ERASE_BRUSH = { min: 0.5, max: 25, start: 6, step: 0.5 };  // the brush's width, as a share of the picture's width in %
@@ -44,10 +44,9 @@ function inpaintModel() { return lookValue("inpaint_file"); }
 const INPAINT_START = { mode: "fresh", strength: 85, tries: 2 };  // what Inpaint starts from, how much it repaints, how many tries
 // Inpaint's tries, during a pause or on the start image: {id, key, made: [url], painting, error}, or null. `key` is
 // what was asked, so a change to the area, the prompt or the settings shows the tries are out of date. `tryShown` is
-// the try on the stage, or null for the picture without it; `pausedSrc` puts that picture back.
+// the try on the stage, or null for the picture without it.
 let inpaintTries = null;
 let tryShown = null;
-let pausedSrc = null;
 let inpaintEdits = 0;  // counts changes to the inpaint area, for `key`
 let otherEdits = 0;    // and to the erase and clones, which a start image's tries include
 
@@ -60,10 +59,22 @@ function eraseReady() {
   return eraseMode === "image" ? !eraseBusy : lastStatus?.task?.state === "paused";
 }
 
+/* The editor as the stage knows it: over a render it paused, or over the start image. */
+function fixEditor(mode) {
+  return {
+    name: "fix", followsRender: mode === "render", picture: mode === "image" ? state.init_url : null,
+    keys: eraseKeys, beforeRender: fixBeforeRender,
+  };
+}
+
+/* The picture the editor fixes, without a try on it: the paused preview, or the start image. */
+function fixPicture() {
+  return eraseMode === "image" ? state.init_url : stage.shows.src;
+}
+
 function openErase() {
-  if (eraseMode || regionMode) return;
   const t = lastStatus?.task;
-  if (!erasable(t)) return;
+  if (!erasable(t) || !openStageEditor(fixEditor("render"))) return;
   eraseMode = "render";
   eraseHeld = false;
   if (t.state !== "paused") post("/api/pause?why=erase").catch((e) => { formError(e.message); closeErase(); });
@@ -73,16 +84,12 @@ function openErase() {
 
 /* The start image on the stage, with the brush over it. */
 function openImageErase() {
-  if (eraseMode || regionMode || !state.init_url || lastStatus?.task?.active) return;
-  const img = $("stageImg");
-  eraseStage = { src: img.getAttribute("src"), img: img.hidden, video: $("stageVideo").hidden, empty: $("stageEmpty").hidden };
+  if (!state.init_url || lastStatus?.task?.active || !openStageEditor(fixEditor("image"))) return;
   eraseMode = "image";
   eraseBusy = false;
-  $("stageVideo").hidden = true;
-  $("stageEmpty").hidden = true;
-  img.hidden = false;
-  img.src = state.init_url;
+  fixImage = state.init_image;
   showEraseEditor();
+  const img = $("stageImg");
   if (img.complete && img.naturalWidth) sizeEraseCanvas();  // otherwise it is sized when it loads
 }
 
@@ -91,15 +98,14 @@ function showEraseEditor() {
   erasePainted = false;
   eraseUndo.length = 0;
   eraseFreshStep = null;
-  document.querySelector(".canvas").classList.add("editing");
   $("eraseEditor").hidden = false;
   setFixTool(fixTool);
   requestAnimationFrame(placeEraseFrame);
   showEraseButton(lastStatus?.task);
 }
 
-/* `restore` puts back what the stage showed before the start image took its place. */
-function closeErase(restore = true) {
+function closeErase() {
+  if (!eraseMode) return;
   const was = eraseMode;
   dropTries();
   if (was === "image") post("/api/image-tries/close", {}).catch(() => {});  // the Inpaint model can go; it ends by itself too
@@ -107,16 +113,17 @@ function closeErase(restore = true) {
   $("eraseEditor").hidden = true;
   $("eraseRing").hidden = true;
   $("cloneMark").hidden = true;
-  document.querySelector(".canvas").classList.remove("editing");
-  if (was === "image" && restore && eraseStage) {
-    const img = $("stageImg");
-    if (eraseStage.src) img.src = eraseStage.src; else img.removeAttribute("src");
-    img.hidden = eraseStage.img;
-    $("stageVideo").hidden = eraseStage.video;
-    $("stageEmpty").hidden = eraseStage.empty;
-  }
-  eraseStage = null;
+  closeStageEditor("fix");
   showEraseButton(lastStatus?.task);
+}
+
+/* Render, with the start image open in Fix: what's painted and not applied would be lost, so it waits for that. */
+function fixBeforeRender() {
+  if (eraseMode !== "image") return "";
+  if (eraseBusy) return "The start image is still being fixed.";
+  if (erasePainted) return "Apply or clear what's painted on the start image first.";
+  closeErase();
+  return "";
 }
 
 /* The painting is kept at the picture's own size, so the masks line up with it whatever the window is.
@@ -208,16 +215,7 @@ function startErasePaint(e) {
   const paint = fixTool === "clone" ? cloneStroke(at(e)) : eraseStroke(at(e), fixTool === "inpaint" ? inpaintCanvas() : eraseCanvas());
   erasePainted = true;
   showEraseBar(lastStatus?.task);
-  try { canvas.setPointerCapture(e.pointerId); } catch { /* a pointer that is already gone */ }
-  const move = (ev) => paint(at(ev));
-  const end = () => {
-    canvas.removeEventListener("pointermove", move);
-    canvas.removeEventListener("pointerup", end);
-    canvas.removeEventListener("pointercancel", end);
-  };
-  canvas.addEventListener("pointermove", move);
-  canvas.addEventListener("pointerup", end);
-  canvas.addEventListener("pointercancel", end);
+  followPointer(canvas, e, (ev) => paint(at(ev)));
 }
 
 function keepUndo(record) {
@@ -428,13 +426,10 @@ function triesCurrent() {
   return !!inpaintTries && inpaintTries.key === askKey();
 }
 
-/* Puts try `k` on the stage in place of the paused picture, or that picture back for null. */
+/* Puts try `k` on the stage in place of the picture it was painted on, or that picture back for null. */
 function showTry(k) {
   if (k !== null && !inpaintTries?.made[k]) k = null;
-  const img = $("stageImg");
-  if (k !== null && tryShown === null) pausedSrc = img.getAttribute("src");
-  if (k === null && tryShown !== null && pausedSrc) img.src = pausedSrc;
-  if (k !== null) img.src = inpaintTries.made[k];
+  if (k !== null || tryShown !== null) showEditorPicture(k === null ? fixPicture() : inpaintTries.made[k]);
   tryShown = k;
   $("eraseFrame").classList.toggle("trying", k !== null);
   $("eraseFrame").classList.toggle("whole", eraseMode === "image");  // a start image's try has the erase and clones in it
@@ -443,11 +438,9 @@ function showTry(k) {
 }
 
 function dropTries() {
-  const back = tryShown !== null ? pausedSrc : null;
+  if (tryShown !== null) showEditorPicture(fixPicture());
   inpaintTries = null;
   tryShown = null;
-  pausedSrc = null;
-  if (back) $("stageImg").src = back;
   $("eraseFrame").classList.remove("trying");
   showTryRow();
 }
@@ -506,7 +499,7 @@ function showTryRow() {
   const shown = !!inpaintTries && !!eraseMode;
   $("inpaintTryRow").hidden = !shown;
   if (!shown) return;
-  const tiles = [tryTile("Before", pausedSrc || $("stageImg").getAttribute("src"), null)];
+  const tiles = [tryTile("Before", fixPicture(), null)];
   inpaintTries.made.forEach((url, k) => tiles.push(tryTile(`Try ${k + 1}`, url, k)));
   if (inpaintTries.painting) {
     const wait = document.createElement("div");
@@ -548,10 +541,11 @@ async function eraseImage() {
     dropTries();
     readControls();
     Object.assign(state, { init_image: r.path, init_name: r.name, init_url: r.url || "", init_size: r.size });
+    fixImage = r.path;
     save();
     showInit();
     eraseBusy = false;
-    $("stageImg").src = r.url;
+    showEditorPicture(r.url);
     sizeEraseCanvas();  // what was painted is part of the new image
   } catch (e) {
     eraseBusy = false;
@@ -634,13 +628,14 @@ function showFresh() {
 }
 
 function showEraseButton(t) {
+  if (eraseMode === "image" && state.init_image !== fixImage) closeErase();  // another start image: the painting was for the last one
   const btn = $("eraseBtn");
   btn.hidden = !t?.active || t.kind !== "render" || animating();
-  btn.disabled = !!eraseMode || !!regionMode || !erasable(t) || (t?.state === "paused" && t.pause_for !== "erase");
+  btn.disabled = stageEditor() || !erasable(t) || (t?.state === "paused" && t.pause_for !== "erase");
   btn.title = "Pauses after this step, so you can erase or clone over something. The render then carries on from it.";
   const image = $("initErase");
-  image.hidden = !state.init_url || $("initDrop").classList.contains("busy");
-  image.disabled = !!eraseMode || !!regionMode || !!t?.active;
+  image.hidden = !state.init_url || dropBusy($("initDrop"));
+  image.disabled = stageEditor() || !!t?.active;
   image.title = t?.active ? "Fix the start image when no render is running." : "Erase or clone over things in the start image";
 }
 
@@ -672,7 +667,7 @@ function showEraseTask(t) {
 }
 
 function eraseKeys(e) {
-  if (!eraseMode || e.target.closest?.("input, textarea")) return;
+  if (e.target.closest?.("input, textarea, select")) return;
   const key = e.key.toLowerCase();
   if (e.key === "Escape") { e.preventDefault(); eraseCancel(); }
   else if (e.key === "[" || e.key === "]") { e.preventDefault(); sizeBrush(e.key === "]" ? 2 : -2); }
@@ -719,15 +714,9 @@ function setUpErase() {
   canvas.addEventListener("pointermove", (e) => placeEraseRing(e.clientX, e.clientY));
   canvas.addEventListener("pointerleave", () => { $("eraseRing").hidden = true; delete $("eraseRing").dataset.x; });
   canvas.addEventListener("wheel", (e) => { e.preventDefault(); sizeBrush(e.deltaY < 0 ? 1 : -1); }, { passive: false });
-  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-  document.addEventListener("keydown", eraseKeys);
   $("stageImg").addEventListener("load", () => {
-    if (eraseMode === "image") {
-      const img = $("stageImg");
-      if (tryShown !== null) { placeEraseFrame(); return; }  // a try on the stage, in place of the start image
-      if (img.getAttribute("src") !== state.init_url) closeErase(false);  // something else took the stage
-      else sizeEraseCanvas(false);  // only a new size resets the painting, so strokes made while it loaded stay
-    }
+    // The start image, once it has loaded: only a new size resets the painting, so strokes made while it loaded stay.
+    if (eraseMode === "image" && tryShown === null) sizeEraseCanvas(false);
     placeEraseFrame();
   });
   new ResizeObserver(placeEraseFrame).observe(document.querySelector(".canvas"));

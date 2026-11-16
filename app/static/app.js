@@ -137,7 +137,7 @@ function save() {
     const own = Object.fromEntries(HANDOFF_MODEL_KEYS.filter((n) => byName[n]).map((n) => [n, lookValue(n)]));
     state.handoff_models = { ...state.handoff_models, [state.handoff_file]: own };
   }
-  localStorage.setItem(STORE, JSON.stringify(state));
+  try { localStorage.setItem(STORE, JSON.stringify(state)); } catch { /* storage full or blocked: this visit still works */ }
 }
 
 /* The main panel's values are saved in the browser, so a new default would never reach anyone who has opened
@@ -167,6 +167,17 @@ async function api(path, options) {
   return res.json();
 }
 const post = (path, data) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data || {}) });
+
+/* An error line under what it's about: shows `msg`, or hides with none. */
+function showError(id, msg) {
+  $(id).textContent = msg || "";
+  $(id).hidden = !msg;
+}
+
+/* A click handler that shows what went wrong on `error`'s line, as every button's should. */
+const reporting = (run, error = formError) => async (...args) => {
+  try { await run(...args); } catch (e) { error(e.message); }
+};
 
 function fmtTime(s) {
   if (s == null) return "";
@@ -2177,24 +2188,22 @@ function advField(f, compact = false) {
     Object.assign(pick, { type: "button", className: "default icon-button", title: "Browse for a model file on the PC that renders" });
     pick.setAttribute("aria-label", "Browse for a model file");
     pick.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
-    pick.addEventListener("click", async () => {
-      try {
-        const path = await chooseCheckpoint(input.value);
-        if (!path) return;
-        await loadCheckpoints();
-        pickInpaintModel(path);
-      } catch (e) { formError(e.message); }
-    });
+    pick.addEventListener("click", reporting(async () => {
+      const path = await chooseCheckpoint(input.value);
+      if (!path) return;
+      await loadCheckpoints();
+      pickInpaintModel(path);
+    }));
     input.addEventListener("change", () => pickInpaintModel(input.value));
     cell.append(pick);
   }
   if (f.name === "partner_file") {
     const pick = document.createElement("button");
     Object.assign(pick, { type: "button", className: "default", textContent: "Browse" });
-    pick.addEventListener("click", async () => {
+    pick.addEventListener("click", reporting(async () => {
       const path = await chooseCheckpoint(input.value);
       if (path) { input.value = path; input.dispatchEvent(new Event("change")); }
-    });
+    }));
     cell.append(pick);
   }
   const reset = document.createElement("button");
@@ -2279,8 +2288,12 @@ function filterAdvanced() {
 
 // ---- folders ----
 function folderError(msg) {
-  $("folderError").textContent = msg || "";
-  $("folderError").hidden = !msg;
+  showError("folderError", msg);
+}
+
+/* Adds a folder as a line of its own to a list of folders, one per line. */
+function addFolderLine(list, path) {
+  list.value = [list.value.trim(), path].filter(Boolean).join("\n");
 }
 
 async function applyFolders(output_dir, upscale_dirs, checkpoint_dirs) {
@@ -2581,7 +2594,7 @@ async function findCheckpointFolders(box, note) {
 }
 
 async function finishWelcome() {
-  const shown = (message) => { $("welcomeError").textContent = message; $("welcomeError").hidden = !message; };
+  const shown = (message) => showError("welcomeError", message);
   shown("");
   try {
     await applyFolders($("welcomeOutput").value, $("welcomeUpscalers").value.split("\n"), $("welcomeCheckpoints").value.split("\n"));
@@ -2632,9 +2645,24 @@ async function droppedFiles(transfer) {
   return files;
 }
 
+/* A drop zone is busy while what was dropped on it uploads. It takes nothing else until then. */
+const dropBusy = (zone) => zone.classList.contains("busy");
+const dropClosed = (zone) => !!zone.closest(".blocked") || dropBusy(zone);
+
+/* Runs `work` with `zone` busy, shows what went wrong, and then `after`, which shows what the zone holds now. */
+async function whileBusy(zone, work, after) {
+  if (dropBusy(zone)) return;
+  zone.classList.add("busy");
+  formError("");
+  try { await work(); } catch (e) { formError(e.message); } finally {
+    zone.classList.remove("busy");
+    after();
+  }
+}
+
 function wireDrop(zone, { input, onFiles, onImage, onClear }) {
   const open = (e) => {
-    if (e.target.closest(".drop-clear, .drop-erase") || zone.closest(".blocked") || zone.classList.contains("busy")) return;
+    if (e.target.closest(".drop-clear, .drop-erase") || dropClosed(zone)) return;
     input.click();
   };
   zone.addEventListener("click", open);
@@ -2643,7 +2671,7 @@ function wireDrop(zone, { input, onFiles, onImage, onClear }) {
   zone.querySelector(".drop-clear")?.addEventListener("click", (e) => { e.stopPropagation(); onClear(); });
   zone.addEventListener("dragover", (e) => {
     const types = e.dataTransfer.types;
-    if (zone.closest(".blocked") || !(types.includes("Files") || (onImage && types.includes(DRAG_TYPE)))) return;
+    if (dropClosed(zone) || !(types.includes("Files") || (onImage && types.includes(DRAG_TYPE)))) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
     zone.classList.add("over");
@@ -2653,18 +2681,18 @@ function wireDrop(zone, { input, onFiles, onImage, onClear }) {
     zone.classList.remove("over");
     const rel = e.dataTransfer.getData(DRAG_TYPE);
     if (!rel && !e.dataTransfer.types.includes("Files")) return;
-    e.preventDefault();
+    e.preventDefault();  // the browser would open the file in place of the page
+    if (dropClosed(zone)) return;
     if (rel && onImage) { onImage(rel); return; }
     const files = await droppedFiles(e.dataTransfer);
     if (files.length) onFiles(files);
   });
 }
 
-/* Shows what a drop zone holds: a picture or video, its name, or the empty prompt. */
+/* Shows what a drop zone holds: a picture or video, its name, or the empty prompt. `busy` is what it is doing. */
 function showDrop(zone, { url, name, busy } = {}) {
   const full = !!(url || name || busy);
   zone.classList.toggle("full", full);
-  zone.classList.toggle("busy", !!busy);
   zone.querySelector(".drop-empty").hidden = full;
   const media = zone.querySelector(".drop-image");
   if (media) {
@@ -2694,10 +2722,10 @@ function showInit() {
   updateFit();
   showLabImages();
   const zone = $("initDrop");
-  if (!zone.classList.contains("busy")) showDrop(zone, { url: state.init_url, name: state.init_image ? state.init_name : "" });
+  if (!dropBusy(zone)) showDrop(zone, { url: state.init_url, name: state.init_image ? state.init_name : "" });
   if (state.init_image && !state.init_url) {
     previewOf(state.init_image).then((p) => {
-      if (!state.init_image || zone.classList.contains("busy")) return;
+      if (!state.init_image || dropBusy(zone)) return;
       if (p?.url) { state.init_url = p.url; save(); showDrop(zone, { url: p.url, name: state.init_name }); }
       if (p?.missing) showDrop(zone, { name: `${state.init_name} is missing. Drop it again.` });
     });
@@ -2721,18 +2749,18 @@ function setInit(r) {
   save();
 }
 
-async function uploadInit(files) {
-  const file = files.find((f) => /\.(png|jpe?g|webp)$/i.test(f.name)) || files[0];
-  const zone = $("initDrop");
-  formError("");
+/* Uploads a file into a drop zone, showing how far it has got. */
+function uploadInto(zone, url, file) {
   showDrop(zone, { busy: "Uploading" });
-  try {
-    const r = await upload(`/api/init-image?name=${encodeURIComponent(file.name)}`, file, (f) => showDrop(zone, { busy: `Uploading ${Math.round(f * 100)}%` }));
-    zone.classList.remove("busy");
-    setInit(r);
-  } catch (e) { formError(e.message); }
-  zone.classList.remove("busy");
-  showInit();
+  return upload(`${url}${url.includes("?") ? "&" : "?"}name=${encodeURIComponent(file.name)}`, file,
+    (f) => showDrop(zone, { busy: `Uploading ${Math.round(f * 100)}%` }));
+}
+
+const isImageFile = (f) => /\.(png|jpe?g|webp)$/i.test(f.name);
+
+function uploadInit(files) {
+  const zone = $("initDrop");
+  return whileBusy(zone, async () => setInit(await uploadInto(zone, "/api/init-image", files.find(isImageFile) || files[0])), showInit);
 }
 
 async function initFromGallery(rel) {
@@ -2753,11 +2781,11 @@ function clearInit() {
 function showVideo() {
   const path = state.video_init_path || "";
   const zone = $("videoDrop");
-  if (zone.classList.contains("busy")) return;
+  if (dropBusy(zone)) return;
   showDrop(zone, { url: path && state.video_url ? state.video_url : "", name: baseName(path) });
   if (path && !state.video_url) {
     previewOf(path).then((p) => {
-      if (state.video_init_path !== path || zone.classList.contains("busy")) return;
+      if (state.video_init_path !== path || dropBusy(zone)) return;
       if (p?.url) { state.video_url = p.url; save(); showVideo(); }
       if (p?.missing) showDrop(zone, { name: `${baseName(path)} is missing. Drop it again.` });
     });
@@ -2771,16 +2799,11 @@ function setVideo(path, url) {
   showVideo();
 }
 
-async function uploadVideo(files) {
-  const file = files[0];
+function uploadVideo(files) {
   const zone = $("videoDrop");
-  formError("");
-  showDrop(zone, { busy: "Uploading" });
-  try {
-    const r = await upload(`/api/upload-video?name=${encodeURIComponent(file.name)}`, file, (f) => showDrop(zone, { busy: `Uploading ${Math.round(f * 100)}%` }));
-    zone.classList.remove("busy");
-    setVideo(r.path, r.url);
-  } catch (e) { zone.classList.remove("busy"); formError(e.message); showVideo(); }
+  let made = null;
+  return whileBusy(zone, async () => { made = await uploadInto(zone, "/api/upload-video", files[0]); },
+    () => (made ? setVideo(made.path, made.url) : showVideo()));
 }
 
 // ---- guide images ----
@@ -2794,7 +2817,7 @@ function showLabImages() {
     const path = state.advanced[name] || "";
     const zone = document.querySelector(`[data-drop="${name}"]`);
     if (path && name !== "control_image") count += 1;
-    if (zone.classList.contains("busy")) continue;
+    if (dropBusy(zone)) continue;
     const known = PREVIEW_CACHE[path];
     showDrop(zone, { url: known?.url || "", name: baseName(path) });
     if (path && !known) previewOf(path).then((p) => { if (p) showLabImages(); });
@@ -2813,17 +2836,13 @@ function setLabImage(name, path) {
   save();
 }
 
-async function uploadLabImage(name, files) {
-  const file = files.find((f) => /\.(png|jpe?g|webp)$/i.test(f.name)) || files[0];
+function uploadLabImage(name, files) {
   const zone = document.querySelector(`[data-drop="${name}"]`);
-  formError("");
-  showDrop(zone, { busy: "…" });
-  try {
-    const r = await upload(`/api/init-image?name=${encodeURIComponent(file.name)}`, file);
-    PREVIEW_CACHE[r.path] = { url: r.url, size: r.size };
-    zone.classList.remove("busy");
-    setLabImage(name, r.path);
-  } catch (e) { zone.classList.remove("busy"); formError(e.message); showLabImages(); }
+  let made = null;
+  return whileBusy(zone, async () => {
+    made = await uploadInto(zone, "/api/init-image", files.find(isImageFile) || files[0]);
+    PREVIEW_CACHE[made.path] = { url: made.url, size: made.size };
+  }, () => (made ? setLabImage(name, made.path) : showLabImages()));
 }
 
 async function labImageFromGallery(name, rel) {
@@ -2841,7 +2860,7 @@ function showImagePrompts() {
   const folder = state.image_prompts || "";
   const zone = document.querySelector('[data-drop="image_prompts"]');
   $("imagePromptWeightRow").hidden = !folder;
-  if (zone.classList.contains("busy")) return;
+  if (dropBusy(zone)) return;
   if (folder !== promptSet.folder) {
     promptSet = { folder, images: [] };
     if (folder) {
@@ -2869,23 +2888,20 @@ function setImagePrompts(path) {
   $("image_prompts").dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-async function uploadPromptImages(files) {
-  const images = files.filter((f) => /\.(png|jpe?g|webp)$/i.test(f.name)).slice(0, 200);
+function uploadPromptImages(files) {
+  const images = files.filter(isImageFile).slice(0, 200);
   const zone = document.querySelector('[data-drop="image_prompts"]');
   if (!images.length) { formError("Image prompts take PNG, JPG or WEBP images."); return; }
-  formError("");
   const group = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
-  zone.classList.add("busy", "full");
-  zone.querySelector(".drop-empty").hidden = true;
-  let folder = "";
-  try {
+  let folder = "";  // the images that made it before anything went wrong are kept
+  return whileBusy(zone, async () => {
+    zone.classList.add("full");
+    zone.querySelector(".drop-empty").hidden = true;
     for (const [i, file] of images.entries()) {
       zone.querySelector(".drop-count").textContent = `${i + 1} of ${images.length}`;
       folder = (await upload(`/api/prompt-images?group=${group}&name=${encodeURIComponent(file.name)}`, file)).folder;
     }
-  } catch (e) { formError(e.message); }
-  zone.classList.remove("busy");
-  if (folder) setImagePrompts(folder); else showImagePrompts();
+  }, () => (folder ? setImagePrompts(folder) : showImagePrompts()));
 }
 
 // ---- handoff checkpoints ----
@@ -2981,26 +2997,24 @@ async function chooseCheckpoint(start) {
   return path ? (await post("/api/add-checkpoint", { path })).path : null;
 }
 
-async function browseCheckpoint() {
-  try {
-    const path = await chooseCheckpoint(state.handoff_file);
-    if (!path) return;
-    await loadCheckpoints();
-    pickCheckpoint(path);
-    loadFolders();
-  } catch (e) { formError(e.message); }
-}
+const browseCheckpoint = reporting(async () => {
+  const path = await chooseCheckpoint(state.handoff_file);
+  if (!path) return;
+  await loadCheckpoints();
+  pickCheckpoint(path);
+  loadFolders();
+});
 
 // ---- render ----
 function formError(msg) {
-  $("formError").textContent = msg || "";
-  $("formError").hidden = !msg;
+  showError("formError", msg);
   if (msg && state.controls_closed) { state.controls_closed = false; showControlsPanel(); save(); }  // so the reason shows
 }
 
 async function startRender() {
   formError("");
-  regionsBeforeRender();
+  const waiting = stageBeforeRender();  // an editor open over the stage keeps or asks about its work first
+  if (waiting) { formError(waiting); return; }
   readControls();
   const prompts = promptLines();
   if (!prompts.length || /^\d+\s*:/.test(prompts[0])) { formError("Add a prompt first."); $("prompt").focus(); return; }
@@ -3021,25 +3035,11 @@ async function startRender() {
   } catch (e) { formError(e.message); }
 }
 
-function setStage(src, video) {
-  const player = $("stageVideo");
-  if (video) {
-    if (player.getAttribute("src") !== video) { player.src = video; player.play().catch(() => {}); }
-  } else {
-    player.pause();
-    player.removeAttribute("src");
-    $("stageImg").src = src;
-  }
-  player.hidden = !video;
-  $("stageImg").hidden = !!video;
-  $("stageEmpty").hidden = true;
-}
-
 /* Loads a preview off-screen and shows it once it's whole, so one that fails to load, or a newer one that
    overtakes it, never blanks the stage. */
 function showPreview(url, rev) {
   const next = new Image();
-  next.onload = () => { if (rev === previewRev) setStage(url); };
+  next.onload = () => { if (rev === previewRev) showOnStage(url, "", { preview: true }); };
   next.src = url;
 }
 
@@ -3365,7 +3365,7 @@ function isUpscaled(item) {
 function select(item) {
   selected = item;
   carryOn = null;  // a new choice cancels a pending Continue the clip
-  setStage(item.url, item.video);
+  showOnStage(item.url, item.video);
   $("imageActions").hidden = false;
   $("reuseBtn").hidden = isUpscaled(item);
   markSelected();
@@ -3481,7 +3481,7 @@ function imageMenuItems() {
   if ($("upscaler").value && !$("upscaleBtn").hidden) {
     items.push({ label: `Upscale with ${$("upscaler").value}`, run: upscale, disabled: $("upscaleBtn").disabled });
   }
-  if (isLocal()) items.push(null, { label: "Open folder", run: () => post("/api/open-output") });
+  if (isLocal()) items.push(null, { label: "Open folder", run: reporting(() => post("/api/open-output")) });
   return items;
 }
 
@@ -3564,14 +3564,16 @@ async function init() {
   document.querySelectorAll("[data-orientation]").forEach((btn) =>
     btn.addEventListener("click", () => setOrientation(btn.dataset.orientation)));
   $("renderBtn").addEventListener("click", startRender);
-  $("stopBtn").addEventListener("click", () => post("/api/stop"));
+  const stop = reporting(() => post("/api/stop"));
+  $("stopBtn").addEventListener("click", stop);
   $("renderMini").addEventListener("click", startRender);
-  $("stopMini").addEventListener("click", () => post("/api/stop"));
+  $("stopMini").addEventListener("click", stop);
   $("controlsToggle").addEventListener("click", () => {
     state.controls_closed = !state.controls_closed;
     showControlsPanel();
     save();
   });
+  setUpStage();
   setUpRegions();
   setUpErase();
   $("advancedBtn").addEventListener("click", () => $("advanced").showModal());
@@ -3584,18 +3586,19 @@ async function init() {
   });
   $("showWelcome").addEventListener("click", () => { $("help").close(); openWelcome(); });
   $("welcomeStart").addEventListener("click", finishWelcome);
-  $("welcomeOutputBrowse").addEventListener("click", async () => {
+  const welcomeError = (m) => showError("welcomeError", m);
+  $("welcomeOutputBrowse").addEventListener("click", reporting(async () => {
     const path = await browseFolder("Save images to", $("welcomeOutput").value);
     if (path) $("welcomeOutput").value = path;
-  });
-  $("welcomeCheckpointsBrowse").addEventListener("click", async () => {
+  }, welcomeError));
+  $("welcomeCheckpointsBrowse").addEventListener("click", reporting(async () => {
     const path = await browseFolder("Add a checkpoint folder", "", "checkpoint-folder");
-    if (path) $("welcomeCheckpoints").value = [$("welcomeCheckpoints").value.trim(), path].filter(Boolean).join("\n");
-  });
-  $("welcomeUpscalersBrowse").addEventListener("click", async () => {
+    if (path) addFolderLine($("welcomeCheckpoints"), path);
+  }, welcomeError));
+  $("welcomeUpscalersBrowse").addEventListener("click", reporting(async () => {
     const path = await browseFolder("Add an upscaler folder", "");
-    if (path) $("welcomeUpscalers").value = [$("welcomeUpscalers").value.trim(), path].filter(Boolean).join("\n");
-  });
+    if (path) addFolderLine($("welcomeUpscalers"), path);
+  }, welcomeError));
   $("advClose").addEventListener("click", () => $("advanced").close());
   $("helpBtn").addEventListener("click", () => $("help").showModal());
   $("helpClose").addEventListener("click", () => $("help").close());
@@ -3604,14 +3607,14 @@ async function init() {
   }
   $("outputDir").addEventListener("change", saveFolders);
   $("upscaleDirs").addEventListener("change", saveFolders);
-  $("outputBrowse").addEventListener("click", async () => {
+  $("outputBrowse").addEventListener("click", reporting(async () => {
     const path = await browseFolder("Save images to", $("outputDir").value);
     if (path) { $("outputDir").value = path; saveFolders(); }
-  });
-  $("upscaleBrowse").addEventListener("click", async () => {
+  }, folderError));
+  $("upscaleBrowse").addEventListener("click", reporting(async () => {
     const path = await browseFolder("Add an upscaler folder", "", "upscaler");
-    if (path) { $("upscaleDirs").value = [$("upscaleDirs").value.trim(), path].filter(Boolean).join("\n"); saveFolders(); }
-  });
+    if (path) { addFolderLine($("upscaleDirs"), path); saveFolders(); }
+  }, folderError));
   $("galleryToggle").addEventListener("click", () => {
     state.gallery_closed = !state.gallery_closed;
     showGalleryPanel();
@@ -3665,10 +3668,10 @@ async function init() {
     } catch (e) { folderError(e.message); }
     button.disabled = false;
   });
-  $("checkpointBrowse").addEventListener("click", async () => {
+  $("checkpointBrowse").addEventListener("click", reporting(async () => {
     const path = await browseFolder("Add a checkpoint folder", "", "checkpoint-folder");
-    if (path) { $("checkpointDirs").value = [$("checkpointDirs").value.trim(), path].filter(Boolean).join("\n"); saveFolders(); }
-  });
+    if (path) { addFolderLine($("checkpointDirs"), path); saveFolders(); }
+  }, folderError));
   $("hoverHelp").addEventListener("change", () => { state.hover_help = $("hoverHelp").checked; save(); showHoverHelp(); });
   $("browseUp").addEventListener("click", () => browsing && browseTo(browsing.parent || ""));
   $("browsePath").addEventListener("change", () => browseTo($("browsePath").value.trim()));
@@ -3682,10 +3685,12 @@ async function init() {
   $("curveCanvas").addEventListener("pointerdown", curvePointerDown);
   $("curveCanvas").addEventListener("pointermove", curvePointerMove);
   $("curveCanvas").addEventListener("pointerup", curvePointerUp);
+  $("curveCanvas").addEventListener("pointercancel", curvePointerUp);
   $("curveCanvas").addEventListener("dblclick", curveDoubleClick);
   $("scheduleCanvas").addEventListener("pointerdown", schedDown);
   $("scheduleCanvas").addEventListener("pointermove", schedMove);
   $("scheduleCanvas").addEventListener("pointerup", schedUp);
+  $("scheduleCanvas").addEventListener("pointercancel", schedUp);
   $("scheduleCanvas").addEventListener("dblclick", schedDoubleClick);
   $("scheduleText").addEventListener("change", schedTyped);
   $("scheduleDone").addEventListener("click", () => { $("scheduleDialog").close(); sched = null; });
@@ -3699,12 +3704,11 @@ async function init() {
     fillControls();
     save();
   }));
-  $("openFolder").addEventListener("click", () => post("/api/open-output"));
+  $("openFolder").addEventListener("click", reporting(() => post("/api/open-output")));
   $("newFolder").addEventListener("click", startNewFolder);
   $("reuseBtn").addEventListener("click", reuseSettings);
   $("useInitBtn").addEventListener("click", useAsStartImage);
   $("upscaleBtn").addEventListener("click", upscale);
-  document.querySelector(".canvas").addEventListener("contextmenu", openImageMenu);
   $("imageMenu").addEventListener("keydown", moveInImageMenu);
   document.addEventListener("pointerdown", (e) => { if (!$("imageMenu").contains(e.target)) closeImageMenu(); });
   document.addEventListener("scroll", closeImageMenu, true);

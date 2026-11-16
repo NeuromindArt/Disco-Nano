@@ -351,7 +351,7 @@
       <div id="regionEditor" class="region-editor" hidden>
         <div id="regionFrame" class="region-frame"><div id="regionWait" class="stage-wait" hidden><span class="spinner" aria-hidden="true"></span><span>Pausing after this step…</span></div></div>
         <div class="region-bar">
-          <span id="regionNote" class="region-note"></span>
+          <span id="regionNote" class="region-note" role="status"></span>
           <button type="button" id="regionClear" class="default">Clear</button>
           <button type="button" id="regionCancel" class="default">Cancel</button>
           <button type="button" id="regionDone" class="primary">Done</button>
@@ -372,7 +372,7 @@
                 <button type="button" id="fixClone" aria-pressed="false" title="Alt-click a spot to copy from, then paint it over something (C)">Clone</button>
                 <button type="button" id="fixInpaint" aria-pressed="false">Inpaint</button>
               </div>
-              <span id="eraseNote" class="region-note"></span>
+              <span id="eraseNote" class="region-note" role="status"></span>
             </div>
             <div id="inpaintOptions" class="fix-row inpaint-options" hidden>
               <input type="text" id="inpaintPrompt" placeholder="What to paint here, such as a small sailboat" aria-label="What goes here" maxlength="1000" spellcheck="false" autocomplete="off">
@@ -742,6 +742,7 @@
 <div id="imageMenu" class="context-menu" role="menu" aria-label="Image actions" hidden></div>
 <div id="toast" class="toast" role="status" hidden></div>
 <script src="app.js"></script>
+<script src="stage.js"></script>
 <script src="regions.js"></script>
 <script src="erase.js"></script>
 </body>
