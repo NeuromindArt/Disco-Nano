@@ -653,7 +653,9 @@ too few steps left to paint it out. Press the brush on the start image and it op
 inpaint or clone, then press **Apply**. The result is saved as a new image beside the start image, which it
 replaces, so the original is kept, and you can fix more before rendering. It runs on the GPU, or on the
 CPU while a render is running, and takes a few seconds. Inpaint runs on the GPU, so it waits for the
-render to end, and paints one try.
+render to end. It paints tries to choose from, as during a render, each with the erase and clones too:
+choose one and press **Use this**, or **Apply without it** to leave the inpaint out. The model stays
+loaded while the editor is open, so More tries and the next fix don't wait for it.
 
 The brush's size is on the bar, and the **[** and **]** keys and the mouse wheel change it. **E** and
 **C** and **I** switch between Erase, Clone and Inpaint. **Undo**, or Ctrl+Z, takes back the last stroke. Each fix during a

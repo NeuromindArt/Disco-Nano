@@ -44,6 +44,7 @@ Small first's picture and the Controls' picture. Otherwise they would keep pulli
 Run as a script, it fixes an image file, for a start image before a render:
     erase.py --image start.png [--mask mask.png] [--clones clones.json] [--inpaint inpaint.json] --out fixed.png [--device cpu]
 clones.json is a list of {"mask": path, "dx": share of the width, "dy": share of the height}.
+With an inpaint, the page lets you choose from tries, which `erase.py --serve FOLDER` paints: see serve().
 """
 import argparse
 import json
@@ -373,47 +374,158 @@ class Erase:
         return picture * (1 - soft) + filled * soft
 
 
-def erase_image(image_path, mask_path, clones, out_path, device, status=print, inpainting=None):
-    """Erases from an image file what the mask marks, if there is one, inpaints as `inpainting` asks, as the page sends
-    it with its mask as a file, clones the layers over it, and saves the result as a PNG."""
+def prepare(image_path, mask_path, inpainting, device, status):
+    """An image file as a picture of 0 to 1, as it is and with the erase done, and the hard mask of the area to
+    inpaint, cleared by LaMa first when the inpaint starts from a cleared area, or None with nothing to inpaint."""
     image = Image.open(image_path).convert("RGB")
     picture = torch.from_numpy(np.asarray(image, dtype=np.float32) / 255).permute(2, 0, 1)[None]
-    original = picture
+    original, area = picture, None
     if mask_path:
         hard, _ = masks(Image.open(mask_path), image.width, image.height, "cpu")
         if hard.any():
             picture = fill(picture, hard, device, status)
     if inpainting:
-        hard, soft = masks(Image.open(inpainting["mask"]), image.width, image.height, "cpu")
+        hard, _ = masks(Image.open(inpainting["mask"]), image.width, image.height, "cpu")
         if hard.any():
-            import random
-            import handoff
-            import inpaint
+            area = hard
             if inpainting["mode"] == "remove":
                 picture = fill(picture, hard, device, status)
-            unit = lambda m: Image.fromarray((m[0, 0].numpy() * 255).round().astype(np.uint8))
-            model = handoff.load(inpainting["file"], status, device)
-            painted, _ = inpaint.paint(model, inpaint.to_pil(picture), unit(hard), inpainting["prompt"],
-                                    inpainting["strength"], inpainting["steps"], inpainting["guidance"],
-                                    random.randint(0, 2**32 - 1), status, context=inpainting.get("context", inpaint.CONTEXT),
-                                    grow_by=inpainting.get("grow", inpaint.GROW), blend=inpainting.get("blend", inpaint.BLEND))
-            picture = inpaint.from_pil(painted, picture)
-    layers = read_clones(clones, image.width, image.height, "cpu")
-    if layers:
-        copied, cloned = clone(original, layers)
-        picture = picture * (1 - cloned) + copied * cloned
-    Image.fromarray((picture[0].permute(1, 2, 0).clamp(0, 1).numpy() * 255).round().astype(np.uint8)).save(out_path)
+    return original, picture, area
+
+
+def inpaint_image(model, picture, hard, inpainting, status, stopped=lambda: False):
+    """The picture with the area repainted by `model`, as `inpainting` asks, with a seed of its own."""
+    import inpaint
+    unit = Image.fromarray((hard[0, 0].numpy() * 255).round().astype(np.uint8))
+    painted, _ = inpaint.paint(model, inpaint.to_pil(picture), unit, inpainting["prompt"], inpainting["strength"],
+                               inpainting["steps"], inpainting["guidance"], random.randint(0, 2**32 - 1), status, stopped,
+                               context=inpainting.get("context", inpaint.CONTEXT), grow_by=inpainting.get("grow", inpaint.GROW),
+                               blend=inpainting.get("blend", inpaint.BLEND))
+    return inpaint.from_pil(painted, picture)
+
+
+def with_clones(original, picture, clones):
+    """The picture with the clone layers copied over it, from the image as it was before any fix."""
+    layers = read_clones(clones, original.shape[-1], original.shape[-2], "cpu")
+    if not layers:
+        return picture
+    copied, cloned = clone(original, layers)
+    return picture * (1 - cloned) + copied * cloned
+
+
+def save_png(picture, path):
+    Image.fromarray((picture[0].permute(1, 2, 0).clamp(0, 1).numpy() * 255).round().astype(np.uint8)).save(path)
+
+
+def erase_image(image_path, mask_path, clones, out_path, device, status=print, inpainting=None):
+    """Erases from an image file what the mask marks, if there is one, inpaints as `inpainting` asks, as the page sends
+    it with its mask as a file, clones the layers over it, and saves the result as a PNG."""
+    original, picture, area = prepare(image_path, mask_path, inpainting, device, status)
+    if area is not None:
+        import handoff
+        picture = inpaint_image(handoff.load(inpainting["file"], status, device), picture, area, inpainting, status)
+    save_png(with_clones(original, picture, clones), out_path)
+
+
+IDLE = 600  # seconds the tries server waits for an ask before it ends, and lets the model go
+
+
+def stdin_closed():
+    """Whether the server closed this process's stdin, or ended, seen without reading it: on Windows, a read waiting
+    on a pipe holds up everything else that touches it, such as starting a process, which loading a model does."""
+    import sys
+    if os.name == "nt":
+        import ctypes
+        import msvcrt
+        waiting = ctypes.c_ulong()
+        return not ctypes.windll.kernel32.PeekNamedPipe(msvcrt.get_osfhandle(sys.stdin.fileno()), None, 0, None,
+                                                        ctypes.byref(waiting), None)
+    import select
+    return bool(select.select([sys.stdin], [], [], 0)[0]) and not sys.stdin.read(1)
+
+
+def serve(folder, device):
+    """Paints the start image's inpaint tries as the server asks for them, with the Inpaint model kept loaded between
+    asks, so More tries and the next fix don't wait for it to load again.
+
+    The server writes each ask to ask.json in `folder`: {"id", "upto": how many tries it wants in all, "image",
+    "mask", "clones", "inpaint"}, as the CLI reads them. A new id starts over, and stops a try being painted for the
+    one before; the same id with a higher `upto` paints more. Each try is the whole fix, erase and clones too, saved
+    as try-{id}-{k}.png and told on stdout as an @@EVT line. It ends when its stdin closes, which the server does when
+    the editor or the app closes, stopping a try between its steps, or after IDLE seconds without an ask."""
+    import gc
+    import time
+    import handoff
+
+    def event(**e):
+        print("@@EVT " + json.dumps(e), flush=True)
+
+    status = lambda message: event(type="status", message=message)
+    path, seen, ask = os.path.join(folder, "ask.json"), None, None
+
+    def latest():
+        nonlocal seen, ask
+        try:
+            changed = os.path.getmtime(path)
+            if changed != seen:
+                with open(path, encoding="utf-8") as f:
+                    ask = json.load(f)
+                seen = changed
+        except (OSError, ValueError):
+            pass  # none yet, or one being written
+        return ask
+
+    model, model_file, prepared, made, failed, waited = None, None, None, 0, None, time.time()
+    while not stdin_closed():
+        asked = latest()
+        if asked is None or (prepared and prepared["id"] == asked["id"] and made >= asked["upto"]) or failed == (asked["id"], asked["upto"]):
+            if time.time() - waited > IDLE:
+                return
+            time.sleep(0.2)
+            continue
+        waited = time.time()
+        superseded = lambda: stdin_closed() or latest()["id"] != asked["id"]
+        try:
+            if not prepared or prepared["id"] != asked["id"]:
+                prepared, made = None, 0
+                original, picture, area = prepare(asked["image"], asked.get("mask"), asked["inpaint"], device, status)
+                prepared = {"id": asked["id"], "original": original, "picture": picture, "area": area}
+            if model_file != asked["inpaint"]["file"]:
+                model = None
+                gc.collect()
+                torch.cuda.empty_cache()
+                model, model_file = handoff.load(asked["inpaint"]["file"], status, device), asked["inpaint"]["file"]
+            painted = prepared["picture"]
+            if prepared["area"] is not None:
+                painted = inpaint_image(model, painted, prepared["area"], asked["inpaint"], status, superseded)
+            save_png(with_clones(prepared["original"], painted, asked.get("clones") or []), os.path.join(folder, f"try-{asked['id']}-{made}.png"))
+            event(type="tried", id=asked["id"], k=made)
+            made += 1
+        except KeyboardInterrupt:
+            if not superseded():
+                raise
+        except Exception as e:
+            traceback.print_exc()
+            reason = str(e).strip().splitlines()[0][:200] if str(e).strip() else type(e).__name__
+            event(type="tried", id=asked["id"], error=f"Inpainting failed: {reason}")
+            failed = (asked["id"], asked["upto"])
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--image", required=True)
+    parser.add_argument("--image")
     parser.add_argument("--mask")
     parser.add_argument("--clones", help="a JSON file of clone layers")
     parser.add_argument("--inpaint", help="a JSON file of what to inpaint, as the server writes it")
-    parser.add_argument("--out", required=True)
+    parser.add_argument("--out")
+    parser.add_argument("--serve", metavar="FOLDER", help="paint inpaint tries as the server asks for them in this folder")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
+    if args.serve:
+        serve(args.serve, torch.device(args.device))
+        raise SystemExit
+    if not (args.image and args.out):
+        parser.error("--image and --out are needed to fix an image")
     clones = []
     if args.clones:
         with open(args.clones, encoding="utf-8") as f:

@@ -42,13 +42,14 @@ function cloneCanvas() { return $("cloneCanvas"); }
 function inpaintCanvas() { return $("inpaintCanvas"); }
 function inpaintModel() { return lookValue("inpaint_file"); }
 const INPAINT_START = { mode: "fresh", strength: 85, tries: 2 };  // what Inpaint starts from, how much it repaints, how many tries
-// Inpaint's tries during a pause: {id, key, made: [url], painting, error}, or null. `key` is what was asked, so a change
-// to the area, the prompt or the settings shows the tries are out of date. `tryShown` is the try on the stage, or null
-// for the picture as it paused; `pausedSrc` puts that picture back.
+// Inpaint's tries, during a pause or on the start image: {id, key, made: [url], painting, error}, or null. `key` is
+// what was asked, so a change to the area, the prompt or the settings shows the tries are out of date. `tryShown` is
+// the try on the stage, or null for the picture without it; `pausedSrc` puts that picture back.
 let inpaintTries = null;
 let tryShown = null;
 let pausedSrc = null;
 let inpaintEdits = 0;  // counts changes to the inpaint area, for `key`
+let otherEdits = 0;    // and to the erase and clones, which a start image's tries include
 
 function erasable(t) {
   return !!t?.active && t.kind === "render" && !animating();
@@ -101,6 +102,7 @@ function showEraseEditor() {
 function closeErase(restore = true) {
   const was = eraseMode;
   dropTries();
+  if (was === "image") post("/api/image-tries/close", {}).catch(() => {});  // the Inpaint model can go; it ends by itself too
   eraseMode = null;
   $("eraseEditor").hidden = true;
   $("eraseRing").hidden = true;
@@ -137,6 +139,7 @@ function sizeEraseCanvas(clear = true) {
   erasePainted = false;
   eraseUndo.length = 0;
   inpaintEdits++;
+  otherEdits++;
   showEraseBar(lastStatus?.task);
 }
 
@@ -227,7 +230,7 @@ function keepUndo(record) {
 function eraseStroke(start, canvas) {
   const ctx = canvas.getContext("2d");
   const color = canvas === inpaintCanvas() ? "#a855f7" : "#ff3b3b";
-  if (canvas === inpaintCanvas()) inpaintEdits++;
+  if (canvas === inpaintCanvas()) inpaintEdits++; else otherEdits++;
   keepUndo({ canvas, before: ctx.getImageData(0, 0, canvas.width, canvas.height) });
   Object.assign(ctx, { strokeStyle: color, fillStyle: color, lineCap: "round", lineJoin: "round", lineWidth: brushWidth() });
   ctx.beginPath();
@@ -255,6 +258,7 @@ function cloneStroke(start) {
     clonePictureTaken = true;
   }
   if (!cloneOffset) cloneOffset = { dx: Math.round(cloneSource.x - start[0]), dy: Math.round(cloneSource.y - start[1]) };
+  otherEdits++;
   const shown = cloneCanvas().getContext("2d");
   const record = { shown: shown.getImageData(0, 0, cloneCanvas().width, cloneCanvas().height) };
   if (cloneNewLayer || !cloneLayers.length) {
@@ -320,7 +324,7 @@ function undoErasePaint() {
   const stroke = eraseUndo.pop();
   if (!stroke) return;
   showTry(null);
-  if (stroke.canvas === inpaintCanvas()) inpaintEdits++;
+  if (stroke.canvas === inpaintCanvas()) inpaintEdits++; else otherEdits++;
   if (stroke.canvas) stroke.canvas.getContext("2d").putImageData(stroke.before, 0, 0);
   else {
     cloneCanvas().getContext("2d").putImageData(stroke.shown, 0, 0);
@@ -411,12 +415,13 @@ function fixBody() {
 /* What an ask for tries depends on, so tries painted for another area, prompt or setting show as out of date. */
 function askKey() {
   return JSON.stringify([inpaintEdits, $("inpaintPrompt").value, $("inpaintMode").value, $("inpaintStrength").value,
-    ...["inpaint_file", "inpaint_steps", "inpaint_guidance", "inpaint_context", "inpaint_grow", "inpaint_blend"].map(lookValue)]);
+    ...["inpaint_file", "inpaint_steps", "inpaint_guidance", "inpaint_context", "inpaint_grow", "inpaint_blend"].map(lookValue),
+    ...(eraseMode === "image" ? [otherEdits, state.init_image] : [])]);  // a start image's tries are the whole fix
 }
 
-/* Tries come during a paused render, for an inpaint painted now. */
+/* Tries come for an inpaint painted now, during a paused render or on the start image. */
 function usesTries() {
-  return eraseMode === "render" && !!inpaintModel() && paintedOn(inpaintCanvas());
+  return !!eraseMode && !!inpaintModel() && paintedOn(inpaintCanvas());
 }
 
 function triesCurrent() {
@@ -432,6 +437,7 @@ function showTry(k) {
   if (k !== null) img.src = inpaintTries.made[k];
   tryShown = k;
   $("eraseFrame").classList.toggle("trying", k !== null);
+  $("eraseFrame").classList.toggle("whole", eraseMode === "image");  // a start image's try has the erase and clones in it
   showTryRow();
   showEraseBar(lastStatus?.task);
 }
@@ -446,27 +452,30 @@ function dropTries() {
   showTryRow();
 }
 
+/* A start image's tries are the whole fix, erase and clones too, so the one chosen becomes the new start image. */
 async function askTries(more) {
-  const inpaint = fixBody().inpaint;
-  if (!inpaint) return;
-  delete inpaint.chosen;
+  const body = fixBody();
+  if (!body.inpaint) return;
+  delete body.inpaint.chosen;
   const count = Number($("inpaintCount").value);
+  more = !!more && triesCurrent();
   if (!more) showTry(null);
   try {
-    const r = await post("/api/inpaint-tries", { inpaint, count, more: !!more && triesCurrent() });
-    inpaintTries = more && triesCurrent() ? { ...inpaintTries, painting: true, error: null }
+    const r = eraseMode === "image" ? await post("/api/image-tries", { path: state.init_image, ...body, count, more })
+      : await post("/api/inpaint-tries", { inpaint: body.inpaint, count, more });
+    inpaintTries = more && r.id === inpaintTries.id ? { ...inpaintTries, painting: true, error: null }
       : { id: r.id, key: askKey(), made: [], painting: true, error: null, auto: true };
   } catch (e) { formError(e.message); }
   showTryRow();
   showEraseBar(lastStatus?.task);
 }
 
-/* The tries in a status, as they come. The first one goes on the stage by itself. */
-function takeTries(t) {
-  const sent = t?.tries;
+/* The tries in a status, as they come: the render's own, or the start image's. The first one goes on the stage by
+   itself. */
+function takeTries(sent) {
   if (!inpaintTries || !sent || sent.id !== inpaintTries.id) return;
   const before = inpaintTries.made.length;
-  Object.assign(inpaintTries, { made: sent.made, painting: sent.painting, error: sent.error });
+  Object.assign(inpaintTries, { made: sent.made, painting: sent.painting, error: sent.error, message: sent.message || "" });
   if (sent.error && sent.error !== inpaintTries.shownError) { inpaintTries.shownError = sent.error; formError(sent.error); }
   if (inpaintTries.auto && before === 0 && sent.made.length) { inpaintTries.auto = false; showTry(0); }
   else if (sent.made.length !== before || !sent.painting) showTryRow();
@@ -478,7 +487,7 @@ function tryTile(label, src, k) {
   tile.className = "try-tile";
   tile.setAttribute("role", "option");
   tile.setAttribute("aria-selected", String(tryShown === k));
-  tile.title = k === null ? "The picture as it paused, without the inpaint" : `Use try ${k + 1}`;
+  tile.title = k !== null ? `Use try ${k + 1}` : eraseMode === "image" ? "The start image, without the inpaint" : "The picture as it paused, without the inpaint";
   if (src) {
     const img = document.createElement("img");
     img.src = src;
@@ -494,7 +503,7 @@ function tryTile(label, src, k) {
 }
 
 function showTryRow() {
-  const shown = !!inpaintTries && eraseMode === "render";
+  const shown = !!inpaintTries && !!eraseMode;
   $("inpaintTryRow").hidden = !shown;
   if (!shown) return;
   const tiles = [tryTile("Before", pausedSrc || $("stageImg").getAttribute("src"), null)];
@@ -511,9 +520,9 @@ function showTryRow() {
 }
 
 async function eraseDone() {
-  if (eraseMode === "image") return eraseImage();
   if (usesTries() && !triesCurrent()) return askTries(false);  // the inpaint is painted first, to choose from
   if (usesTries() && inpaintTries.painting && tryShown === null) return;
+  if (eraseMode === "image") return eraseImage();
   const body = erasePainted ? fixBody() : null;
   if (body?.inpaint && usesTries() && tryShown === null) body.inpaint = null;  // Before: carry on without it
   const fresh = Number($("eraseFresh").value) / 100;
@@ -524,15 +533,19 @@ async function eraseDone() {
   } catch (e) { formError(e.message); }
 }
 
-/* Fixes the start image, which becomes the new image, and leaves the editor open to fix more. */
+/* Fixes the start image, which becomes the new image, and leaves the editor open to fix more. With tries, the one on
+   the stage is the fix; Before applies the erase and clones without the inpaint. */
 async function eraseImage() {
   if (!erasePainted || eraseBusy) return;
+  const chosen = usesTries() && tryShown !== null ? { id: inpaintTries.id, k: tryShown } : null;
   const body = fixBody();
-  if (!body.mask && !body.clones.length && !body.inpaint) return;
+  if (usesTries()) body.inpaint = null;
+  if (!chosen && !body.mask && !body.clones.length && !body.inpaint) return;
   eraseBusy = true;
   showEraseBar();
   try {
-    const r = await post("/api/erase-image", { path: state.init_image, ...body });
+    const r = chosen ? await post("/api/image-tries/use", chosen) : await post("/api/erase-image", { path: state.init_image, ...body });
+    dropTries();
     readControls();
     Object.assign(state, { init_image: r.path, init_name: r.name, init_url: r.url || "", init_size: r.size });
     save();
@@ -585,23 +598,25 @@ function showEraseBar(t) {
     $("eraseFresh").value = Math.round(freshShare(t.at ?? 0) * 20) * 5;  // in the slider's steps of 5%
     showFresh();
   }
-  const trying = !image && ready && usesTries();
+  const trying = ready && usesTries();
   const painting = trying && triesCurrent() && inpaintTries.painting && tryShown === null;
-  $("inpaintCountBox").hidden = image;
-  $("eraseDone").textContent = image ? "Apply"
-    : trying && !triesCurrent() ? "Inpaint"
+  // Before, on the start image, applies the erase and clones without the inpaint, so with neither there's nothing to apply
+  const without = image && trying && tryShown === null && !cloneLayers.length && !paintedOn(eraseCanvas());
+  $("eraseDone").textContent = trying && !triesCurrent() ? "Inpaint"
     : painting ? "Painting…"
+    : image ? (trying ? (tryShown === null ? "Apply without it" : "Use this") : "Apply")
     : trying && tryShown === null ? "Continue without it"
     : erasePainted ? (trying ? "Use this and continue" : "Apply and continue") : "Continue";
-  $("eraseDone").title = trying && !triesCurrent() ? "Paint the tries, then choose one before the render carries on" : "";
-  $("eraseDone").disabled = !ready || (image && !erasePainted) || painting;
+  $("eraseDone").title = !trying || triesCurrent() ? "" : image ? "Paint the tries, then choose one" : "Paint the tries, then choose one before the render carries on";
+  $("eraseDone").disabled = !ready || (image && !erasePainted) || painting || (image && triesCurrent() && without);
   $("eraseCancel").textContent = image ? "Close" : "Cancel and continue";
   let note;
   if (image && eraseBusy) note = "Fixing the start image…";
   else if (!ready) note = "Pausing after this step…";
   else if (cloning) note = cloneSource ? "Paint to copy. Alt-click for a new source." : "Alt-click where to copy from, then paint.";
   else if (trying && triesCurrent() && (inpaintTries.made.length || inpaintTries.painting)) {
-    note = inpaintTries.painting && !inpaintTries.made.length ? "Painting the tries…" : "Choose a try. Before carries on without it.";
+    if (inpaintTries.painting && !inpaintTries.made.length) note = image && inpaintTries.message ? `Painting the tries: ${inpaintTries.message}` : "Painting the tries…";
+    else note = image ? "Choose a try. Before leaves the inpaint out." : "Choose a try. Before carries on without it.";
   } else if (fixTool === "inpaint") note = "Paint where something should go, and say what in the box.";
   else note = image ? "Paint over what to remove from the start image." : "Paint over what to remove.";
   if (!image && ready && t) note = `Step ${t.step} of ${t.total}. ${note}`;
@@ -634,6 +649,10 @@ function showEraseTask(t) {
   const running = !!t?.active && t.kind === "render";
   if (eraseMode === "image") {
     if (t?.active) closeErase();  // a render started: the stage is the render's again
+    else if (inpaintTries) {
+      takeTries(lastStatus?.image_tries);
+      showEraseBar();
+    }
     showEraseButton(t);
     return;
   }
@@ -645,7 +664,7 @@ function showEraseTask(t) {
     else {
       if (!eraseHeld && t.state === "paused") sizeEraseCanvas(false);  // the paused step's preview, at its own size
       eraseHeld ||= held;
-      takeTries(t);
+      takeTries(t.tries);
       showEraseBar(t);
     }
   }
@@ -705,6 +724,7 @@ function setUpErase() {
   $("stageImg").addEventListener("load", () => {
     if (eraseMode === "image") {
       const img = $("stageImg");
+      if (tryShown !== null) { placeEraseFrame(); return; }  // a try on the stage, in place of the start image
       if (img.getAttribute("src") !== state.init_url) closeErase(false);  // something else took the stage
       else sizeEraseCanvas(false);  // only a new size resets the painting, so strokes made while it loaded stay
     }

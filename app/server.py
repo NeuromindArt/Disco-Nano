@@ -207,6 +207,7 @@ def render_in_worker(label, job_id, job_dir, sig, keep_models):
     if _worker is not None and (not _worker.alive() or _worker.sig != sig):
         _worker.close()
         _worker = None
+    close_tries()  # the start image's Inpaint model leaves the GPU and RAM to the render
     take_idle_reading()
     if _worker is None:
         _worker = Worker(sig)
@@ -541,6 +542,7 @@ def safe_output_path(rel):
 
 def spawn(kind, label, cmd, job_id, job_dir):
     global current
+    close_tries()  # the start image's Inpaint model leaves the GPU and RAM to the job
     take_idle_reading()
     env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT)
     # Below normal priority: a render still gets every idle cycle, but Windows serves the desktop first,
@@ -767,11 +769,12 @@ def status(request: Request):
     with lock:
         task = task_json(current)
         fetching = downloads_json()
+        tried = _tries.json() if _tries else None
     system_free = shutil.disk_usage(os.environ.get("SystemDrive", "C:") + os.sep).free
     idle_gpu, idle_ram = idle_memory()
     return {"gpu": gpu_info(), "ram": ram_info(), "other_gpu_app": other_gpu_app(), "disk": disk_info(),
             "idle": {"gpu": idle_gpu, "ram": idle_ram}, "local": is_local(request), "machine": socket.gethostname(),
-            "version": paths.VERSION, "system_free_gb": round(system_free / 2**30, 1), "task": task, "downloads": fetching}
+            "version": paths.VERSION, "system_free_gb": round(system_free / 2**30, 1), "task": task, "downloads": fetching, "image_tries": tried}
 
 
 @app.post("/api/plan")
@@ -946,16 +949,9 @@ def erase_image(body: dict):
     and clones the layers over it. The result is a new image beside the start images, so the original is kept. LaMa
     runs in a process of its own: on the GPU when nothing is rendering, and on the CPU while a render is, so the two
     don't compete for VRAM."""
-    path = str(body.get("path") or "")
-    if not os.path.isfile(path) or image_size(path) is None:
-        raise HTTPException(400, "The start image is missing. Drop it again.")
+    path = start_image(body)
     mask, clones, inpainting = fix_from(body)
-    stem = re.sub(r"_(erased|fixed)\d*$", "", os.path.splitext(os.path.basename(path))[0])
-    n = 1
-    while os.path.exists(os.path.join(INIT_DIR, f"{stem}_fixed{n}.png")):
-        n += 1
-    out = os.path.join(INIT_DIR, f"{stem}_fixed{n}.png")
-    os.makedirs(INIT_DIR, exist_ok=True)
+    out = fixed_path(path)
     with tempfile.TemporaryDirectory() as temp:
         cmd = [PYTHON, "-B", os.path.join(APP_DIR, "erase.py"), "--image", path, "--out", out]
         if mask is not None:
@@ -984,7 +980,158 @@ def erase_image(body: dict):
     if run.returncode or not os.path.isfile(out):
         lines = [l for l in (run.stderr or run.stdout or "").splitlines() if l.strip()]
         raise HTTPException(500, "Fixing failed" + (f": {lines[-1][-300:]}" if lines else "."))
-    return {"path": out, "name": os.path.basename(out), "size": image_size(out), "url": input_url(out)}
+    return start_image_json(out)
+
+
+def start_image(body):
+    path = str(body.get("path") or "")
+    if not os.path.isfile(path) or image_size(path) is None:
+        raise HTTPException(400, "The start image is missing. Drop it again.")
+    return path
+
+
+def fixed_path(path):
+    """Where a fix of the start image at `path` goes: beside the start images, as a new image, so the original is kept."""
+    stem = re.sub(r"_(erased|fixed)\d*$", "", os.path.splitext(os.path.basename(path))[0])
+    n = 1
+    while os.path.exists(os.path.join(INIT_DIR, f"{stem}_fixed{n}.png")):
+        n += 1
+    os.makedirs(INIT_DIR, exist_ok=True)
+    return os.path.join(INIT_DIR, f"{stem}_fixed{n}.png")
+
+
+def start_image_json(path):
+    return {"path": path, "name": os.path.basename(path), "size": image_size(path), "url": input_url(path)}
+
+
+class Tries:
+    """The start image's inpaint tries, to choose from as during a render. erase.py --serve paints them, in a process
+    that keeps the Inpaint model loaded while the editor is open, so More tries and the next fix don't wait for it to
+    load again. It ends when the editor closes, a render starts or the app closes, and by itself when left idle."""
+    asks = 0  # ask ids go on counting across processes, so a page never takes a new process's tries for an old one's
+
+    def __init__(self):
+        self.job_id, self.folder = new_job_dir("tries")
+        env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8", DISCO_NANO_HOME=ROOT)
+        self.proc = subprocess.Popen([PYTHON, "-B", os.path.join(APP_DIR, "erase.py"), "--serve", self.folder],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                     encoding="utf-8", errors="replace", cwd=ROOT, env=env,
+                                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+        self.id, self.made, self.asked, self.error, self.message, self.last = 0, [], 0, None, "", None
+        threading.Thread(target=self.read, daemon=True).start()
+
+    def alive(self):
+        return self.proc.poll() is None
+
+    def read(self):
+        with open(os.path.join(self.folder, "run.log"), "a", encoding="utf-8", errors="replace") as log:
+            for raw in self.proc.stdout:
+                line = raw.rstrip("\r\n")
+                log.write(line + "\n")
+                log.flush()
+                if not line.startswith("@@EVT "):
+                    continue
+                try:
+                    e = json.loads(line[6:])
+                except ValueError:
+                    continue
+                with lock:
+                    if e.get("type") == "status":
+                        self.message = str(e.get("message") or "")
+                    elif e.get("type") == "tried" and e.get("id") == self.id:
+                        if e.get("error"):
+                            self.error, self.asked = e["error"], len(self.made)
+                        else:
+                            self.made.append(e["k"])
+        code = self.proc.wait()
+        with lock:
+            if self.asked > len(self.made):  # it ended in the middle of a try
+                self.error, self.asked = f"Inpainting stopped unexpectedly (code {code}).", len(self.made)
+
+    def ask(self, path, mask, clones, inpainting, count, more):
+        """Asks for `count` more tries of the fix, or starts over unless `more`. Returns the ask's id."""
+        if not more or not self.last or self.last["image"] != path:
+            Tries.asks += 1
+            self.id = Tries.asks
+            self.made, self.asked = [], 0
+            stem = os.path.join(self.folder, str(self.id))
+            if mask is not None:
+                mask.save(stem + "-erase.png")
+            inpainting["mask"].save(stem + "-inpaint.png")
+            self.last = {"id": self.id, "image": path, "mask": stem + "-erase.png" if mask is not None else None,
+                         "clones": save_clones(clones, self.folder, f"{self.id}-clone"),
+                         "inpaint": {**{k: v for k, v in inpainting.items() if k != "chosen"}, "mask": stem + "-inpaint.png"}}
+        self.asked += count
+        self.error = None
+        temp = os.path.join(self.folder, "ask.tmp")
+        with open(temp, "w", encoding="utf-8") as f:
+            json.dump({**self.last, "upto": self.asked}, f)
+        os.replace(temp, os.path.join(self.folder, "ask.json"))  # whole before the process reads it
+        return self.id
+
+    def json(self):
+        return {"id": self.id, "made": [f"/api/try/{self.job_id}/{self.id}/{k}" for k in self.made],
+                "painting": self.asked > len(self.made), "error": self.error, "message": self.message}
+
+    def close(self):
+        """Ends the process, which lets the model go. Closing its stdin ends it between a try's steps; one still
+        loading the model can't see that, and is ended outright. The venv's launcher takes the Python it started
+        with it."""
+        try:
+            self.proc.stdin.close()
+        except OSError:
+            pass
+        threading.Timer(10, lambda: self.proc.poll() is None and self.proc.terminate()).start()
+
+
+_tries = None
+
+
+def close_tries():
+    global _tries
+    if _tries is not None:
+        _tries.close()
+        _tries = None
+
+
+@app.post("/api/image-tries")
+def image_tries(body: dict):
+    """Paints `count` tries, 1 to 4, of a fix of the start image with an inpaint, for the page to choose from: each is
+    the whole fix, erase and clones too. `more` adds them to the tries already painted for the same ask; otherwise they
+    start over. Each shows in the status's image_tries as it's ready."""
+    global _tries
+    path = start_image(body)
+    mask, clones, inpainting = fix_from(body)
+    count = body.get("count")
+    if inpainting is None or isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 4:
+        raise HTTPException(400, "Ask for 1 to 4 tries of an inpaint.")
+    with lock:
+        if current and current.running():  # the model and a render won't share the GPU
+            raise HTTPException(409, "Inpaint the start image when no render is running.")
+        if _tries is None or not _tries.alive():
+            _tries = Tries()
+        return {"id": _tries.ask(path, mask, clones, inpainting, count, bool(body.get("more")))}
+
+
+@app.post("/api/image-tries/use")
+def use_image_try(body: dict):
+    """Makes the chosen try the start image, saved beside the start images as a new image."""
+    with lock:
+        tries = _tries
+        if tries is None or body.get("id") != tries.id or body.get("k") not in tries.made:
+            raise HTTPException(409, "That try is gone. Paint the tries again.")
+        made, image = os.path.join(tries.folder, f"try-{tries.id}-{body['k']}.png"), tries.last["image"]
+    out = fixed_path(image)
+    shutil.copyfile(made, out)
+    return start_image_json(out)
+
+
+@app.post("/api/image-tries/close")
+def close_image_tries():
+    """The editor closed over the start image: the tries process ends and lets the model go."""
+    with lock:
+        close_tries()
+    return {"ok": True}
 
 
 def refuse_erase(task):
@@ -1144,13 +1291,14 @@ def inpaint_tries(body: dict):
 
 @app.get("/api/try/{job_id}/{ask}/{k}")
 def inpaint_try(job_id: str, ask: int, k: int):
-    """One inpaint try's picture, the size of the render."""
+    """One inpaint try's picture, the size of the render or the start image."""
     if not re.fullmatch(r"[0-9A-Za-z-]+", job_id):
         raise HTTPException(400, "Bad job id.")
-    path = os.path.join(JOBS_DIR, job_id, f"try-{ask}-{k}.jpg")
-    if not os.path.isfile(path):
-        raise HTTPException(404, "No such try.")
-    return FileResponse(path, headers={"Cache-Control": "no-store"})
+    for ext in ("jpg", "png"):  # a render's tries, or the start image's, which become start images
+        path = os.path.join(JOBS_DIR, job_id, f"try-{ask}-{k}.{ext}")
+        if os.path.isfile(path):
+            return FileResponse(path, headers={"Cache-Control": "no-store"})
+    raise HTTPException(404, "No such try.")
 
 
 @app.get("/api/preview/{job_id}")
@@ -1825,4 +1973,5 @@ if __name__ == "__main__":
     threading.Thread(target=open_when_ready, daemon=True).start()
     import atexit
     atexit.register(close_worker)  # the worker also ends by itself when this process's end closes its stdin
+    atexit.register(close_tries)  # and so does the start image's tries process
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")

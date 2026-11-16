@@ -471,6 +471,9 @@ body.no-grid .canvas { background-image: none; }  /* Settings: Grid behind the p
 }
 .try-tile.painting { display: flex; align-items: center; justify-content: center; cursor: progress; }
 .erase-frame.trying #inpaintCanvas { visibility: hidden; }  /* a try on the stage shows as it would be used */
+/* A start image's try is the whole fix, erase and clones too. The erase layer still takes the brush. */
+.erase-frame.trying.whole #cloneCanvas { visibility: hidden; }
+.erase-frame.trying.whole #eraseCanvas { opacity: 0; }
 .fix-late {
   display: flex; align-items: center; gap: 10px; max-width: 100%; padding: 5px 6px 5px 12px; background: var(--raised);
   border: 1px solid var(--line-control); border-radius: var(--radius-md); color: var(--ink-body); white-space: nowrap;
