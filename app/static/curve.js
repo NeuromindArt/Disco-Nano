@@ -44,11 +44,13 @@ let curveBusy = false, curveAgain = false;
 async function refreshCurve(rescale) {
   if (curveBusy) { curveAgain = true; return; }
   curveBusy = true;
+  const asked = curve;
   const text = keysText(curve.keys);
   if (document.activeElement !== $("curveText")) $("curveText").value = text;
   const frames = Math.max(Number(state.max_frames) || 1, curve.keys.at(-1).f + 1, 2);
   try {
     const r = await api(`/api/curve?text=${encodeURIComponent(text)}&frames=${frames}&shape=${curveShape()}`);
+    if (curve !== asked) return;  // the editor closed, or opened on another setting, while the server worked
     $("curveError").hidden = !r.error;
     $("curveError").textContent = r.error || "";
     if (!r.error) {
@@ -58,7 +60,7 @@ async function refreshCurve(rescale) {
     }
   } finally {
     curveBusy = false;
-    if (curveAgain) { curveAgain = false; refreshCurve(); }
+    if (curveAgain) { curveAgain = false; if (curve) refreshCurve(); }
   }
 }
 
