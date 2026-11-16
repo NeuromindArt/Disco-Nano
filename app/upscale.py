@@ -7,11 +7,11 @@ import argparse
 import os
 import sys
 
-import numpy as np
 import torch
 from PIL import Image
 from spandrel import ModelLoader
 
+from imaging import from_pil, to_pil
 from procs import emit, failure
 
 TILE, OVERLAP = 384, 24
@@ -63,18 +63,16 @@ def main():
         half = desc.supports_half
         if half:
             model.half()
-        pixels = np.asarray(Image.open(a.input).convert("RGB")).astype(np.float32) / 255
-        img = torch.from_numpy(pixels).permute(2, 0, 1)[None]
+        img = from_pil(Image.open(a.input))
         emit("sampling", total_steps=1, n_batches=1)
 
         def on_tile(done, total):
             emit("step", step=done, total=total, batch=0, n_batches=1)
 
         out = upscale(model, device, img, half, on_tile)
-        array = (out.permute(1, 2, 0).numpy() * 255).round().astype(np.uint8)
         stem = os.path.splitext(a.input)[0]
         path = f"{stem}_x{desc.scale}.png"
-        Image.fromarray(array).save(path)
+        to_pil(out[None]).save(path)
         emit("image", path=path)
     except BaseException as e:
         outcome, detail = failure(e)

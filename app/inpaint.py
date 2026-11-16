@@ -19,23 +19,21 @@ What it starts from:
 import numpy as np
 from PIL import Image, ImageFilter
 
+from imaging import grow
+
 MODES = ("fresh", "rework", "remove")
 # As Crop and Stitch sets them: how much of the picture the model sees around an area, as a multiple of the area's
 # size, how many pixels past the area it paints, and how wide the soft edge it goes back through is.
 CONTEXT, GROW, BLEND = 1.2, 10, 20
 LATENT = 16  # picture pixels in a model's latent pixel, at the most: 8, packed 2x2 in the flow models
-FEW_STEPS = ("lightning", "turbo", "hyper", "lcm", "schnell")
 
 
-def defaults(about, path):
-    """Steps and guidance that suit a model, from what the checkpoint list knows about it: its kind, and for
-    Z-Image and Flux their variant's own. Few-step SD and SDXL checkpoints are told apart by their names."""
+def defaults(about):
+    """Steps and guidance that suit a model, from what budget.describe_checkpoint() knows about it: its own, as for
+    Z-Image, Flux and few-step models, or its kind's."""
     if about.get("defaults"):
         own = about["defaults"]
         return {"inpaint_steps": own["handoff_steps"], "inpaint_guidance": own["handoff_guidance"]}
-    name = path.lower()
-    if any(word in name for word in FEW_STEPS):
-        return {"inpaint_steps": 8, "inpaint_guidance": 1.5}
     return {"inpaint_steps": 30, "inpaint_guidance": 7.0 if about.get("kind") == "sd15" else 6.0}
 
 
@@ -46,14 +44,6 @@ def crop_box(mask, width, height, context=CONTEXT):
     top, bottom, left, right = int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1
     across, down = round((right - left) * (context - 1) / 2), round((bottom - top) * (context - 1) / 2)
     return max(left - across, 0), max(top - down, 0), min(right + across, width), min(bottom + down, height)
-
-
-def grow(mask, by):
-    """A numpy mask grown `by` pixels each way, as a square: the most of each row's, then each column's, neighbors."""
-    for axis in (0, 1):
-        padded = np.pad(mask, [(by, by) if a == axis else (0, 0) for a in (0, 1)])
-        mask = np.lib.stride_tricks.sliding_window_view(padded, by * 2 + 1, axis=axis).max(-1)
-    return mask
 
 
 def paint(model, picture, hard, text, strength, steps, guidance, seed, status, stopped=lambda: False, context=CONTEXT,
@@ -91,14 +81,3 @@ def paint(model, picture, hard, text, strength, steps, guidance, seed, status, s
     out = picture.copy()
     out.paste(painted.convert("RGB").resize((box[2] - box[0], box[3] - box[1]), Image.LANCZOS), box[:2], paste.crop(box))
     return out, paste
-
-
-def to_pil(picture):
-    """A 1x3xHxW tensor of 0 to 1 as a PIL image."""
-    return Image.fromarray((picture[0].permute(1, 2, 0).clamp(0, 1).cpu().numpy() * 255).round().astype(np.uint8))
-
-
-def from_pil(image, like):
-    """A PIL image as a tensor like `like`, 1x3xHxW of 0 to 1."""
-    import torch  # here, so the server can read defaults() without loading torch
-    return torch.from_numpy(np.asarray(image.convert("RGB"), dtype=np.float32) / 255).permute(2, 0, 1)[None].to(like.device, like.dtype)

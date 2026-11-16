@@ -7,13 +7,25 @@ import struct
 KINDS = {"zimage": "Z-Image", "flux": "Flux", "flux2": "Flux.2 Klein"}
 
 
-def first_values(path, name, count):
-    """The first `count` values of one tensor in a .safetensors file, as floats."""
+def safetensors_entries(path):
+    """A .safetensors file's table of contents, {tensor name: {"dtype", "shape", "data_offsets"}}, and where its data
+    starts, read without the weights. Raises OSError or ValueError for a file that isn't one."""
     with open(path, "rb") as f:
         length = int.from_bytes(f.read(8), "little")
-        entry = json.loads(f.read(length))[name]
-        size = {"F32": 4, "F16": 2, "BF16": 2, "F8_E4M3": 1}[entry["dtype"]]
-        f.seek(8 + length + entry["data_offsets"][0])
+        if not 0 < length < 200 * 2**20:
+            raise ValueError(f"{os.path.basename(path)} isn't a .safetensors file.")
+        entries = json.loads(f.read(length))
+    entries.pop("__metadata__", None)
+    return entries, 8 + length
+
+
+def first_values(path, name, count):
+    """The first `count` values of one tensor in a .safetensors file, as floats."""
+    entries, data = safetensors_entries(path)
+    entry = entries[name]
+    size = {"F32": 4, "F16": 2, "BF16": 2, "F8_E4M3": 1}[entry["dtype"]]
+    with open(path, "rb") as f:
+        f.seek(data + entry["data_offsets"][0])
         raw = f.read(size * count)
     if entry["dtype"] == "F32":
         return list(struct.unpack(f"<{count}f", raw))
@@ -35,10 +47,10 @@ def header(path):
         import gguf
         reader = gguf.GGUFReader(path)
         return {t.name: list(reversed([int(n) for n in t.shape])) for t in reader.tensors}
-    with open(path, "rb") as f:
-        length = int.from_bytes(f.read(8), "little")
-        found = json.loads(f.read(length)) if 0 < length < 200 * 2**20 else {}
-    found.pop("__metadata__", None)
+    try:
+        found, _ = safetensors_entries(path)
+    except ValueError:
+        return {}
     return {name: entry["shape"] for name, entry in found.items()}
 
 

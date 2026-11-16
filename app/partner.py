@@ -107,45 +107,62 @@ class Capture:
         return maps
 
 
-class Partner:
-    GUIDANCE = 7.5
-    WARMUP_STEPS = 10
+class Weights:
+    """The partner's networks: its UNet and text encoder, Tiny SD's or an SD 1.5 file's, and TAESD to go between
+    pictures and its latents. Loaded into RAM once, and kept between renders by the render worker, as Disco's own
+    models are. The text encoder stays in RAM, where it encodes each render's prompt."""
 
-    def __init__(self, source, file, prompt, height, width, follow, device, status=print):
+    def __init__(self, source, file, status):
         diffusers, transformers = load_packages()
-        self.device, self.follow = device, follow
-        self.strength, self.maps = 0.0, {}
-        self.seen, self.difference, self.watching = {}, {}, False
-        self.height, self.width = height, width
         models.ensure(models.PARTNER, status)  # an SD 1.5 file still uses Tiny SD's tokenizer and text config
         folder = os.path.join(paths.MODELS, models.PARTNER)
         status("Loading the partner model")
         if source == "Tiny SD":
-            self.unet = diffusers.UNet2DConditionModel.from_pretrained(folder, subfolder="unet", torch_dtype=torch.float16)
+            unet = diffusers.UNet2DConditionModel.from_pretrained(folder, subfolder="unet", torch_dtype=torch.float16)
             text_encoder = transformers.CLIPTextModel.from_pretrained(folder, subfolder="text_encoder", torch_dtype=torch.float16)
         else:
             if not os.path.isfile(file):
                 raise ValueError("Set SD 1.5 file in Experiments, under Partner model.")
-            self.unet, text_encoder = self.load_file(file, folder, diffusers, transformers)
-        tokenizer = transformers.CLIPTokenizer.from_pretrained(folder, subfolder="tokenizer")
-        self.unet.requires_grad_(False).eval().to(device)
+            unet, text_encoder = load_file(file, folder, diffusers, transformers)
+        self.unet, self.text_encoder = unet.requires_grad_(False).eval(), text_encoder.requires_grad_(False).eval()
+        self.tokenizer = transformers.CLIPTokenizer.from_pretrained(folder, subfolder="tokenizer")
+        self.encoder = load_taesd(taesd_encoder(), "taesd_encoder", status)
+        self.decoder = load_taesd(taesd_decoder(), "taesd_decoder", status)
 
-        def encode(text):
-            tokens = tokenizer(text, padding="max_length", max_length=77, truncation=True, return_tensors="pt")
-            return text_encoder(tokens.input_ids)[0].to(device)
+    def parts(self):
+        return [self.unet, self.encoder, self.decoder]
 
-        with torch.no_grad():
-            self.text, self.empty = encode(prompt), encode("")
-        del text_encoder, tokenizer
+    @torch.no_grad()
+    def encode(self, text):
+        tokens = self.tokenizer(text, padding="max_length", max_length=77, truncation=True, return_tensors="pt")
+        return self.text_encoder(tokens.input_ids)[0]
 
+
+class Partner:
+    GUIDANCE = 7.5
+    WARMUP_STEPS = 10
+
+    def __init__(self, weights, prompt, height, width, follow, device):
+        """The partner for one render, from `weights`, which come to the GPU for it."""
+        self.device, self.follow = device, follow
+        self.strength, self.maps = 0.0, {}
+        self.seen, self.difference, self.watching, self.hooks = {}, {}, False, []
+        self.height, self.width = height, width
+        self.unet, self.encoder, self.decoder = (network.to(device) for network in weights.parts())
+        self.text, self.empty = weights.encode(prompt).to(device), weights.encode("").to(device)
         betas = torch.linspace(0.00085 ** 0.5, 0.012 ** 0.5, 1000, dtype=torch.float64) ** 2
         self.alphas = torch.cumprod(1 - betas, 0).to(device).float()
-        self.encoder = self.load_taesd(taesd_encoder(), "taesd_encoder", status)
-        self.decoder = self.load_taesd(taesd_decoder(), "taesd_decoder", status)
         self.restart(0)
         # Disco has attention at 1/16, 1/32 and 1/64 of the image size.
         self.capture = Capture({(height // s) * (width // s) for s in (16, 32, 64)})
         self.unet.set_attn_processor(self.capture)
+
+    def release(self):
+        """Takes off what this render hung on the kept UNet, so the next render starts from it as it was loaded."""
+        for hook in self.hooks:
+            hook.remove()
+        self.hooks = []
+        self.watching = False
 
     def restart(self, seed):
         """Starts a new picture. It has its own random numbers, so it never changes Disco's."""
@@ -157,27 +174,6 @@ class Partner:
         for network in (self.unet, self.encoder, self.decoder):
             network.to(device)
 
-    def load_file(self, path, folder, diffusers, transformers):
-        from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
-        from safetensors import safe_open
-        unet_state, text_state = {}, {}
-        prefix = "cond_stage_model.transformer."
-        with safe_open(path, framework="pt") as f:
-            for key in f.keys():
-                if key.startswith("model.diffusion_model."):
-                    unet_state[key] = f.get_tensor(key).half()
-                elif key.startswith(prefix):
-                    text_state[key[len(prefix):]] = f.get_tensor(key).half()
-        unet = diffusers.UNet2DConditionModel(**SD15_UNET).half()
-        unet.load_state_dict(convert_ldm_unet_checkpoint(unet_state, dict(unet.config)))
-        config = transformers.CLIPTextConfig.from_pretrained(folder, subfolder="text_encoder")
-        text_encoder = transformers.CLIPTextModel(config).half()
-        text_encoder.load_state_dict(text_state, strict=False)
-        return unet, text_encoder
-
-    def load_taesd(self, network, name, status):
-        network.load_state_dict(torch.load(models.ensure(name, status), map_location="cpu"))
-        return network.half().requires_grad_(False).eval().to(self.device)
 
     def watch(self, blocks):
         """Starts recording what the prompt changes at these blocks."""
@@ -188,7 +184,7 @@ class Partner:
 
         self.watching = True
         for grid, block in blocks.items():
-            block.register_forward_hook(keeper(grid))
+            self.hooks.append(block.register_forward_hook(keeper(grid)))
 
     def predict(self, z, t, keep_maps):
         timestep = torch.tensor([t], device=self.device)
@@ -251,6 +247,31 @@ class Partner:
 
 
 _stock_attention = None
+
+
+def load_file(path, folder, diffusers, transformers):
+    """An SD 1.5 file's UNet and text encoder, in float16."""
+    from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
+    from safetensors import safe_open
+    unet_state, text_state = {}, {}
+    prefix = "cond_stage_model.transformer."
+    with safe_open(path, framework="pt") as f:
+        for key in f.keys():
+            if key.startswith("model.diffusion_model."):
+                unet_state[key] = f.get_tensor(key).half()
+            elif key.startswith(prefix):
+                text_state[key[len(prefix):]] = f.get_tensor(key).half()
+    unet = diffusers.UNet2DConditionModel(**SD15_UNET).half()
+    unet.load_state_dict(convert_ldm_unet_checkpoint(unet_state, dict(unet.config)))
+    config = transformers.CLIPTextConfig.from_pretrained(folder, subfolder="text_encoder")
+    text_encoder = transformers.CLIPTextModel(config).half()
+    text_encoder.load_state_dict(text_state, strict=False)
+    return unet, text_encoder
+
+
+def load_taesd(network, name, status):
+    network.load_state_dict(torch.load(models.ensure(name, status), map_location="cpu"))
+    return network.half().requires_grad_(False).eval()
 
 
 def install(partner):

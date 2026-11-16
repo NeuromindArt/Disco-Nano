@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import imaging
 import models
 
 
@@ -106,7 +107,7 @@ def between_flow(a, b, count):
     import animate
     from PIL import Image
     cfg = {"sampling_mode": "bilinear", "padding_mode": "border"}
-    pictures = [Image.fromarray(x[0].add(1).div(2).clamp(0, 1).mul(255).byte().permute(1, 2, 0).cpu().numpy()) for x in (a, b)]
+    pictures = [imaging.to_pil(x, signed=True) for x in (a, b)]
     back = animate.video_flow(pictures[0], pictures[1]).to(a.device)  # each pixel of b, where it was in a
     ahead = animate.video_flow(pictures[1], pictures[0]).to(a.device)  # each pixel of a, where it went in b
     ys, xs = animate.pixel_grid(*a.shape[-2:], a.device)

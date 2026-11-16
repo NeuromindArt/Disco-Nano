@@ -10,6 +10,7 @@ import os
 import torch
 import torch.nn.functional as F
 
+GB = 2**30
 _PATCHED = set()  # the patches already made in this process
 VRAM_HEADROOM_GB = 0.75  # left free for Windows to draw the screens; see limit_vram
 OFFLOAD_MIN_ELEMENTS = 5_000_000
@@ -333,10 +334,10 @@ def limit_vram():
     free, total = torch.cuda.mem_get_info()
     # What this worker already holds is its own to use, not another app's. Counted as taken, it was taken twice:
     # once here and again in room(), which subtracts it from the cap.
-    cap = free + torch.cuda.memory_reserved() - int(VRAM_HEADROOM_GB * 2**30)
-    cap_bytes = max(cap, 2**30)
+    cap = free + torch.cuda.memory_reserved() - int(VRAM_HEADROOM_GB * GB)
+    cap_bytes = max(cap, GB)
     torch.cuda.set_per_process_memory_fraction(cap_bytes / total)
-    return cap / 2**30
+    return cap / GB
 
 
 cap_bytes = None
@@ -344,7 +345,7 @@ cap_bytes = None
 
 def room():
     """Bytes this process can still take on the GPU, under its cap and with the desktop's headroom kept."""
-    free = torch.cuda.mem_get_info()[0] - int(VRAM_HEADROOM_GB * 2**30)
+    free = torch.cuda.mem_get_info()[0] - int(VRAM_HEADROOM_GB * GB)
     if cap_bytes is None:
         return free
     return min(free, cap_bytes - torch.cuda.memory_reserved())

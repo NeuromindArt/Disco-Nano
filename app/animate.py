@@ -101,16 +101,19 @@ def warp_3d(image, distance, cfg, move, turn):
 class Camera:
     """Moves the last frame for the next one."""
 
-    def __init__(self, cfg, frames, device, status, meter=None):
+    def __init__(self, cfg, frames, device, status, depth_model=None):
+        """`depth_model` gives the render's one depth model, which the 3D camera shares."""
         self.cfg = cfg
         self.mode = cfg["animation_mode"]
         self.path = motion(cfg, frames)
         self.frames = frames
         self.pingpong = cfg.get("loop_mode") == "Ping-pong"
         self.meter = None
-        if self.mode == "3D":
-            import depth  # the 3D camera needs to know how far each point is
-            self.meter = meter or depth.Depth(device, status)
+        if self.mode == "3D":  # the 3D camera needs to know how far each point is
+            if depth_model is None:
+                import depth
+                depth_model = lambda: depth.Depth(device, status)
+            self.meter = depth_model()
 
     def at(self, frame):
         return {name: values[frame] for name, values in self.path.items()}

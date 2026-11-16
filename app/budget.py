@@ -5,7 +5,6 @@ small margin for PyTorch's allocator. RAM is what the render process committed, 
 RAM or the page file. Each part grows the same way on any card, so the plan holds elsewhere too; only what
 is free differs.
 """
-import json
 import os
 
 import models
@@ -145,9 +144,16 @@ def checkpoint_kind(path):
     return (describe_checkpoint(path) or {}).get("kind")
 
 
+# SD 1.5 and SDXL models made for few steps, such as SDXL Lightning, are told apart by these words in their names; the
+# weights look the same. Z-Image and Flux say so through their variant. They start with the steps and CFG they want,
+# and with their steps spaced as they expect.
+FEW_STEPS = ("lightning", "turbo", "hyper", "lcm", "schnell")
+FEW_STEP_DEFAULTS = {"handoff_steps": 8, "handoff_guidance": 1.5, "handoff_few_steps": True}
+
+
 def describe_checkpoint(path):
-    """{kind, inpaint_only for a model made only to inpaint, and for Z-Image and Flux their variant, label and
-    defaults}, or None."""
+    """{kind, inpaint_only for a model made only to inpaint, few_steps for one made for few steps, and the defaults it
+    starts with, and for Z-Image and Flux their variant and label}, or None."""
     import flowfiles
     try:
         stat = os.stat(path)
@@ -157,12 +163,12 @@ def describe_checkpoint(path):
             if path.lower().endswith(".gguf"):
                 _kinds[key] = flowfiles.describe(path)
             else:
-                with open(path, "rb") as f:
-                    length = int.from_bytes(f.read(8), "little")
-                    names = json.loads(f.read(length)) if 0 < length < 200 * 2**20 else {}
+                names, _ = flowfiles.safetensors_entries(path)
                 unet = any(k.startswith("model.diffusion_model.input_blocks.") for k in names)
                 # An inpainting checkpoint's first layer takes the picture and mask beside the noise: 9 channels.
                 made = {"inpaint_only": True} if names.get("model.diffusion_model.input_blocks.0.0.weight", {}).get("shape", [0, 0])[1] == 9 else {}
+                if any(word in path.lower() for word in FEW_STEPS):
+                    made.update(few_steps=True, defaults=FEW_STEP_DEFAULTS)
                 if unet and any(k.startswith("conditioner.embedders.1.") for k in names):
                     _kinds[key] = {"kind": "sdxl", **made}
                 elif unet and any(k.startswith("cond_stage_model.transformer.") for k in names):

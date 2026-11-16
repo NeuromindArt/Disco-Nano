@@ -26,6 +26,12 @@ class Depth:
         self.mean = torch.tensor(MEAN, device=device)[None, :, None, None]
         self.spread = torch.tensor(SPREAD, device=device)[None, :, None, None]
 
+    def to(self, device):
+        """Moves it, so a render worker can keep it in RAM between renders."""
+        self.net.to(device)
+        self.mean, self.spread = self.mean.to(device), self.spread.to(device)
+        return self
+
     @torch.no_grad()
     def closeness(self, image):
         """Depth Anything's relative closeness for an image of 0 to 1, at the image's own size. Higher is nearer."""

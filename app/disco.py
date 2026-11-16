@@ -11,6 +11,7 @@ import math
 import os
 import random
 import re
+import traceback
 from dataclasses import dataclass
 from functools import partial
 
@@ -27,10 +28,11 @@ from torch.nn import functional as F
 
 import animate
 import control
-import erase
 import critic
+import erase
 import depth
 import graft
+import imaging
 import keyframes
 import lab
 import memory
@@ -39,6 +41,7 @@ import partner
 import paths
 import rules
 import tiles
+from keyframes import POINTS, schedule, schedule_at
 from settings import DEFAULTS, handoff_parts, small_first_on, small_frame, uses_partner
 
 device = torch.device("cuda")
@@ -53,17 +56,6 @@ def parse_prompt(prompt):
         return (text, float(weight)) if text else (prompt, 1.0)
     except ValueError:
         return prompt, 1.0
-
-
-def schedule(text):
-    """Reads a schedule such as [12]*400+[4]*600 into a list of 1000 values."""
-    values = []
-    for part in str(text).replace(" ", "").split("+"):
-        match = re.fullmatch(r"\[(-?\d+(?:\.\d+)?)\]\*(\d+)", part)
-        if not match:
-            raise ValueError(f"Could not read the schedule {text!r}. Use a form like [12]*400+[4]*600.")
-        values += [float(match.group(1))] * int(match.group(2))
-    return (values + values[-1:] * 1000)[:1000]
 
 
 class CpuRotation:
@@ -330,8 +322,8 @@ def put_away():
     while _after_render:
         try:
             _after_render.pop()()
-        except Exception:
-            pass
+        except Exception:  # every undo still runs, and what went wrong goes to the job's log
+            traceback.print_exc()
     for key in [k for k in _kept if k not in _used]:
         del _kept[key]
     _used.clear()
@@ -592,7 +584,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         if isinstance(mode, bool):  # settings saved while it was a switch
             mode = "Start images and clip frames" if mode else "Off"
         fit = mode == "Start images and clip frames" or (mode == "Start images" and not frame)
-        views["from"] = min(round(1000 * skip / diffusion.num_timesteps), 999) if fit else 0
+        views["from"] = min(round(POINTS * skip / diffusion.num_timesteps), POINTS - 1) if fit else 0
 
     def view_at(at):
         begin, shapes, pivot = views["from"], min(max(float(cfg["views_shapes"]) / 100, 0), 1), 400
@@ -601,7 +593,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
             point = done / shapes * pivot
         else:
             point = pivot + (done - shapes) / max(1 - shapes, 1e-6) * (1000 - pivot)
-        return min(int(point), 999)
+        return min(int(point), POINTS - 1)
 
     clip_models = load_clip_models(cfg, hooks.status)
     model, diffusion = load_unet(cfg, hooks)
@@ -686,10 +678,19 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
     if cfg["depth_target"] and not (drawing or cfg["ghost_image"] or frame_ghost):
         raise ValueError("Depth target follows a ghost. Set Live ghost, choose a Ghost image, or turn on Last frame as ghost in a clip.")
     experiment = lab.Lab(cfg, schedule) if trying else None
+
+    def depth_model():
+        """Depth Anything: one copy for Depth target, Depth control, Face shape and the 3D camera, on the GPU for the
+        render and kept in RAM between renders, as Disco's other models are."""
+        return kept(("depth",), lambda: depth.Depth(device, hooks.status)).to(device)
+
     if uses_partner(cfg):
         text = ", ".join(parse_prompt(p)[0] for p in sets[0][1] if parse_prompt(p)[1] > 0)
-        experiment.partner = partner.Partner(cfg["partner_model"], cfg["partner_file"], text, side_y, side_x,
-                                             cfg["partner_follow"], device, hooks.status)
+        source, file = cfg["partner_model"], cfg["partner_file"] if cfg["partner_model"] != "Tiny SD" else ""
+        weights = kept(("partner", source, file, os.path.getmtime(file) if os.path.isfile(file) else 0),
+                       lambda: partner.Weights(source, file, hooks.status))
+        experiment.partner = partner.Partner(weights, text, side_y, side_x, cfg["partner_follow"], device)
+        _after_render.append(experiment.partner.release)
         scales = critic.GRIDS.get(cfg["borrow_grids"], critic.GRIDS["All"])
         experiment.partner.lengths = {(side_y // s) * (side_x // s) for s in scales}
         partner.install(experiment.partner)
@@ -705,13 +706,12 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
 
         experiment.ghost = lab.Ghost(cfg, schedule, sized(cfg["ghost_image"]) if cfg["ghost_image"] else None,
                                      sized(cfg["style_image"]) if cfg["style_image"] else None, [s["model"] for s in stats], normalize,
-                                     depth.Depth(device, hooks.status) if cfg["depth_target"] else None)
+                                     depth_model() if cfg["depth_target"] else None)
 
     steer = None  # the controls: edges, depth and pose held to a control picture
     fixed_control = None  # the Control image, when one is set; otherwise the start image or each frame's video frame
     if control.wanted(cfg):
-        steer = control.Control(cfg, schedule, device, hooks.status,
-                                experiment.ghost.depth if experiment and experiment.ghost else None, kept)
+        steer = control.Control(cfg, schedule, device, hooks.status, depth_model, kept)
         if cfg.get("control_image") and not animating:  # a clip follows each frame, never one fixed picture
             fixed_control = TF.to_tensor(size_start_image(upright(cfg["control_image"]), side_x, side_y, init_fit)).unsqueeze(0)
 
@@ -741,20 +741,18 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         import inpaint
         path = asked["file"]
         painter = kept(("handoff", path, os.path.getmtime(path)), lambda: handoff.load(path, hooks.status, device), brief=True)
-        image, size = inpaint.to_pil(picture), (picture.shape[-1], picture.shape[-2])
-        unit = lambda m: Image.fromarray((m[0, 0].clamp(0, 1).cpu().numpy() * 255).round().astype(np.uint8))
+        image, size = imaging.to_pil(picture), (picture.shape[-1], picture.shape[-2])
         resting = [model, secondary_model, lpips_model, *(m.visual for m in clip_models), experiment.partner if experiment else None]
         release()
         with handoff.Parked(painter, resting, device, *painter.inpaint_size(*size), painted=True):
-            painted, paste = inpaint.paint(painter, image, unit(hard), asked.get("prompt", ""), asked["strength"],
+            painted, paste = inpaint.paint(painter, image, imaging.mask_to_pil(hard), asked.get("prompt", ""), asked["strength"],
                                     asked["steps"], asked["guidance"], asked.get("seed", seed + eraser.count), hooks.status,
                                     getattr(hooks, "stopped", lambda: False),  # a new try paints anew
                                     asked.get("context", inpaint.CONTEXT), asked.get("grow", inpaint.GROW), asked.get("blend", inpaint.BLEND))
-        to_mask = lambda m: torch.from_numpy(np.asarray(m, dtype=np.float32) / 255)[None, None].to(picture.device)
-        return inpaint.from_pil(painted, picture), to_mask(paste)
+        return imaging.from_pil(painted, picture), imaging.mask_from_pil(paste, picture.device)
 
     # Fix: what was painted over during a pause, erased, inpainted or cloned, and repainted by the steps left.
-    eraser = erase.Erase(hooks.job_dir, device, diffusion, hooks.status, inpainter, hooks.tried) if getattr(hooks, "job_dir", None) else None
+    eraser = erase.Erase(hooks.job_dir, device, diffusion, hooks.status, inpainter, hooks.tried, kept) if getattr(hooks, "job_dir", None) else None
     if eraser:
         hooks.while_paused = lambda: eraser.try_paint(hooks.pausing)  # inpaint tries, painted while the render waits
 
@@ -788,7 +786,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         small picture, as a ghost's light and dark is moved, and leaves the detail free."""
         if hold["to"] is None or hold_curve is None or i == 0:
             return x
-        at = min(int(1000 * (1 - (i + 1) / diffusion.num_timesteps)), 999)
+        at = schedule_at(i, diffusion.num_timesteps)
         strength = float(cfg["small_hold"]) * hold_curve[at]
         if not strength:
             return x
@@ -1013,7 +1011,7 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
                 eraser.shown = image  # the last step's picture, which a pause here shows
             hooks.step(j + before, first + 1 + before, batch, n_batches, seed, at=1 - i / diffusion.num_timesteps)
             t = torch.tensor([i], device=device)
-            at = min(int(1000 * (1 - (i + 1) / diffusion.num_timesteps)), 999)
+            at = schedule_at(i, diffusion.num_timesteps)
             band = int(experiment.band[at])
             if helper and needed:
                 helper.strength = experiment.borrow[at]
@@ -1273,7 +1271,6 @@ def _render(job_settings, prompts, hooks, offload, init_fit, output_dir):
         reach = min(max(int(cfg["loop_frames"]), 1), (total - 1) // 2 if loop == "Ping-pong" else total - 1) if loop else 0
         circle = None  # with ping-pong and one shared noise, the noise goes once around a circle between two draws
         n_batches = total
-        depth_model = experiment.ghost.depth if experiment and experiment.ghost else None  # one copy serves both
         camera = animate.Camera(cfg, total, device, hooks.status, depth_model) if mode in ("2D", "3D") else None
         skips = [min(round(cfg["steps"] * share / 100), cfg["steps"] - 1) for share in keyframes.skips(cfg, total)]
         if cfg["frames_scale"] and lpips_model is None:

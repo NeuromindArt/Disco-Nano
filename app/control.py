@@ -11,6 +11,7 @@ control picture is read once, while it is clean, so nothing needs to see Disco's
 measures that are cheap and steady on it. Edges and Pose only ever ask for more edge where the control has one,
 never less, so plain areas stay free for the prompt to paint.
 """
+import contextlib
 import math
 
 import torch
@@ -18,6 +19,8 @@ import torch.nn.functional as F
 
 import lab
 import models
+from imaging import blur
+from keyframes import schedule_at
 
 LUMA = (0.299, 0.587, 0.114)
 STRUCTURE_SIDE = 256  # edges are measured at about this size, so outlines count and fine texture doesn't
@@ -35,25 +38,13 @@ def wanted(cfg):
                                                            "face_control", "face_shape", "face_detail"))
 
 
-def _blur(image, sigma):
-    if sigma <= 0:
-        return image
-    radius = max(int(math.ceil(sigma * 2.5)), 1)
-    x = torch.arange(-radius, radius + 1, device=image.device, dtype=image.dtype)
-    kernel = torch.exp(-x.square() / (2 * sigma * sigma))
-    kernel = kernel / kernel.sum()
-    channels = image.shape[1]
-    image = F.conv2d(F.pad(image, (radius, radius, 0, 0), mode="replicate"), kernel.view(1, 1, 1, -1).repeat(channels, 1, 1, 1), groups=channels)
-    return F.conv2d(F.pad(image, (0, 0, radius, radius), mode="replicate"), kernel.view(1, 1, -1, 1).repeat(channels, 1, 1, 1), groups=channels)
-
-
 def edges(image):
     """How strong an outline each spot of an image of 0 to 1 has, at about STRUCTURE_SIDE pixels on the short side."""
     gray = (image.float() * torch.tensor(LUMA, device=image.device)[None, :, None, None]).sum(1, keepdim=True)
     shrink = max(min(gray.shape[-2:]) // STRUCTURE_SIDE, 1)
     if shrink > 1:
         gray = F.avg_pool2d(gray, shrink)
-    gray = _blur(gray, 1.0)
+    gray = blur(gray, 1.0)
     sobel = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], device=gray.device, dtype=gray.dtype)
     padded = F.pad(gray, (1, 1, 1, 1), mode="replicate")
     gx = F.conv2d(padded, sobel.view(1, 1, 3, 3))
@@ -67,29 +58,42 @@ def one_sided(target, render):
     return (target * F.relu(target - near)).sum() / target.sum().clamp(min=1e-6)
 
 
-class Pose:
-    """Keypoint R-CNN from torchvision, which finds people's joints in a clean picture. Kept in RAM between renders."""
+class Detector:
+    """A network that finds something in a clean picture, kept in RAM between renders. It comes to the GPU only while
+    it looks, since it looks once per control picture."""
 
-    def __init__(self, status):
-        from torchvision.models.detection import keypointrcnn_resnet50_fpn
-        path = models.ensure(models.POSE, status)
-        self.net = keypointrcnn_resnet50_fpn(weights=None, weights_backbone=None, num_keypoints=17)
-        self.net.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
-        self.net.eval().requires_grad_(False)
+    def __init__(self, net, name, status, prefix=""):
+        weights = torch.load(models.ensure(name, status), map_location="cpu", weights_only=True)
+        net.load_state_dict({k.removeprefix(prefix): v for k, v in weights.items()})
+        self.net = net.eval().requires_grad_(False)
 
     def to(self, device):
         self.net.to(device)
         return self
 
+    @contextlib.contextmanager
+    def looking(self, device):
+        """The network on `device` while it looks, and back in RAM after."""
+        self.net.to(device)
+        try:
+            yield self.net
+        finally:
+            self.net.to("cpu")
+
+
+class Pose(Detector):
+    """Keypoint R-CNN from torchvision, which finds people's joints."""
+
+    def __init__(self, status):
+        from torchvision.models.detection import keypointrcnn_resnet50_fpn
+        super().__init__(keypointrcnn_resnet50_fpn(weights=None, weights_backbone=None, num_keypoints=17), models.POSE, status)
+
     @torch.no_grad()
     def body(self, image, device):
         """A soft map of 0 to 1 that covers each person's limbs, torso and head, at the image's size, or None."""
         height, width = image.shape[-2:]
-        self.net.to(device)
-        try:
-            found = self.net([image[0].float().to(device)])[0]
-        finally:
-            self.net.to("cpu")
+        with self.looking(device) as net:
+            found = net([image[0].float().to(device)])[0]
         canvas = torch.zeros(height, width, device=device)
         ys, xs = torch.meshgrid(torch.arange(height, device=device, dtype=torch.float32),
                                 torch.arange(width, device=device, dtype=torch.float32), indexing="ij")
@@ -110,61 +114,40 @@ class Pose:
                 canvas = torch.maximum(canvas, _stroke(xs, ys, points[0, :2], points[0, :2], tall / 12))
         if not people:
             return None
-        return _blur(canvas[None, None], max(min(height, width) / 200, 1.0))
+        return blur(canvas[None, None], max(min(height, width) / 200, 1.0))
 
 
-class People:
-    """Mask R-CNN from torchvision, which cuts out each person in a clean picture. Kept in RAM between renders."""
+class People(Detector):
+    """Mask R-CNN from torchvision, which cuts out each person."""
 
     def __init__(self, status):
         from torchvision.models.detection import maskrcnn_resnet50_fpn_v2
-        path = models.ensure(models.PERSON, status)
-        self.net = maskrcnn_resnet50_fpn_v2(weights=None, weights_backbone=None)
-        self.net.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
-        self.net.eval().requires_grad_(False)
-
-    def to(self, device):
-        self.net.to(device)
-        return self
+        super().__init__(maskrcnn_resnet50_fpn_v2(weights=None, weights_backbone=None), models.PERSON, status)
 
     @torch.no_grad()
     def silhouettes(self, image, device):
         """A soft map of 0 to 1 over every person found, at the image's size, or None when there is nobody."""
-        self.net.to(device)
-        try:
-            found = self.net([image[0].float().to(device)])[0]
-        finally:
-            self.net.to("cpu")
+        with self.looking(device) as net:
+            found = net([image[0].float().to(device)])[0]
         keep = (found["labels"] == 1) & (found["scores"] >= PERSON_SCORE)  # COCO's class 1 is a person
         if not keep.any():
             return None
         return found["masks"][keep].amax(0, keepdim=True)  # [1, 1, height, width], already soft at the edges
 
 
-class Faces:
-    """RetinaFace, which finds faces with their landmarks. Kept in RAM between renders."""
+class Faces(Detector):
+    """RetinaFace, which finds faces with their landmarks."""
 
     def __init__(self, status):
         import retinaface
-        path = models.ensure(models.FACES, status)
-        self.net = retinaface.RetinaFace()
-        weights = torch.load(path, map_location="cpu", weights_only=True)
-        self.net.load_state_dict({k.removeprefix("module."): v for k, v in weights.items()})
-        self.net.eval().requires_grad_(False)
+        super().__init__(retinaface.RetinaFace(), models.FACES, status, prefix="module.")
         self.detect = retinaface.detect
-
-    def to(self, device):
-        self.net.to(device)
-        return self
 
     def find(self, image, device, threshold=0.6):
         """Faces in an image of 0 to 1 as boxes (x0, y0, x1, y1) in shares of its width and height."""
         height, width = image.shape[-2:]
-        self.net.to(device)
-        try:
-            found = self.detect(self.net, image.float().to(device), threshold)
-        finally:
-            self.net.to("cpu")
+        with self.looking(device) as net:
+            found = self.detect(net, image.float().to(device), threshold)
         return [(x0 / width, y0 / height, x1 / width, y1 / height) for x0, y0, x1, y1, *_ in found]
 
 
@@ -221,16 +204,20 @@ class Control:
     each one eases off as the render comes to match."""
 
     def __init__(self, cfg, schedule, device, status, depth_model=None, keep=lambda key, build: build()):
+        """`depth_model` gives the render's one depth model, which Depth control and Face shape share, and `keep`
+        keeps the other helper models in RAM between renders."""
         self.device = device
         # each control lets go at its own point: depth and pose shape the layout, edges matter into the detail
         self.curves = {kind: schedule(cfg[f"{kind}_curve"]) for kind in ("edge", "depth", "pose", "person", "face", "face_shape")}
         self.strength = {"edges": float(cfg["edge_control"] or 0), "depth": float(cfg["depth_control"] or 0),
                          "pose": float(cfg["pose_control"] or 0)}
         self.face_shape = float(cfg.get("face_shape") or 0)
-        self.depth = depth_model
-        if (self.strength["depth"] or self.face_shape) and self.depth is None:
-            import depth
-            self.depth = depth.Depth(device, status)
+        self.depth = None
+        if self.strength["depth"] or self.face_shape:
+            if depth_model is None:
+                import depth
+                depth_model = lambda: depth.Depth(device, status)
+            self.depth = depth_model()
         self.pose = None
         if self.strength["pose"]:
             self.pose = keep(("pose",), lambda: Pose(status))  # kept in RAM between renders, as Disco's own models are
@@ -369,7 +356,7 @@ class Control:
         and the finest detail, are left alone."""
         if self.source is None or i == 0:
             return x
-        at = min(int(1000 * (1 - (i + 1) / diffusion.num_timesteps)), 999)
+        at = schedule_at(i, diffusion.num_timesteps)
         scale = math.sqrt(float(diffusion.alphas_cumprod_prev[i]))
         x = self._hold_faces(x, estimate, at, scale)
         people = self.targets.get("people")

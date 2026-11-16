@@ -53,12 +53,13 @@ import os
 import random
 import traceback
 
-import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image, ImageFilter
 
+import imaging
 import models
+from imaging import blur
 from procs import emit, stdin_closed
 
 # How far through the schedule, 0 to 1, an erase's fresh noise starts to fall, and where none is left
@@ -74,29 +75,39 @@ def masks(mask, width, height, device):
     grow = max(3, min(width, height) // 64)
     hard = mask.point(lambda v: 255 if v > 127 else 0).filter(ImageFilter.MaxFilter(grow * 2 + 1))
     soft = hard.filter(ImageFilter.GaussianBlur(grow))
-    as_tensor = lambda m: torch.from_numpy(np.asarray(m, dtype=np.float32) / 255)[None, None].to(device)
-    return as_tensor(hard), as_tensor(soft)
+    return imaging.mask_from_pil(hard, device), imaging.mask_from_pil(soft, device)
 
 
-def lama(picture, mask, device, status):
-    """LaMa's fill of the masked area, for a picture of 0 to 1. It loads for this and leaves the GPU straight after."""
-    path = models.ensure(models.LAMA, status)
-    model = torch.jit.load(path, map_location=device).eval()
+def one_off(key, build):
+    """Keeps nothing: what a single fix of a start image loads goes when it ends."""
+    return build()
+
+
+def lama_model(status, keep=one_off):
+    """LaMa, loaded into RAM once and kept by `keep`, such as the render worker's kept(), so each erase doesn't read
+    it from disk again."""
+    return keep(("lama",), lambda: torch.jit.load(models.ensure(models.LAMA, status), map_location="cpu").eval())
+
+
+def lama(picture, mask, device, model):
+    """LaMa's fill of the masked area, for a picture of 0 to 1. It comes to the GPU for this and leaves straight after."""
     h, w = picture.shape[-2:]
     pad = lambda t: F.pad(t, (0, -w % 8, 0, -h % 8), mode="reflect")
     try:
+        model.to(device)
         with torch.no_grad():
             out = model(pad(picture), pad(mask))[..., :h, :w].float().clamp(0, 1)
     finally:
-        del model
+        model.to("cpu")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     return picture * (1 - mask) + out * mask
 
 
-def fill(picture, mask, device, status, longest=1536):
-    """The picture, 0 to 1, with the masked area filled, from a crop around it: the mask's box and as much again
-    around it, for LaMa to see what surrounds it. A crop longer than `longest` is filled smaller and enlarged back."""
+def fill(picture, mask, device, model, longest=1536):
+    """The picture, 0 to 1, with the masked area filled by LaMa, `model`, from a crop around it: the mask's box and as
+    much again around it, for LaMa to see what surrounds it. A crop longer than `longest` is filled smaller and
+    enlarged back."""
     h, w = picture.shape[-2:]
     rows, cols = torch.nonzero(mask[0, 0].sum(1)).flatten(), torch.nonzero(mask[0, 0].sum(0)).flatten()
     top, bottom, left, right = int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1
@@ -109,25 +120,13 @@ def fill(picture, mask, device, status, longest=1536):
     scale = min(longest / max(ch, cw), 1.0)
     if scale < 1:
         small = (max(round(ch * scale), 8), max(round(cw * scale), 8))
-        filled = lama(F.interpolate(part, small, mode="area"), (F.interpolate(hole, small, mode="area") > 0).float(), device, status)
+        filled = lama(F.interpolate(part, small, mode="area"), (F.interpolate(hole, small, mode="area") > 0).float(), device, model)
         filled = F.interpolate(filled, (ch, cw), mode="bicubic", align_corners=False).clamp(0, 1)
     else:
-        filled = lama(part, hole, device, status)
+        filled = lama(part, hole, device, model)
     out = picture.clone()
     out[crop] = (part * (1 - hole) + filled * hole).to(picture.device)
     return out
-
-
-def blur(x, s):
-    """A Gaussian blur of width s, across and then down, with the edges mirrored."""
-    r = max(int(3 * s), 1)
-    k = torch.exp(-torch.arange(-r, r + 1, device=x.device, dtype=x.dtype) ** 2 / (2 * s * s))
-    k = (k / k.sum())
-    c = x.shape[1]
-    x = F.pad(x, (r, r, 0, 0), mode="replicate")
-    x = F.conv2d(x, k.view(1, 1, 1, -1).repeat(c, 1, 1, 1), groups=c)
-    x = F.pad(x, (0, 0, r, r), mode="replicate")
-    return F.conv2d(x, k.view(1, 1, -1, 1).repeat(c, 1, 1, 1), groups=c)
 
 
 def clone(picture, layers):
@@ -162,23 +161,23 @@ def read_clones(clones, width, height, device):
     """The page's clone layers, as clone() takes them, for a picture of this size."""
     layers = []
     for layer in clones or []:
-        mask = Image.open(layer["mask"]).convert("L").resize((width, height), Image.BILINEAR)
-        mask = torch.from_numpy(np.asarray(mask, dtype=np.float32) / 255)[None, None].to(device)
+        mask = imaging.mask_from_pil(Image.open(layer["mask"]).resize((width, height), Image.BILINEAR), device)
         layers.append((mask, round(float(layer["dx"]) * width), round(float(layer["dy"]) * height)))
     return layers
 
 
 def keep(picture, path):
     """Saves a -1 to 1 picture as a JPEG, smaller than 2048 on its long side."""
-    image = Image.fromarray((picture[0].permute(1, 2, 0).add(1).div(2).clamp(0, 1).cpu().numpy() * 255).astype(np.uint8))
+    image = imaging.to_pil(picture, signed=True)
     image.thumbnail((2048, 2048))
     image.save(path, quality=90)
 
 
 class Erase:
-    def __init__(self, job_dir, device, diffusion, status, inpainter=None, tried=None):
+    def __init__(self, job_dir, device, diffusion, status, inpainter=None, tried=None, keep=one_off):
         self.job_dir, self.path = job_dir, os.path.join(job_dir, "erase.json")
         self.device, self.diffusion, self.status = device, diffusion, status
+        self.lama = lambda: lama_model(status, keep)
         # inpainter(picture, hard, asked): the picture, 0 to 1, with the area repainted as the page asked, and the soft
         # mask it went back in through. tried(**event) tells the page a try is ready.
         self.inpainter, self.tried = inpainter, tried
@@ -232,7 +231,7 @@ class Erase:
         picture = estimate.add(1).div(2).clamp(0, 1)
         try:
             hard, _ = masks(Image.open(inpainting["mask"]), w, h, estimate.device)
-            start = fill(picture, hard, self.device, self.status) if inpainting["mode"] == "remove" else picture
+            start = fill(picture, hard, self.device, self.lama()) if inpainting["mode"] == "remove" else picture
             for _ in range(count):
                 if not pausing():
                     return
@@ -240,7 +239,7 @@ class Erase:
                 made = len(self.tries["made"])
                 self.tries["made"].append((painted.cpu(), soft.cpu()))
                 where = os.path.join(self.job_dir, f"try-{ask}-{made}.jpg")
-                Image.fromarray((painted[0].permute(1, 2, 0).clamp(0, 1).cpu().numpy() * 255).round().astype(np.uint8)).save(where, quality=92)
+                imaging.to_pil(painted).save(where, quality=92)
                 self.tried(id=ask, k=made, path=where)
         except (KeyboardInterrupt, SystemExit):
             raise
@@ -274,13 +273,13 @@ class Erase:
             hard, back = masks(Image.open(mask), w, h, estimate.device)
             if hard.any():
                 self.status("Erasing the marked area")
-                picture = fill(picture, hard, self.device, self.status)
+                picture = fill(picture, hard, self.device, self.lama())
                 where = back
         if inpainting:
             hard, soft = masks(Image.open(inpainting["mask"]), w, h, estimate.device)
             if hard.any():
                 picked = self.chosen(inpainting, picture)
-                start = picture if picked or inpainting["mode"] != "remove" else fill(picture, hard, self.device, self.status)
+                start = picture if picked or inpainting["mode"] != "remove" else fill(picture, hard, self.device, self.lama())
                 try:
                     painted, soft = picked or self.inpainter(start, hard, inpainting)
                     # A try was painted over the picture the pause held on, and only its area and soft edge are used
@@ -375,34 +374,33 @@ class Erase:
         return picture * (1 - soft) + filled * soft
 
 
-def prepare(image_path, mask_path, inpainting, device, status):
+def prepare(image_path, mask_path, inpainting, device, status, keep=one_off):
     """An image file as a picture of 0 to 1, as it is and with the erase done, and the hard mask of the area to
     inpaint, cleared by LaMa first when the inpaint starts from a cleared area, or None with nothing to inpaint."""
     image = Image.open(image_path).convert("RGB")
-    picture = torch.from_numpy(np.asarray(image, dtype=np.float32) / 255).permute(2, 0, 1)[None]
+    picture = imaging.from_pil(image)
     original, area = picture, None
     if mask_path:
         hard, _ = masks(Image.open(mask_path), image.width, image.height, "cpu")
         if hard.any():
-            picture = fill(picture, hard, device, status)
+            picture = fill(picture, hard, device, lama_model(status, keep))
     if inpainting:
         hard, _ = masks(Image.open(inpainting["mask"]), image.width, image.height, "cpu")
         if hard.any():
             area = hard
             if inpainting["mode"] == "remove":
-                picture = fill(picture, hard, device, status)
+                picture = fill(picture, hard, device, lama_model(status, keep))
     return original, picture, area
 
 
 def inpaint_image(model, picture, hard, inpainting, status, stopped=lambda: False):
     """The picture with the area repainted by `model`, as `inpainting` asks, with a seed of its own."""
     import inpaint
-    unit = Image.fromarray((hard[0, 0].numpy() * 255).round().astype(np.uint8))
-    painted, _ = inpaint.paint(model, inpaint.to_pil(picture), unit, inpainting["prompt"], inpainting["strength"],
+    painted, _ = inpaint.paint(model, imaging.to_pil(picture), imaging.mask_to_pil(hard), inpainting["prompt"], inpainting["strength"],
                                inpainting["steps"], inpainting["guidance"], random.randint(0, 2**32 - 1), status, stopped,
                                context=inpainting.get("context", inpaint.CONTEXT), grow_by=inpainting.get("grow", inpaint.GROW),
                                blend=inpainting.get("blend", inpaint.BLEND))
-    return inpaint.from_pil(painted, picture)
+    return imaging.from_pil(painted, picture)
 
 
 def with_clones(original, picture, clones):
@@ -415,7 +413,7 @@ def with_clones(original, picture, clones):
 
 
 def save_png(picture, path):
-    Image.fromarray((picture[0].permute(1, 2, 0).clamp(0, 1).numpy() * 255).round().astype(np.uint8)).save(path)
+    imaging.to_pil(picture).save(path)
 
 
 def erase_image(image_path, mask_path, clones, out_path, device, status=print, inpainting=None):
@@ -459,6 +457,8 @@ def serve(folder, device):
             pass  # none yet, or one being written
         return ask
 
+    kept = {}  # LaMa, loaded once for every ask
+    keep = lambda key, build: kept[key] if key in kept else kept.setdefault(key, build())
     model, model_file, prepared, made, failed, waited = None, None, None, 0, None, time.time()
     while not stdin_closed():
         asked = latest()
@@ -472,7 +472,7 @@ def serve(folder, device):
         try:
             if not prepared or prepared["id"] != asked["id"]:
                 prepared, made = None, 0
-                original, picture, area = prepare(asked["image"], asked.get("mask"), asked["inpaint"], device, status)
+                original, picture, area = prepare(asked["image"], asked.get("mask"), asked["inpaint"], device, status, keep)
                 prepared = {"id": asked["id"], "original": original, "picture": picture, "area": area}
             if model_file != asked["inpaint"]["file"]:
                 model = None

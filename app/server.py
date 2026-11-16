@@ -1723,7 +1723,7 @@ def checkpoints():
                 if about:
                     group, _, short = name.rpartition("/")
                     found.append({"path": path, "name": short, "group": group, "sdxl": about["kind"] == "sdxl", **about,
-                                  "inpaint": inpaint.defaults(about, path)})
+                                  "inpaint": inpaint.defaults(about)})
     found.sort(key=lambda f: (f["group"].lower(), f["name"].lower()))
     return {"checkpoints": found, "folders": CHECKPOINT_DIRS}
 

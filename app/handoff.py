@@ -1,6 +1,7 @@
 """Handoff: a Stable Diffusion checkpoint paints the first part of the path from noise, and Disco carries on.
 
-This file covers SD 1.5 and SDXL; Z-Image, Flux.1 and Flux.2 Klein work the same way in flow.py.
+This file holds HandoffModel, what every handoff model shares, and Handoff for SD 1.5 and SDXL. Z-Image, Flux.1 and
+Flux.2 Klein work the same way, through FlowHandoff in flow.py.
 
 The checkpoint (SD 1.5 or SDXL, one .safetensors file) denoises its own latent for its share of the
 steps. Its estimate of the finished picture at that point is decoded to pixels, and Disco starts from
@@ -11,6 +12,7 @@ share of the rest. At 100% no step is left, and Disco only finishes the checkpoi
 The checkpoint waits in RAM between images and frames, and comes to the GPU only for its own steps.
 When Disco's models and the checkpoint won't fit together, Disco's wait in RAM instead.
 """
+import contextlib
 import gc
 import time
 import types
@@ -18,9 +20,10 @@ import types
 import torch
 from PIL import Image
 
+import budget
+import imaging
 import memory
-
-GB = 2**30
+from memory import GB
 
 
 def load(path, status, device):
@@ -29,12 +32,6 @@ def load(path, status, device):
     if path.lower().endswith(".gguf") or flow.model_kind(path):
         return flow.FlowHandoff(path, status, device)
     return Handoff(path, status, device)
-
-
-def is_xl(path):
-    from safetensors import safe_open
-    with safe_open(path, framework="pt") as f:
-        return any(k.startswith("conditioner.embedders.1") for k in f.keys())
 
 
 def disco_skip(alphas, alpha, least):
@@ -82,13 +79,166 @@ def finish_size(width, height):
     return max(round(width * scale / 64), 1) * 64, max(round(height * scale / 64), 1) * 64
 
 
-class Handoff:
+def on_device(embeds, device):
+    """Prompt embeddings, as encode_text() keeps them in RAM, on `device`. Z-Image keeps a list of them."""
+    return {k: [v.to(device) for v in e] if isinstance(e, list) else e.to(device) for k, e in embeds.items()}
+
+
+class HandoffModel:
+    """What every handoff model shares. Its text encoders come to the GPU only to encode the prompts, all of them
+    before Disco loads. Its painting parts come to the GPU only for its own steps, and go back to RAM after, whatever
+    happens. Each step reports, can be stopped, and shows the picture so far. Each kind sets up its parts and paints
+    in its own way.
+
+    A kind sets device, encoders (with attach_encoders), vae, unet (the part that paints) and unet_bytes, and has
+    to_gpu(on), painters() for its painting parts that go back to RAM, encode_text(), decode() and paint_area()."""
+    size_for = staticmethod(size_for)  # where it paints for a frame this size
+    finish_size = staticmethod(finish_size)  # where its finish paints
+
+    def __init__(self, device, status):
+        self.device, self.status, self.stopped, self.preview = device, status, lambda: False, lambda image: None
+        self.embeds, self.next_show = [], 0
+
+    # ---- each render ----
+    def prepare(self, cfg, prompt_sets, status, stopped=lambda: False, preview=lambda image: None):
+        """Settings and prompts for one render. prompt_sets is [(first frame, [prompt lines])]. Every set is
+        encoded now, before Disco loads, so the text encoders can go back to RAM."""
+        self.status, self.stopped, self.preview = status, stopped, preview
+        self.share = min(max(float(cfg["handoff_share"]) / 100, 0), 1)
+        self.steps = max(int(cfg["handoff_steps"]), 1)
+        self.guidance = float(cfg["handoff_guidance"])
+        self.configure(cfg)
+        self.embeds = []
+        where = self.encoders_on(status)
+        try:
+            for at, lines in prompt_sets:
+                self.embeds.append((at, self.encode_text(*words(lines, cfg["handoff_negative"]), self.guidance, where)))
+        finally:
+            self.encoders_off()
+
+    def configure(self, cfg):
+        """A kind's own settings for a render."""
+
+    def embeds_for(self, frame):
+        """The prompt set in force at `frame`, on the GPU."""
+        chosen = next((e for at, e in reversed(self.embeds) if at <= frame), self.embeds[0][1])
+        return on_device(chosen, self.device)
+
+    # ---- memory ----
+    def parts(self):
+        """What goes back to RAM between renders. A part that streams is there already."""
+        return [*self.painters(), self.vae, *[e for e in self.encoders if not getattr(e, "streams", False)]]
+
+    def encoders_on(self, status):
+        """Brings the text encoders where they can run, and returns that device. On the GPU when they fit with room
+        to work. Otherwise each encoder streams there a layer at a time, as a big model does, and if that can't be
+        set up, it runs on the CPU, which is slow but always fits."""
+        size = sum(p.numel() * p.element_size() for e in self.encoders for p in e.parameters())
+        where = self.device
+        if memory.room() > size + 0.5 * GB and not any(getattr(e, "streams", False) for e in self.encoders):
+            for e in self.encoders:
+                e.to(where)
+        else:
+            try:
+                from diffusers.hooks import apply_group_offloading
+                for e in self.encoders:
+                    if not getattr(e, "streams", False):
+                        e.to("cpu")
+                        # Layer by layer: an encoder's blocks sit inside it, which block-level streaming doesn't reach,
+                        # so it would bring the whole encoder over at once. Each layer goes from the file's own weights
+                        # and back to them, so RAM never holds a copy: about 5GB less for Flux's T5.
+                        apply_group_offloading(e, onload_device=torch.device(self.device), offload_type="leaf_level",
+                                               use_stream=True, low_cpu_mem_usage=True)
+                        e.streams = True
+            except (ImportError, RuntimeError, ValueError, TypeError, NotImplementedError) as e:
+                print(f"Streaming the text encoders didn't set up: {e!r}", flush=True)
+                where = "cpu"
+                status("Encoding the prompt on the CPU, as the GPU is short of room")
+        self.attach_encoders(True)
+        return where
+
+    def encoders_off(self):
+        self.attach_encoders(False)
+        for e in self.encoders:
+            if not getattr(e, "streams", False):
+                e.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    @contextlib.contextmanager
+    def on_gpu(self):
+        """The painting parts on the GPU for the model's own steps, and back in RAM after, whatever happened, so
+        the GPU goes back to Disco."""
+        try:
+            self.to_gpu(True)
+            yield
+        finally:
+            self.to_gpu(False)
+            gc.collect()
+            torch.cuda.empty_cache()
+
+    def painter_off(self):
+        """The part that paints leaves the GPU, before the decode, which then has the room."""
+        for part in self.painters():
+            part.to("cpu")
+        torch.cuda.empty_cache()
+
+    # ---- steps ----
+    def generator(self, seed):
+        return torch.Generator(self.device).manual_seed(int(seed) % 2**32)
+
+    def stepper(self, label, run, show=None, last=False):
+        """What each of the model's steps calls back: it says how far it is, stops when asked, and shows the picture
+        so far through `show(values)`. With `last`, the model stops after `run` steps, short of its whole path."""
+        def check(p, i, t, values):
+            self.status(f"{label}, step {i + 1} of {run}")
+            if self.stopped():
+                raise KeyboardInterrupt
+            if show:
+                show(values)
+            if last and i + 1 >= run:
+                p._interrupt = True
+            return values
+        return check
+
+    def show(self, latent, size, common=None):
+        """Sends the picture so far to the preview, decoded as Disco gets it, skipping steps so decoding takes at
+        most about a quarter of the time."""
+        now = time.monotonic()
+        if now < self.next_show:
+            return
+        self.preview(self.decode(latent, common, preview=True).resize(size, Image.BILINEAR))
+        self.next_show = time.monotonic() + 3 * (time.monotonic() - now)
+
+    # ---- Fix's Inpaint ----
+    def inpaint_size(self, width, height):
+        return self.size_for(width, height)
+
+    @torch.no_grad()
+    def inpaint(self, image, mask, text, strength, steps, guidance, seed):
+        """The picture with the white of `mask` repainted, both PIL images at a size inpaint_size() gave. `text` may
+        be empty: the model then carries on the picture around the area."""
+        where = self.encoders_on(self.status)
+        try:
+            embeds = self.encode_text(text, "", guidance, where)
+        finally:
+            self.encoders_off()
+        check = self.stepper("Inpainting", max(int(steps * strength), 1))
+        with self.on_gpu():
+            return self.paint_area(image, mask, on_device(embeds, self.device), strength, steps, guidance, seed, check)
+
+
+class Handoff(HandoffModel):
+    """SD 1.5 and SDXL."""
+
     def __init__(self, path, status, device):
         """Loads the checkpoint into RAM. The render worker keeps it for later renders, so this happens once
         until the file or the app changes. prepare() sets it up for each render."""
         import diffusers
         diffusers.utils.logging.set_verbosity_error()
-        self.xl, self.device, self.status, self.stopped = is_xl(path), device, status, lambda: False
+        super().__init__(device, status)
+        about = budget.describe_checkpoint(path) or {}
+        self.xl, self.few_steps, self.clip_skip = about.get("kind") == "sdxl", bool(about.get("few_steps")), 0
         status(f"Loading the {'SDXL' if self.xl else 'SD 1.5'} handoff model")
         kind = diffusers.StableDiffusionXLPipeline if self.xl else diffusers.StableDiffusionPipeline
         extra = {} if self.xl else {"safety_checker": None, "requires_safety_checker": False}
@@ -120,54 +270,28 @@ class Handoff:
             if self.xl:
                 p.text_encoder_2 = self.encoders[1] if on else None
 
-    def parts(self):
-        """Everything that goes back to RAM between renders."""
-        return [self.unet, self.vae, *self.encoders]
+    def painters(self):
+        return [self.unet]
 
-    def prepare(self, cfg, prompt_sets, status, stopped=lambda: False, preview=lambda image: None):
-        """Settings and prompts for one render. prompt_sets is [(first frame, [prompt lines])]. Every set is
-        encoded now, before Disco loads, so the text encoders can go back to RAM."""
-        self.status, self.stopped, self.preview = status, stopped, preview
-        self.share = min(max(float(cfg["handoff_share"]) / 100, 0), 1)
-        self.steps = max(int(cfg["handoff_steps"]), 1)
-        self.guidance = float(cfg["handoff_guidance"])
+    def to_gpu(self, on):
+        for part in (self.vae, self.unet):
+            part.to(self.device if on else "cpu")
+
+    def configure(self, cfg):
         self.clip_skip = max(int(cfg.get("handoff_clip_skip") or 1), 1) - 1  # diffusers counts the layers left out
         self.text_pipe.scheduler = self.image_pipe.scheduler = make_scheduler(
             self.scheduler_config, cfg.get("handoff_sampler", "Euler"), bool(cfg.get("handoff_karras")), bool(cfg["handoff_few_steps"]))
-        self.embeds = []
-        self.encoders_on()
-        try:
-            for at, lines in prompt_sets:
-                self.embeds.append((at, self.encode_text(*words(lines, cfg["handoff_negative"]), self.guidance, self.clip_skip)))
-        finally:
-            self.encoders_off()
-
-    def encoders_on(self, status=None):
-        for e in self.encoders:
-            e.to(self.device)
-        self.attach_encoders(True)
-        return self.device
-
-    def encoders_off(self):
-        self.attach_encoders(False)
-        for e in self.encoders:
-            e.to("cpu")
-        gc.collect()
-        torch.cuda.empty_cache()
 
     @torch.no_grad()
-    def encode_text(self, text, negative, guidance, clip_skip=0):
+    def encode_text(self, text, negative, guidance, where):
         """One prompt's embeddings, in RAM, as the pipelines take them, for this guidance."""
         names = (["prompt_embeds", "negative_prompt_embeds", "pooled_prompt_embeds", "negative_pooled_prompt_embeds"]
                  if self.xl else ["prompt_embeds", "negative_prompt_embeds"])
         both = {"prompt_2": text, "negative_prompt_2": negative} if self.xl else {}
-        out = self.text_pipe.encode_prompt(prompt=text, device=self.device, num_images_per_prompt=1,
+        out = self.text_pipe.encode_prompt(prompt=text, device=where, num_images_per_prompt=1,
                                            do_classifier_free_guidance=guidance > 1, negative_prompt=negative,
-                                           clip_skip=clip_skip or None, **both)
+                                           clip_skip=self.clip_skip or None, **both)
         return {k: v.cpu() for k, v in zip(names, out) if v is not None}
-
-    def finish_size(self, width, height):
-        return finish_size(width, height)
 
     def needs_room(self, width, height, painted=False):
         """Bytes the checkpoint needs on the GPU, with its working memory, for a frame this size. painted means
@@ -193,15 +317,11 @@ class Handoff:
         run = round(self.share * (len(times) - begin))
         if run < 1:
             return None
-        embeds = next((e for at, e in reversed(self.embeds) if at <= frame), self.embeds[0][1])
+        shown = start.size if start is not None else (width, height)
         seen, self.next_show = {}, 0
-        try:
-            embeds = {k: v.to(self.device) for k, v in embeds.items()}
-            self.vae.to(self.device)
-            self.unet.to(self.device)
-            generator = torch.Generator(self.device).manual_seed(int(seed) % 2**32)
-            common = dict(num_inference_steps=self.steps, guidance_scale=self.guidance, generator=generator,
-                          output_type="latent", **embeds)
+        with self.on_gpu():
+            common = dict(num_inference_steps=self.steps, guidance_scale=self.guidance, generator=self.generator(seed),
+                          output_type="latent", **self.embeds_for(frame))
             if start is None:
                 pipe = self.text_pipe
                 common.update(width=sd_w, height=sd_h)
@@ -219,38 +339,23 @@ class Handoff:
                 seen["t"] = int(a[1] if len(a) > 1 else k["timestep"])
                 return out
 
-            shown = start.size if start is not None else (width, height)
-
-            def check(p, i, t, values):
-                self.status(f"Handoff model, step {i + 1} of {run}")
-                if self.stopped():
-                    raise KeyboardInterrupt
-                if "x0" in seen:  # its picture so far, as Disco's preview shows its own
-                    self.show(seen["x0"], shown)
-                if i + 1 >= run:
-                    p._interrupt = True
-                return values
-
+            # its picture so far, as Disco's preview shows its own
+            check = self.stepper("Handoff model", run, lambda values: "x0" in seen and self.show(seen["x0"], shown), last=True)
             pipe.scheduler.step = keep
-            pipe(callback_on_step_end=check, **common)
+            try:
+                pipe(callback_on_step_end=check, **common)
+            finally:
+                pipe.scheduler.__dict__.pop("step", None)
             # Disco carries on from the point after the checkpoint's last step. Not every sampler counts its steps.
             path = [int(t) for t in pipe.scheduler.timesteps]
             after = path.index(seen["t"]) + 1 if seen["t"] in path else len(path)
             alpha = float(alphas[path[after]]) if after < len(path) else 1.0
-            self.unet.to("cpu")
-            torch.cuda.empty_cache()
+            self.painter_off()
             picture = self.decode(seen.pop("x0"))
             self.preview(picture.resize(shown, Image.BILINEAR))  # exactly what Disco gets
-        finally:  # whatever happened, the GPU goes back to Disco
-            for p in (self.text_pipe, self.image_pipe):
-                p.scheduler.__dict__.pop("step", None)
-            self.unet.to("cpu")
-            self.vae.to("cpu")
             seen.clear()
-            embeds = common = generator = None
-        gc.collect()
-        torch.cuda.empty_cache()
-        return picture.resize(start.size if start is not None else (width, height), Image.LANCZOS), alpha
+            common = None
+        return picture.resize(shown, Image.LANCZOS), alpha
 
     @torch.no_grad()
     def finish(self, image, strength, frame, seed):
@@ -260,44 +365,23 @@ class Handoff:
         width, height = image.size
         sd_w, sd_h = finish_size(width, height)
         run = max(round(self.steps * strength), 1)
-        embeds = next((e for at, e in reversed(self.embeds) if at <= frame), self.embeds[0][1])
         self.next_show = 0
-        try:
-            embeds = {k: v.to(self.device) for k, v in embeds.items()}
-            self.vae.to(self.device)
-            self.unet.to(self.device)
+        with self.on_gpu():
             latent = self.encode(image.convert("RGB").resize((sd_w, sd_h), Image.LANCZOS))
-            generator = torch.Generator(self.device).manual_seed(int(seed) % 2**32)
-
-            def check(p, i, t, values):
-                self.status(f"Handoff model finishing, step {i + 1} of {run}")
-                if self.stopped():
-                    raise KeyboardInterrupt
-                self.show(values["latents"], (width, height))
-                return values
-
+            check = self.stepper("Handoff model finishing", run, lambda values: self.show(values["latents"], (width, height)))
             # diffusers runs int(steps * strength) steps; half a step more makes that `run`, never 0 with few steps
             out = self.image_pipe(image=latent, strength=min((run + 0.5) / self.steps, 1.0), num_inference_steps=self.steps,
-                                  guidance_scale=self.guidance, generator=generator, output_type="latent",
-                                  callback_on_step_end=check, **embeds)
-            self.unet.to("cpu")
-            torch.cuda.empty_cache()
+                                  guidance_scale=self.guidance, generator=self.generator(seed), output_type="latent",
+                                  callback_on_step_end=check, **self.embeds_for(frame))
+            self.painter_off()
             picture = self.decode(out.images)
-        finally:  # whatever happened, the GPU goes back to Disco
-            self.unet.to("cpu")
-            self.vae.to("cpu")
-            embeds = out = generator = None
-        gc.collect()
-        torch.cuda.empty_cache()
+            out = None
         return picture.resize((width, height), Image.LANCZOS)
 
-    def inpaint_size(self, width, height):
-        return size_for(width, height)
-
-    def inpaint_pipe(self, steps):
+    def inpaint_pipe(self):
         """diffusers' inpainting pipeline for this checkpoint, built once from the parts already loaded, with an Euler
-        scheduler spaced for few-step models when it runs few steps. It paints the masked part from `strength` of the
-        way to noise, and at each step puts back the rest of the picture at that step's noise level, so the two meet
+        scheduler, spaced for few-step models when this is one. It paints the masked part from `strength` of the way
+        to noise, and at each step puts back the rest of the picture at that step's noise level, so the two meet
         without a seam."""
         import diffusers
         if getattr(self, "_inpaint_pipe", None) is None:
@@ -307,77 +391,47 @@ class Handoff:
             else:
                 pipe = diffusers.StableDiffusionInpaintPipeline(**{**parts, "safety_checker": None}, requires_safety_checker=False)
             pipe.set_progress_bar_config(disable=True)
+            pipe.scheduler = make_scheduler(self.scheduler_config, "Euler", False, self.few_steps)
             self._inpaint_pipe = pipe
-        self._inpaint_pipe.scheduler = make_scheduler(self.scheduler_config, "Euler", False, steps <= 10)
         return self._inpaint_pipe
 
-    @torch.no_grad()
-    def inpaint(self, image, mask, text, strength, steps, guidance, seed):
-        """The picture with the white of `mask` repainted, both PIL images at a size inpaint_size() gave. `text` may
-        be empty: the checkpoint then carries on the picture around the area."""
-        self.encoders_on()
+    def paint_area(self, image, mask, embeds, strength, steps, guidance, seed, check):
+        out = self.inpaint_pipe()(image=image, mask_image=mask, strength=strength, num_inference_steps=steps, height=image.height,
+                                  width=image.width, guidance_scale=guidance, callback_on_step_end=check,
+                                  generator=self.generator(seed), **embeds)
+        return out.images[0]
+
+    @contextlib.contextmanager
+    def vae_in_float(self, wanted=True):
+        """The VAE in float32 for a moment, as SDXL's needs for encoding and both need for decoding, since it
+        overflows in float16. It goes back to float16 whatever happens, so one failed decode can't leave it in
+        float32, at twice the memory, for every render after."""
+        if not wanted:
+            yield self.vae
+            return
         try:
-            embeds = self.encode_text(text, "", guidance)
+            yield self.vae.float()
         finally:
-            self.encoders_off()
-        pipe = self.inpaint_pipe(steps)
-        run = max(int(steps * strength), 1)
-
-        def check(p, i, t, values):
-            self.status(f"Inpainting, step {i + 1} of {run}")
-            if self.stopped():
-                raise KeyboardInterrupt
-            return values
-
-        try:
-            self.vae.to(self.device)
-            self.unet.to(self.device)
-            out = pipe(image=image, mask_image=mask, strength=strength, num_inference_steps=steps, height=image.height,
-                       width=image.width, guidance_scale=guidance, callback_on_step_end=check,
-                       generator=torch.Generator(self.device).manual_seed(int(seed) % 2**32),
-                       **{k: v.to(self.device) for k, v in embeds.items()})
-            picture = out.images[0]
-        finally:  # whatever happened, the GPU goes back to Disco
-            self.unet.to("cpu")
-            self.vae.to("cpu")
-            out = embeds = None
-            gc.collect()
-            torch.cuda.empty_cache()
-        return picture
+            self.vae.half()
 
     def encode(self, image):
-        vae = self.vae.float() if self.xl else self.vae  # SDXL's VAE overflows in float16
-        pixels = torch.from_numpy(to_pixels(image)).to(self.device, vae.dtype)
-        latent = vae.encode(pixels).latent_dist.mean * vae.config.scaling_factor
-        self.vae.half()
+        with self.vae_in_float(self.xl) as vae:
+            pixels = imaging.from_pil(image, device=self.device, signed=True).to(vae.dtype)
+            latent = vae.encode(pixels).latent_dist.mean * vae.config.scaling_factor
         return latent.half()
 
-    def show(self, latent, size):
-        """Sends the checkpoint's picture so far to the preview, decoded by its own VAE as what Disco gets is.
-        A shrunken latent decodes to blur and stripes, so it decodes in full, in small tiles while the UNet is
-        on the GPU, and skips steps so decoding takes at most about a quarter of the time."""
-        now = time.monotonic()
-        if now < self.next_show:
-            return
-        self.preview(self.decode(latent, tiles=True).resize(size, Image.BILINEAR))
-        self.next_show = time.monotonic() + 3 * (time.monotonic() - now)
-
-    def decode(self, latent, tiles=False):
-        vae = self.vae.float()
-        wide = vae.tile_sample_min_size, vae.tile_latent_min_size
-        if tiles:
-            vae.tile_sample_min_size, vae.tile_latent_min_size = 512, 64
-        try:
-            picture = vae.decode(latent.float() / vae.config.scaling_factor).sample.clamp(-1, 1)
-        finally:
-            vae.tile_sample_min_size, vae.tile_latent_min_size = wide
-        self.vae.half()
-        return Image.fromarray(picture[0].add(1).mul(127.5).round().byte().permute(1, 2, 0).cpu().numpy())
-
-
-def to_pixels(image):
-    import numpy as np
-    return (np.asarray(image, dtype=np.float32) / 127.5 - 1).transpose(2, 0, 1)[None].copy()
+    def decode(self, latent, common=None, preview=False):
+        """Pixels from a latent. For the preview, while the UNet is on the GPU, it decodes in full, as a shrunken
+        latent decodes to blur and stripes, in small tiles."""
+        with self.vae_in_float() as vae:
+            wide = vae.tile_sample_min_size, vae.tile_latent_min_size
+            if preview:
+                vae.tile_sample_min_size, vae.tile_latent_min_size = 512, 64
+            try:
+                picture = vae.decode(latent.float() / vae.config.scaling_factor).sample
+            finally:
+                vae.tile_sample_min_size, vae.tile_latent_min_size = wide
+        return imaging.to_pil(picture, signed=True)
 
 
 def words(lines, negative):

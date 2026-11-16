@@ -23,18 +23,18 @@ import time
 import torch
 from PIL import Image
 
+import flowfiles
+import imaging
 import memory
 import models
 import paths
-import flowfiles
 from flowfiles import KINDS, describe, find_parts, header, missing_parts, model_kind, variant
+from handoff import HandoffModel
+from memory import GB
 
-GB = 2**30
 COMPUTE = torch.bfloat16
 FP8 = torch.float8_e4m3fn
 SUPPORT = os.path.join(paths.MODELS, "handoff-support")
-
-
 
 
 # --------------------------------------------------------------------------------- configs and tokenizers
@@ -131,10 +131,7 @@ def read_state(path, prefix):
     so a 16GB file could crash the process. Nothing here writes into a tensor in place; casts make new ones."""
     import warnings
     import numpy as np
-    with open(path, "rb") as f:
-        length = int.from_bytes(f.read(8), "little")
-        entries = json.loads(f.read(length))
-    entries.pop("__metadata__", None)
+    entries, data = flowfiles.safetensors_entries(path)
     view = np.memmap(path, dtype=np.uint8, mode="r")
     state = {}
     with warnings.catch_warnings():
@@ -143,7 +140,7 @@ def read_state(path, prefix):
             if not name.startswith(prefix):
                 continue
             dtype = DTYPES[entry["dtype"]]
-            begin, end = (8 + length + offset for offset in entry["data_offsets"])
+            begin, end = (data + offset for offset in entry["data_offsets"])
             raw = torch.from_numpy(view[begin:end])
             if begin % torch.empty((), dtype=dtype).element_size():
                 raw = raw.clone()  # a misaligned view isn't safe for every kernel
@@ -359,12 +356,16 @@ def signal(sigma):
 
 # ----------------------------------------------------------------------------------------------- the model
 
-class FlowHandoff:
+class FlowHandoff(HandoffModel):
+    """Z-Image, Flux.1 and Flux.2 Klein."""
+    size_for = staticmethod(size_for)
+    finish_size = staticmethod(finish_size)
+
     def __init__(self, path, status, device):
         import diffusers
         diffusers.utils.logging.set_verbosity_error()
-        self.path, self.device, self.status, self.stopped = path, device, status, lambda: False
-        self.preview = lambda image: None
+        super().__init__(device, status)
+        self.path = path
         self.kind = model_kind(path)
         names = header(path)
         self.variant = variant(path, self.kind, names)
@@ -494,66 +495,14 @@ class FlowHandoff:
             else:
                 p.text_encoder = self.encoders[0] if on else None
 
-    def parts(self):
-        """What goes back to RAM between renders. A streaming model or encoder is there already."""
-        return [*([] if self.streaming else [self.transformer]), self.vae,
-                *[e for e in self.encoders if not getattr(e, "streams", False)]]
+    def painters(self):
+        """A model that streams is in RAM already."""
+        return [] if self.streaming else [self.transformer]
 
     def to_gpu(self, on):
         self.vae.to(self.device if on else "cpu")
         if not self.streaming:
             self.transformer.to(self.device if on else "cpu")
-
-    def prepare(self, cfg, prompt_sets, status, stopped=lambda: False, preview=lambda image: None):
-        """Settings and prompts for one render. Every prompt set is encoded now, before Disco loads, and the
-        encoders go back to RAM."""
-        from handoff import words
-        self.status, self.stopped, self.preview = status, stopped, preview
-        self.share = min(max(float(cfg["handoff_share"]) / 100, 0), 1)
-        self.steps = max(int(cfg["handoff_steps"]), 1)
-        self.guidance = float(cfg["handoff_guidance"])
-        self.embeds = []
-        where = self.encoders_on(status)
-        try:
-            for at, lines in prompt_sets:
-                self.embeds.append((at, self.encode_text(*words(lines, cfg["handoff_negative"]), self.guidance, where)))
-        finally:
-            self.encoders_off()
-
-    def encoders_on(self, status):
-        """Brings the text encoders where they can run, and returns that device. On the GPU when they fit with room
-        to work. Otherwise each encoder streams there a layer at a time, as a big model does, and if that can't be
-        set up, it runs on the CPU, which is slow but always fits."""
-        size = sum(p.numel() * p.element_size() for e in self.encoders for p in e.parameters())
-        where = self.device
-        if memory.room() > size + 0.5 * GB and not any(getattr(e, "streams", False) for e in self.encoders):
-            for e in self.encoders:
-                e.to(where)
-        else:
-            try:
-                from diffusers.hooks import apply_group_offloading
-                for e in self.encoders:
-                    if not getattr(e, "streams", False):
-                        e.to("cpu")
-                        # Layer by layer: an encoder's blocks sit inside it, which block-level streaming doesn't reach,
-                        # so it would bring the whole encoder over at once. Each layer goes from the file's own weights
-                        # and back to them, so RAM never holds a copy: about 5GB less for Flux's T5.
-                        apply_group_offloading(e, onload_device=torch.device(self.device), offload_type="leaf_level",
-                                               use_stream=True, low_cpu_mem_usage=True)
-                        e.streams = True
-            except Exception:
-                where = "cpu"
-                status("Encoding the prompt on the CPU, as the GPU is short of room")
-        self.attach_encoders(True)
-        return where
-
-    def encoders_off(self):
-        self.attach_encoders(False)
-        for e in self.encoders:
-            if not getattr(e, "streams", False):
-                e.to("cpu")
-        gc.collect()
-        torch.cuda.empty_cache()
 
     @torch.no_grad()
     def encode_text(self, text, negative, guidance, where):
@@ -585,13 +534,6 @@ class FlowHandoff:
 
     def vae_bytes(self):
         return sum(p.numel() * p.element_size() for p in self.vae.parameters())
-
-    def finish_size(self, width, height):
-        return finish_size(width, height)
-
-    def _embeds(self, frame):
-        chosen = next((e for at, e in reversed(self.embeds) if at <= frame), self.embeds[0][1])
-        return {k: [v.to(self.device) for v in e] if isinstance(e, list) else e.to(self.device) for k, e in chosen.items()}
 
     def _guidance(self, guidance=None):
         guidance = self.guidance if guidance is None else guidance
@@ -635,16 +577,11 @@ class FlowHandoff:
             seen["next"] = float(scheduler.sigmas[scheduler.step_index + 1])
             return step(model_output, timestep, sample, *a, **k)
 
-        def check(p, i, t, values):
-            self.status(f"{label}, step {i + 1} of {run}")
-            if self.stopped():
-                raise KeyboardInterrupt
+        def show(values):
             if "x0" in seen:
                 self.show(seen["x0"] if keep_x0 else values["latents"], size, common)
-            if i + 1 >= run:
-                p._interrupt = True
-            return values
 
+        check = self.stepper(label, run, show, last=True)
         scheduler.step = keep
         try:
             out = pipe(callback_on_step_end=check, output_type="latent", **common)
@@ -664,26 +601,19 @@ class FlowHandoff:
             return None
         shown = start.size if start is not None else (width, height)
         self.next_show = 0
-        try:
-            self.to_gpu(True)
-            common = dict(num_inference_steps=steps, height=sd_h, width=sd_w, **self._guidance(), **self._embeds(frame),
-                          generator=torch.Generator(self.device).manual_seed(int(seed) % 2**32))
+        with self.on_gpu():
+            common = dict(num_inference_steps=steps, height=sd_h, width=sd_w, **self._guidance(), **self.embeds_for(frame),
+                          generator=self.generator(seed))
             if start is None:
                 pipe = self.text_pipe
             else:
                 pipe = self.image_pipe
                 common.update(self._picture(start, sd_w, sd_h, begin, common))
             x0, sigma = self._run(pipe, run, "Handoff model", shown, common, keep_x0=True)
-            if not self.streaming:
-                self.transformer.to("cpu")
-            torch.cuda.empty_cache()
+            self.painter_off()
             picture = self.decode(x0, common)
             self.preview(picture.resize(shown, Image.BILINEAR))
-        finally:
-            self.to_gpu(False)
             common = None
-        gc.collect()
-        torch.cuda.empty_cache()
         return picture.resize(shown, Image.LANCZOS), signal(sigma)
 
     @torch.no_grad()
@@ -692,25 +622,15 @@ class FlowHandoff:
         sd_w, sd_h = finish_size(width, height)
         run = max(round(self.steps * strength), 1)
         self.next_show = 0
-        try:
-            self.to_gpu(True)
-            common = dict(num_inference_steps=self.steps, height=sd_h, width=sd_w, **self._guidance(), **self._embeds(frame),
-                          generator=torch.Generator(self.device).manual_seed(int(seed) % 2**32))
+        with self.on_gpu():
+            common = dict(num_inference_steps=self.steps, height=sd_h, width=sd_w, **self._guidance(), **self.embeds_for(frame),
+                          generator=self.generator(seed))
             common.update(self._picture(image, sd_w, sd_h, max(self.steps - run, 0), common))
             latents, _ = self._run(self.image_pipe, run, "Handoff model finishing", (width, height), common, keep_x0=False)
-            if not self.streaming:
-                self.transformer.to("cpu")
-            torch.cuda.empty_cache()
+            self.painter_off()
             picture = self.decode(latents, common)
-        finally:
-            self.to_gpu(False)
             common = None
-        gc.collect()
-        torch.cuda.empty_cache()
         return picture.resize((width, height), Image.LANCZOS)
-
-    def inpaint_size(self, width, height):
-        return size_for(width, height)
 
     def inpaint_pipe(self):
         """diffusers' inpainting pipeline for this model, built once from the parts already loaded. It paints the
@@ -730,38 +650,13 @@ class FlowHandoff:
             self._inpaint_pipe = pipe
         return self._inpaint_pipe
 
-    @torch.no_grad()
-    def inpaint(self, image, mask, text, strength, steps, guidance, seed):
-        """The picture with the white of `mask` repainted, both PIL images at a size inpaint_size() gave. `text` may
-        be empty: the model then carries on the picture around the area."""
-        where = self.encoders_on(self.status)
-        try:
-            embeds = self.encode_text(text, "", guidance, where)
-        finally:
-            self.encoders_off()
-        run = max(int(steps * strength), 1)
-
-        def check(p, i, t, values):
-            self.status(f"Inpainting, step {i + 1} of {run}")
-            if self.stopped():
-                raise KeyboardInterrupt
-            return values
-
-        try:
-            self.to_gpu(True)
-            if self.kind == "flux2":
-                return self.klein_inpaint(image, mask, embeds, strength, steps, guidance, seed, check)
-            out = self.inpaint_pipe()(image=image, mask_image=mask, strength=strength, num_inference_steps=steps, height=image.height,
-                       width=image.width, generator=torch.Generator(self.device).manual_seed(int(seed) % 2**32),
-                       callback_on_step_end=check, **self._guidance(guidance),
-                       **{k: [v.to(self.device) for v in e] if isinstance(e, list) else e.to(self.device) for k, e in embeds.items()})
-            picture = out.images[0]
-        finally:
-            self.to_gpu(False)
-            out = embeds = None
-            gc.collect()
-            torch.cuda.empty_cache()
-        return picture
+    def paint_area(self, image, mask, embeds, strength, steps, guidance, seed, check):
+        if self.kind == "flux2":
+            return self.klein_inpaint(image, mask, embeds, strength, steps, guidance, seed, check)
+        out = self.inpaint_pipe()(image=image, mask_image=mask, strength=strength, num_inference_steps=steps, height=image.height,
+                                  width=image.width, generator=self.generator(seed), callback_on_step_end=check,
+                                  **self._guidance(guidance), **embeds)
+        return out.images[0]
 
     def klein_inpaint(self, image, mask, embeds, strength, steps, guidance, seed, check):
         """Klein's inpainting. diffusers' Klein inpainter always shows the model the picture it starts from as a
@@ -772,7 +667,7 @@ class FlowHandoff:
         import torch.nn.functional as F
         from diffusers.pipelines.flux2.pipeline_flux2_klein import compute_empirical_mu
         pipe = self.text_pipe
-        generator = torch.Generator(self.device).manual_seed(int(seed) % 2**32)
+        generator = self.generator(seed)
         pixels = pipe.image_processor.preprocess(image, height=image.height, width=image.width).to(self.device, self.vae.dtype)
         latent = pipe._encode_vae_image(pixels, generator).float()
         path = np.linspace(1.0, 1 / steps, steps)  # as the pipeline lays it out, then shifts it for the size
@@ -781,7 +676,7 @@ class FlowHandoff:
         sigma = float(pipe.scheduler.sigmas[begin])
         noise = torch.randn(latent.shape, generator=generator, device=self.device, dtype=latent.dtype)
         known, still = pipe._pack_latents(latent), pipe._pack_latents(noise)
-        area = torch.from_numpy(np.asarray(mask.convert("L"), dtype=np.float32) / 255)[None, None].to(self.device)
+        area = imaging.mask_from_pil(mask, self.device)
         area = pipe._pack_latents((F.interpolate(area, latent.shape[2:], mode="area") > 0.5).float())
 
         def keep_the_rest(p, i, t, values):
@@ -793,19 +688,10 @@ class FlowHandoff:
 
         out = pipe(latents=((1 - sigma) * latent + sigma * noise).to(COMPUTE), sigmas=list(path[begin:]), num_inference_steps=steps,
                    height=image.height, width=image.width, generator=generator, callback_on_step_end=keep_the_rest,
-                   **self._guidance(guidance), **{k: v.to(self.device) for k, v in embeds.items()})
+                   **self._guidance(guidance), **embeds)
         return out.images[0]
 
-    def show(self, latent, size, common):
-        """The picture so far in the preview, decoded as Disco gets it, skipping steps so decoding takes at
-        most about a quarter of the time."""
-        now = time.monotonic()
-        if now < self.next_show:
-            return
-        self.preview(self.decode(latent, common).resize(size, Image.BILINEAR))
-        self.next_show = time.monotonic() + 3 * (time.monotonic() - now)
-
-    def decode(self, latent, common):
+    def decode(self, latent, common, preview=False):
         """Pixels from a latent. Flux packs its latents in 2x2 patches. Klein's are packed too while it paints,
         and normalized by its autoencoder's batch-norm terms, which come off before decoding."""
         pipe = self.text_pipe
@@ -817,10 +703,8 @@ class FlowHandoff:
                 mean = self.vae.bn.running_mean.view(1, -1, 1, 1).to(latent.device, latent.dtype)
                 std = torch.sqrt(self.vae.bn.running_var.view(1, -1, 1, 1) + self.vae.config.batch_norm_eps).to(latent.device, latent.dtype)
                 latent = pipe._unpatchify_latents(latent * std + mean)
-            picture = self.vae.decode(latent.to(COMPUTE)).sample.float().clamp(-1, 1)
-            return Image.fromarray(picture[0].add(1).mul(127.5).round().byte().permute(1, 2, 0).cpu().numpy())
+            return imaging.to_pil(self.vae.decode(latent.to(COMPUTE)).sample, signed=True)
         if self.kind == "flux":
             latent = pipe._unpack_latents(latent, common["height"], common["width"], pipe.vae_scale_factor)
         latent = latent.to(COMPUTE) / self.vae.config.scaling_factor + self.vae.config.shift_factor
-        picture = self.vae.decode(latent).sample.float().clamp(-1, 1)
-        return Image.fromarray(picture[0].add(1).mul(127.5).round().byte().permute(1, 2, 0).cpu().numpy())
+        return imaging.to_pil(self.vae.decode(latent).sample, signed=True)

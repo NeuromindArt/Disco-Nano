@@ -1,9 +1,32 @@
-"""Keyframes and prompt sets for animation. Kept apart from torch, so the web server can check them."""
+"""Keyframes and prompt sets for animation, and schedules: settings that change over a render. Kept apart from
+torch, so the web server can check them."""
 import ast
 import math
 import re
 
 MOTION = ["angle", "zoom", "translation_x", "translation_y", "translation_z", "rotation_3d_x", "rotation_3d_y", "rotation_3d_z"]
+
+
+# Schedules ---------------------------------------------------------------------------------------
+# A schedule setting has a value for each of POINTS points along a render, from its first step to its last, whatever
+# its number of steps.
+POINTS = 1000
+
+
+def schedule(text):
+    """Reads a schedule such as [12]*400+[4]*600 into a list of POINTS values."""
+    values = []
+    for part in str(text).replace(" ", "").split("+"):
+        match = re.fullmatch(r"\[(-?\d+(?:\.\d+)?)\]\*(\d+)", part)
+        if not match:
+            raise ValueError(f"Could not read the schedule {text!r}. Use a form like [12]*400+[4]*600.")
+        values += [float(match.group(1))] * int(match.group(2))
+    return (values + values[-1:] * POINTS)[:POINTS]
+
+
+def schedule_at(i, timesteps):
+    """Where the step at index i, counted down from `timesteps` as the sampler counts, is on a schedule."""
+    return min(int(POINTS * (1 - (i + 1) / timesteps)), POINTS - 1)
 
 
 # Keyframes ---------------------------------------------------------------------------------------
