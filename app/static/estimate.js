@@ -55,15 +55,16 @@ function tileGrid() {
   return state.tile_scale && state.tile_scale !== "Off" ? Number(state.tile_scale[0]) : 1;
 }
 
-function tileOverlap(width, height) {
-  return Math.min(state.advanced.tile_overlap ?? byName.tile_overlap.default, Math.floor(Math.min(width, height) / 2));
+/* The pixels a tile of this side shares with its neighbors, as tiles.overlaps() works it out. */
+function tileOverlap(side) {
+  const percent = Number(state.advanced.tile_overlap_pct ?? byName.tile_overlap_pct.default);
+  return Math.min(Math.max(pyRound(side * percent / 800) * 8, 8), Math.floor(side / 2));
 }
 
 /* The final image's size for a frame of this size. */
 function finalSize(width, height) {
-  const overlap = tileOverlap(width, height);
   const extra = tileGrid() - 1;
-  return [width + (width - overlap) * extra, height + (height - overlap) * extra];
+  return [width + (width - tileOverlap(width)) * extra, height + (height - tileOverlap(height)) * extra];
 }
 
 /* The step Render first's tiles start from, repainting the picture its first pass made. */

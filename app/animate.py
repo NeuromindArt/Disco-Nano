@@ -297,7 +297,7 @@ def save_video(frames, fps, path):
     av = need_av("MP4")
     with Image.open(frames[0]) as first:
         width, height = first.size
-    even = (width // 2 * 2, height // 2 * 2)  # H.264 in yuv420p needs even sides, and an odd Tile overlap gives odd ones
+    even = (width // 2 * 2, height // 2 * 2)  # H.264 in yuv420p needs even sides
     with av.open(path, "w") as box:
         stream = box.add_stream("libx264", rate=round(fps))
         stream.width, stream.height = even

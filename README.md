@@ -794,14 +794,16 @@ strength** changes Prompt strength over the render along its own curve.
 turns it on, and **Size** chooses how many tiles. It needs no more VRAM than
 the frame does, and time grows with the number of tiles. The tiles take each step in turn, and
 the overlaps are merged before the next step, so neighbors settle on one image instead of being
-joined afterward. The join moves at random inside the overlap every step, so it can't harden into a
-straight line.
+joined afterward. Neighbors share a quarter of each tile, and the join moves at random inside that
+overlap every step, so it can't harden into a straight line.
 
 | Tiles | Final size from a 768×512 frame |
 |---|---|
-| 2x, 4 tiles | 1440×928 |
-| 3x, 9 tiles | 2112×1344 |
-| 4x, 16 tiles | 2784×1760 |
+| 2x, 4 tiles | 1344×896 |
+| 3x, 9 tiles | 1920×1280 |
+| 4x, 16 tiles | 2496×1664 |
+| 6x, 36 tiles | 3648×2432 |
+| 8x, 64 tiles | 4800×3200 |
 
 - **With a start image**, **Denoise** sets how much is repainted, as it does without tiles. The
   image can be any size, because it is resized to the final size first.
@@ -810,8 +812,9 @@ straight line.
   scene with large shapes, and 0.5 is a good start. **Split the noise** paints at full size from the
   first step and uses Denoise. It is busier, and each tile can paint its own copy of the subject.
 - **Whole picture view** lets CLIP see each tile as part of the full image.
-- **Tile overlap**, in the Tiles section once tiles are on, is how many pixels neighbors share. The
-  default is 96.
+- **Tile overlap %**, in the Tiles section once tiles are on, is how much of each tile its neighbors
+  share, as a percentage of its side. The default is 25. Lower gives a slightly larger image, but the
+  joins can show in plain areas such as sky and fog.
 
 Tiles always use the ddim sampler, and symmetry doesn't apply.
 
@@ -820,8 +823,9 @@ tiles. The first frame follows the rules above, and every later frame, and every
 Frame skip %.
 
 Tested on an RTX 3070 8GB: a 2x render from a 768×512 frame at 100 steps, with Tile denoise 0.5,
-took about 6 minutes and peaked at 5.2GB. The picture below is one, made with Render first. 3x and
-4x were tested on small frames only. Tiles lose sharpness at low step counts, so use at least 50
+took about 6 minutes and peaked at 5.2GB. The picture below is one, made with Render first. A 4x
+render from a 768×512 frame at 200 steps, with a Flux.2 Klein handoff, took about 40 minutes and
+peaked at 6.0GB. 3x, 6x and 8x were tested on small frames only. Tiles lose sharpness at low step counts, so use at least 50
 steps per tile, which is 100 steps at Tile denoise 0.5.
 
 ![A 2x tiled lighthouse, 1440×928](docs/tiles.jpg)

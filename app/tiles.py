@@ -19,9 +19,16 @@ def grid_of(setting):
     return 1 if setting == "Off" else int(setting[0])
 
 
+def overlaps(tile_width, tile_height, percent):
+    """The pixels neighboring tiles share across and down: `percent` of the tile's side each way, in steps of 8 so
+    every size stays even, and at most half the side. A narrow overlap leaves the join little room to move, and
+    tiles that paint different things on either side of it get sharpened into a straight line."""
+    return tuple(min(max(round(side * percent / 800) * 8, 8), side // 2) for side in (tile_width, tile_height))
+
+
 def plan(tile_width, tile_height, grid, overlap):
-    """The final size, and each tile's top-left corner."""
-    step_x, step_y = tile_width - overlap, tile_height - overlap
+    """The final size, and each tile's top-left corner. `overlap` is the pixels shared across and down."""
+    step_x, step_y = tile_width - overlap[0], tile_height - overlap[1]
     final = (tile_width + step_x * (grid - 1), tile_height + step_y * (grid - 1))
     return final, [(col * step_x, row * step_y) for row in range(grid) for col in range(grid)]
 
@@ -73,7 +80,8 @@ def paint(r, start, skip, batch):
     as far as the GPU is concerned.
     """
     cfg, diffusion, hooks, eraser = r.cfg, r.diffusion, r.hooks, r.eraser
-    final, spots, grid, overlap, side_x, side_y = r.final, r.spots, r.grid, r.overlap, r.side_x, r.side_y
+    final, spots, grid, side_x, side_y = r.final, r.spots, r.grid, r.side_x, r.side_y
+    across_by, down_by = r.overlap
     size = (1, 3, final[1], final[0])
     noise = r.start_noise(size, "cpu")
     if noise is None:
@@ -104,8 +112,8 @@ def paint(r, start, skip, batch):
     def predict_tiles(source, t):
         """Render.predict over the whole picture a tile at a time, the overlaps blended as a step blends them. Tiles
         that no erase touches are left out, as only the erased area is used."""
-        across = fades(final[0], side_x - overlap, grid, overlap)
-        down = fades(final[1], side_y - overlap, grid, overlap)
+        across = fades(final[0], side_x - across_by, grid, across_by)
+        down = fades(final[1], side_y - down_by, grid, down_by)
         area = eraser.back
         pred_sum, eps_sum = torch.zeros(size), torch.zeros(size)
         for number, (x, y) in enumerate(spots):
@@ -129,8 +137,8 @@ def paint(r, start, skip, batch):
         r.t = i
         view = None if latest is None else small_copy(latest)
         pred_sum, eps_sum = torch.zeros(size), torch.zeros(size)
-        across = fades(final[0], side_x - overlap, grid, overlap)
-        down = fades(final[1], side_y - overlap, grid, overlap)
+        across = fades(final[0], side_x - across_by, grid, across_by)
+        down = fades(final[1], side_y - down_by, grid, down_by)
         for number, (x, y) in enumerate(spots):
             if eraser and not number:
                 eraser.shown = latest

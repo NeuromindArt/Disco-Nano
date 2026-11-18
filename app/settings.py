@@ -76,13 +76,13 @@ FIELDS = [
     field("transformation_percent", [0.09], SYMMETRY, "When mirroring happens, as fractions of the run.", kind="raw"),
 
     field("tile_scale", "Off", TILES, "Builds a larger image from several renders at the frame size. Time grows with the number of tiles.",
-          options=["Off", "2x, 4 tiles", "3x, 9 tiles", "4x, 16 tiles"]),
+          options=["Off", "2x, 4 tiles", "3x, 9 tiles", "4x, 16 tiles", "6x, 36 tiles", "8x, 64 tiles"]),
     field("tile_denoise", 0.5, TILES, "With Render first, how much the tiles repaint the first picture. Low keeps it, high paints something new."),
     field("tile_start", "Render first", TILES,
           "For renders with no start image. Render first paints one image, then repaints it in tiles, for one scene. Split the noise tiles from the start: busier, and the subject can repeat.",
           options=["Render first", "Split the noise"]),
     field("tile_whole_view", True, TILES, "CLIP also sees each tile inside a small copy of the whole picture, which helps with one scene instead of one per tile."),
-    field("tile_overlap", 96, TILES, "Pixels shared by neighboring tiles. More hides joins better and gives a slightly smaller image."),
+    field("tile_overlap_pct", 25, TILES, "How much of each tile its neighbors share, as a percentage of its side. More hides joins better and gives a smaller image."),
 
     field("handoff_file", "", HANDOFF, "The full path of an SD 1.5, SDXL, Z-Image, Flux.1 or Flux.2 Klein model, .safetensors or .gguf. It paints the start of each image or frame, and Disco finishes it. Empty is off."),
     field("handoff_share", 100, HANDOFF, "How much of its picture the {handoff_file} paints. At 100 it finishes, and Disco repaints {skip_steps} of it. Lower hands Disco a picture still forming. 0 is off."),
@@ -227,7 +227,7 @@ FIELDS = [
 LABELS = {
     "steps": "Steps", "skip_steps": "Denoise", "clip_guidance_scale": "Prompt strength", "n_batches": "Images", "set_seed": "Seed",
     "tile_scale": "Tiles", "tile_denoise": "Tile denoise", "tile_start": "Text start", "tile_whole_view": "Whole picture view",
-    "tile_overlap": "Tile overlap", "exact_repeat": "Exact repeat", "cpu_threads": "CPU threads", "diffusion_model": "Model",
+    "tile_overlap_pct": "Tile overlap %", "exact_repeat": "Exact repeat", "cpu_threads": "CPU threads", "diffusion_model": "Model",
     "use_secondary_model": "Secondary model", "init_scale": "Start image strength",
     "image_prompts": "Image prompts", "image_prompt_weight": "Image prompt weight",
     "small_first": "Small first %", "small_denoise": "Full-size denoise %", "small_side": "Small first size",
@@ -279,7 +279,7 @@ LABELS = {
 }
 
 # Nano's own settings, which have no official name.
-NANO_ONLY = {"views_fit", "views_shapes", "exact_repeat", "cpu_threads", "save_progress_video", "keep_models_loaded", "image_prompts", "image_prompt_weight", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view", "tile_overlap",
+NANO_ONLY = {"views_fit", "views_shapes", "exact_repeat", "cpu_threads", "save_progress_video", "keep_models_loaded", "image_prompts", "image_prompt_weight", "tile_scale", "tile_denoise", "tile_start", "tile_whole_view", "tile_overlap_pct",
              "color_hold", "frame_sharpen", "frame_skip_keys", "frame_ghost", "prompt_fade", "in_between", "loop_mode", "loop_frames", "video_blend", "video_flow", "save_mp4", "save_webp", "save_gif",
              *(f["name"] for f in FIELDS if f["section"] in (LAB, HANDOFF, CONTROLS, INPAINT))}
 
@@ -328,7 +328,7 @@ RANGES = {
     "display_rate": (1, "{steps}"),
     "transformation_percent": (0, 1),
     "tile_denoise": (0.1, 1),
-    "tile_overlap": (32, 128),
+    "tile_overlap_pct": (10, 50),
     "gradient_momentum": (0, 0.95),
     "evidence_map": (0, 1),
     "partner_every": (1, 25),

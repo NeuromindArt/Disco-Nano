@@ -86,7 +86,7 @@ class Render:
         side_x, side_y = self.side_x, self.side_y = [(side // 64) * 64 for side in cfg.get("width_height", [768, 512])]
         self.secondary = cfg["use_secondary_model"]
         self.grid = tiles.grid_of(cfg["tile_scale"])
-        self.overlap = min(int(cfg["tile_overlap"]), min(side_x, side_y) // 2)
+        self.overlap = tiles.overlaps(side_x, side_y, float(cfg["tile_overlap_pct"]))
         self.final, self.spots = tiles.plan(side_x, side_y, self.grid, self.overlap)
         clash = rules.conflicts(cfg)
         if clash:

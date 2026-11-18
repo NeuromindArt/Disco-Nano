@@ -520,10 +520,10 @@ async function eraseDone() {
   if (body?.inpaint && usesTries() && tryShown === null) body.inpaint = null;  // Before: carry on without it
   const fresh = Number($("eraseFresh").value) / 100;
   closeErase();
-  try {
+  await endPause(async () => {
     if (body && (body.mask || body.clones.length || body.inpaint)) await post("/api/erase", { ...body, fresh });
     await post("/api/resume", {});
-  } catch (e) { formError(e.message); }
+  });
 }
 
 /* Fixes the start image, which becomes the new image, and leaves the editor open to fix more. With tries, the one on
@@ -557,9 +557,7 @@ async function eraseImage() {
 async function eraseCancel() {
   const render = eraseMode === "render";
   closeErase();
-  if (render) {
-    try { await post("/api/resume", {}); } catch (e) { formError(e.message); }
-  }
+  if (render) await endPause(() => post("/api/resume", {}));
 }
 
 function lateNoteSeen() {
@@ -651,7 +649,7 @@ function showEraseTask(t) {
     showEraseButton(t);
     return;
   }
-  if (!eraseMode && running && t.state === "paused" && t.pause_for === "erase") openErase();  // paused from another tab, or before a reload
+  if (heldPause(t) && !eraseMode && t.pause_for === "erase") openErase();  // paused from another tab, or before a reload
   if (eraseMode && !running) closeErase();
   if (eraseMode) {
     const held = t.state === "paused" || t.pausing;

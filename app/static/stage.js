@@ -13,6 +13,7 @@
 const stage = {
   shows: { src: "", video: "" },  // what the stage shows outside an editor; empty until there is something
   editor: null,
+  ending: false,  // the page has ended an editor's pause, and the server hasn't shown the render going again yet
 };
 
 function stageEditor(name) {
@@ -63,6 +64,21 @@ function closeStageEditor(name) {
   stage.editor = null;
   document.querySelector(".canvas").classList.remove("editing");
   paintStage(stage.shows);
+}
+
+/* Ends the pause an editor held, once it has closed: `send` posts what the editor made and the resume. A status
+   from before the server had them still shows the pause, and isn't one to open an editor for. */
+async function endPause(send) {
+  stage.ending = true;
+  try { await send(); } catch (e) { stage.ending = false; formError(e.message); }
+}
+
+/* Called with every status, before the editors see it: whether `t` is a pause an editor should open over, which
+   it is unless it's the one this page is ending. */
+function heldPause(t) {
+  const paused = !!t?.active && t.kind === "render" && t.state === "paused";
+  if (!paused) stage.ending = false;
+  return paused && !stage.ending;
 }
 
 /* Something else on top of the stage, which keeps the keys to itself: an open dialog or the image menu. */

@@ -55,7 +55,7 @@ function showRegionsButton(t) {
 /* Called with every status: keeps the editor in step with the render it paused. */
 function showRegionsTask(t) {
   const running = !!t?.active && t.kind === "render";
-  if (!stageEditor() && running && t.state === "paused" && t.pause_for !== "erase") openRegions();  // paused from another tab, or before a reload
+  if (heldPause(t) && !stageEditor() && t.pause_for !== "erase") openRegions();  // paused from another tab, or before a reload
   // The editor is for a paused render, or for setting boxes before one. A render that ends, or one that starts
   // from elsewhere while the boxes are being set, closes it so the preview shows.
   if ((regionMode === "run" && !running) || (regionMode === "set" && running)) closeRegions();
@@ -111,17 +111,13 @@ async function regionsDone() {
   keepRegions();
   const run = regionMode === "run";
   closeRegions();
-  if (run) {
-    try { await post("/api/resume", { regions: regionsFor() }); } catch (e) { formError(e.message); }
-  }
+  if (run) await endPause(() => post("/api/resume", { regions: regionsFor() }));
 }
 
 async function regionsCancel() {
   const run = regionMode === "run";
   closeRegions();
-  if (run) {
-    try { await post("/api/resume", {}); } catch (e) { formError(e.message); }  // carries on with the regions it had
-  }
+  if (run) await endPause(() => post("/api/resume", {}));  // carries on with the regions it had
 }
 
 /* Until the render has paused, the frame says so and the boxes, Clear and Continue are off. */

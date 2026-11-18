@@ -40,7 +40,7 @@ const CARD_FIELDS = {
   small_first: ["small_hold", "small_side"],
   small_hold: ["small_hold_curve"],
   // Tiles
-  tile_scale: ["tile_overlap"],
+  tile_scale: ["tile_overlap_pct"],
   // Animation
   prompt_changes: ["prompt_fade"],
   clip_style: ["video_init_seed_continuity"],
