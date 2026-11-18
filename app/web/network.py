@@ -17,7 +17,7 @@ from web.base import APP_DIR, LOCAL, PORT, app
 
 
 # Off until turned on in Settings. Then Nano also listens on this PC's network addresses, and a browser
-# on another PC opens http://<address>:7861. It enters the code shown here once, and a cookie remembers it.
+# on another PC opens http://<address>:<port>. It enters the code shown here once, and a cookie remembers it.
 LOOPBACK = ("127.0.0.1", "localhost", "::1", "[::1]")
 KEY_COOKIE = "nano_key"
 CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I to misread
@@ -90,18 +90,13 @@ def network_json():
             "name": socket.gethostname(), "error": _network["error"] if on else None}
 
 
-def from_network(request):
-    """True for a request that came in over the network rather than from this PC's own browser."""
-    return not is_local(request)
-
-
 @app.middleware("http")
 async def only_this_app(request: Request, call_next):
     """Stops other websites in the same browser from driving this server, and asks a browser on another PC for
     the code before it can do anything."""
     host = request.headers.get("host", "").rsplit(":", 1)[0].lower()
     origin = request.headers.get("origin")
-    if from_network(request):
+    if not is_local(request):
         if not LOCAL.get("share_on_network"):
             return JSONResponse({"detail": "Sharing is off on this PC."}, 403)
         known = {a.lower() for a in _network["addresses"]} | {socket.gethostname().lower()}

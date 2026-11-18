@@ -203,7 +203,7 @@ async function reuseSettings() {
     state.init_fit = s.init_fit || state.init_fit;
     state.init_image = s.init_image || "";
     state.init_size = s.init_size || null;
-    state.init_name = s.init_image ? s.init_image.split(/[\\/]/).pop() : "";
+    state.init_name = baseName(s.init_image);
     state.init_url = "";
     state.video_url = "";
     // the boxes it ended with, or the switch off and the boxes kept

@@ -3,7 +3,7 @@
 "use strict";
 
 /* A look sets how the prompt shapes the picture, apart from its size. Settings it leaves out go back to
-   their defaults. Each was compared with the others on the same prompts and seeds. */
+   their defaults. */
 const LOOKS = {
   balanced: { label: "Shapes, then detail", hint: "The first 40% of the steps lay out the scene, and the rest paint detail. Strong single subjects. The default.", values: {} },
   detail: { label: "Mostly detail", hint: "Most steps paint detail. Crisp textures and busy scenes, and a start image keeps more of its shapes.", values: { views_shapes: 10 } },
@@ -207,11 +207,10 @@ function showLook() {
 function applyPreset(preset, keys) {
   if (!preset) return;
   for (const name of keys) {
-    if (!byName[name]) continue;  // a server from before this setting
+    if (!byName[name]) continue;  // a setting this server doesn't have
     const value = preset.values[name] ?? defaultOf(name);
     if (HANDLED.has(name)) state[name] = value;
-    else if (JSON.stringify(value) === JSON.stringify(defaultOf(name))) delete state.advanced[name];
-    else state.advanced[name] = value;
+    else setAdvanced(name, value, defaultOf(name));
   }
   resetAdvancedPanel();
   fillControls();

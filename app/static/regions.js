@@ -1,6 +1,8 @@
 /* Regional prompts: boxes on the frame, each with a prompt of its own, set in their own card. They are kept in
    state.regions as fractions of the frame, so they fit any size, and go with every render while the card's switch
    is on. Opened while a render runs, the editor pauses it on the preview, and Continue sends the boxes to it. */
+"use strict";
+
 const REGION_COLORS = ["#00ff66", "#38bdf8", "#f59e0b", "#e879f9", "#f43f5e", "#a3e635"];
 const REGION_MIN = 0.03;  // a drag smaller than this, as a share of the frame, is a click
 let regionDraft = null;   // the boxes being edited: { boxes: [{ x, y, w, h, text }] }

@@ -33,10 +33,10 @@ def prompt_images(folder):
     if not folder:
         return []
     if not os.path.isdir(folder):
-        raise ValueError("The image prompt folder can't be found. Choose it again under Prompt.")
+        raise ValueError("The image prompt folder can't be found. Choose it again under Guide images.")
     found = sorted(os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(IMAGE_TYPES))
     if not found:
-        raise ValueError("The image prompt folder has no PNG, JPEG or WebP images.")
+        raise ValueError("The image prompt folder has no PNG, JPEG, WebP or BMP images.")
     return found[:MAX_PROMPT_IMAGES]
 
 

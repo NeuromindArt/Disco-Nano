@@ -18,7 +18,6 @@ import contextlib
 import gc
 import json
 import os
-import time
 
 import numpy as np
 import torch
@@ -379,7 +378,6 @@ class FlowHandoff(HandoffModel):
         parts = find_parts(path, self.kind)
         status(f"Loading the {self.label()} handoff model")
         folder = support(self.kind, status)
-        started = time.time()
         self.transformer = self.load_transformer(path, folder, names)
         if self.kind == "flux2":
             self.vae = flux2_vae(*parts["vae32"], os.path.join(folder, "vae"))
@@ -439,7 +437,6 @@ class FlowHandoff(HandoffModel):
             self.transformer.enable_group_offload(onload_device=torch.device(device), offload_device=torch.device("cpu"),
                                                   offload_type="block_level", num_blocks_per_group=1, use_stream=True,
                                                   low_cpu_mem_usage=True)
-        self.load_seconds = time.time() - started
 
     def working(self, width, height):
         """Working memory at this size."""

@@ -11,11 +11,11 @@ const ROUND_SECONDS = 0.25;  // measured: each View round past the first, per st
 
 function smallSide() { return Number(lookValue("small_side")) || 768; }
 
+function smallFirstOn() { return Number(state.small_first) > 0 && !state.handoff_file; }
+
 /* Small first's size and steps, or null when it is off or the frame is no larger. As settings.small_frame in
    the renderer: the frame's shape in multiples of 64, its longer side at most Small first size. Of the sizes
    with at least 60% of the area that allows, the largest within 2% of the frame's shape, or else the closest. */
-function smallFirstOn() { return Number(state.small_first) > 0 && !state.handoff_file; }
-
 function smallFrame() {
   const share = smallFirstOn() ? Number(state.small_first) : 0, longest = smallSide();
   const long = Math.max(state.width, state.height), short = Math.min(state.width, state.height);

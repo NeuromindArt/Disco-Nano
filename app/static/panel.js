@@ -381,7 +381,7 @@ function showSummaries() {
     lab: on ? `${on} on` : "Off",
     controls: controlsOn() ? `${controlsOn()} on` : "Off",
     handoff: [handingOff() && [Number(state.handoff_share) > 0 && `${state.handoff_share}%`, Number(state.handoff_finish) > 0 && !animating() && `finish ${state.handoff_finish}%`,
-      baseName(state.handoff_file).replace(/\.(safetensors|gguf)$/i, "")].filter(Boolean).join(", "),
+      modelName(state.handoff_file)].filter(Boolean).join(", "),
       smallFirstOn() && `small first ${state.small_first}%`].filter(Boolean).join("; "),
     cutouts: changedIn("cutouts") ? `${changedIn("cutouts")} changed` : model?.cuts ? "The model's own" : "Close-up ramp",
     guidance: changedIn("guidance") ? `${changedIn("guidance")} changed` : "Default",
@@ -401,7 +401,7 @@ function showSummaries() {
   smallRow.title = state.handoff_file ? "A handoff checkpoint already paints the start at its own size, so Small first is off while one is chosen." : "";
   const small = smallFrame(), where = $("smallWhere");
   where.hidden = !smallFirstOn() || tileGrid() > 1;
-  // Small first paints only the steps before small_steps that aren't skipped: Denoise, then a clip's Frame skip.
+  // Small first paints only the steps before small.steps that aren't skipped: Denoise, then a clip's Frame skip.
   const smallFor = (skip) => (small ? Math.max(small.steps - skip, 0) : 0);
   const first = smallFor(Math.min(Number(state.skip_steps) || 0, state.steps - 1));
   const later = animating() ? smallFor(frameSkip(Math.max(Number(state.steps) || 1, 1))) : first;
@@ -420,7 +420,7 @@ function showSummaries() {
   if (model) setHelp($("diffusion_model"), model.about);
 }
 
-/* How many of Edge, Depth and Pose control are on. */
+/* How many of the Controls card's controls are on. */
 function controlsOn() { return ["edge_control", "depth_control", "pose_control", "person_control", "face_control", "face_shape", "face_detail"].filter((n) => Number(state[n]) > 0).length; }
 
 /* What the controls follow, as the renderer chooses it. */

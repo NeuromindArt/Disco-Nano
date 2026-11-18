@@ -20,7 +20,7 @@ class Depth:
         try:
             from transformers import DepthAnythingForDepthEstimation
         except ImportError as e:
-            raise ValueError("Depth target needs the transformers package. Run setup again to add it.") from e
+            raise ValueError("Depth Anything needs the transformers package. Run setup again to add it.") from e
         folder = os.path.join(paths.MODELS, models.DEPTH)
         self.net = DepthAnythingForDepthEstimation.from_pretrained(folder).to(device).eval().requires_grad_(False)
         self.mean = torch.tensor(MEAN, device=device)[None, :, None, None]

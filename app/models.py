@@ -226,8 +226,8 @@ LABELS = {
 
 ABOUT = {
     MAIN: "The standard model and the best all-rounder.",
-    PARTNER: "Tiny SD, the small text model behind Prompt graft, Live ghost, Two painters and Borrowed attention. It never paints the final image.",
-    DEPTH: "Depth Anything V2 Small, which judges how near each part of the picture looks. Depth target needs it.",
+    PARTNER: "Tiny SD, the small text-to-image model behind Prompt graft, Live ghost, Two painters and Borrowed attention. It never paints the final image.",
+    DEPTH: "Depth Anything V2 Small, which judges how near each part of the picture looks. Depth target, Depth control, Face shape and 3D animation need it.",
     "fare4-b16": "A robust checker for the Experiments card. Whole scenes and steady subjects, at almost no extra cost. By Schlarmann et al.",
     "fare2-l14": "A larger robust checker. Slower, with bolder scenes. By Schlarmann et al.",
     "fare4-l14": "The most robust of the large checkers. Slower, and pulls hardest toward shapes. By Schlarmann et al.",

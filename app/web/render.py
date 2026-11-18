@@ -97,14 +97,14 @@ def render(body: dict, request: Request):
             if name in models.FILES and not os.path.exists(models.path_of(name)):
                 raise HTTPException(400, f"{name} isn't downloaded yet. Get it from Models in Settings.")
         if body.get("resume_clip"):
-            if settings.get("animation_mode", "None") == "None":
+            if animation == "None":
                 raise HTTPException(400, "Set Animation to carry on a clip.")
             settings["resume_clip"] = places.safe_output_path(str(body["resume_clip"]))
         batch = re.sub(r"[^A-Za-z0-9 _-]+", "", str(body.get("batch_name", "Disco"))).strip() or "Disco"
         settings["batch_name"] = batch
         job_id, job_dir = places.new_job_dir("render")
         requested = body.get("options", {})
-        # Offload is chosen here, from the same plan the page draws, unless a script asks for it outright.
+        # Offload is chosen here, from the same plan the page draws, unless the request sets options.offload.
         offload = requested.get("offload")
         if offload is None:
             offload = bool(jobs.memory_plan(settings).get("offload"))
@@ -132,7 +132,7 @@ def stop():
             open(os.path.join(jobs.current.job_dir, "stop"), "w").close()
             jobs.current.message = "Stopping after this step. Stop again to end it now."
         else:
-            jobs.current.proc.terminate()  # still loading, nothing to preserve; the next render starts a new worker
+            jobs.current.proc.terminate()  # a first render still loading, or a second Stop: the next render starts a new worker
             jobs.current.state, jobs.current.message = "stopped", jobs.FRIENDLY["stopped"]
     return {"ok": True}
 

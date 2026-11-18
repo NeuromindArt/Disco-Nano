@@ -80,10 +80,7 @@ function showModelStates() {
   if (problem) modelError(problem);
 }
 
-function modelError(message) {
-  $("modelError").textContent = message;
-  $("modelError").hidden = !message;
-}
+const modelError = (message) => showError("modelError", message);
 
 async function requestDownloads(names) {
   modelError("");

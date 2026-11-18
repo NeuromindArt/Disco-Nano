@@ -47,7 +47,7 @@ Everyone is listed because the project they built is what made this one possible
 | [TAESD](https://github.com/madebyollin/taesd) | Ollin Boer Bohan | MIT |
 | [Tiny SD](https://huggingface.co/segmind/tiny-sd), an optional download. `app/prompt_graft.pt` was fitted from its features and the fine-tuned 512x512 model's | Segmind | CreativeML OpenRAIL-M |
 | [Depth Anything V2 Small](https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf), an optional download | Lihe Yang and others | Apache 2.0 |
-| [LaMa](https://github.com/advimman/lama) (big-lama), an optional download for Erase, as TorchScript from [Sanster/models](https://github.com/Sanster/models) | Roman Suvorov and others; Sanster | Apache 2.0 |
+| [LaMa](https://github.com/advimman/lama) (big-lama), an optional download for Erase and Inpaint's Over a cleared area, as TorchScript from [Sanster/models](https://github.com/Sanster/models) | Roman Suvorov and others; Sanster | Apache 2.0 |
 | [Robust CLIP (FARE)](https://github.com/chs20/RobustVLM) checkers, optional downloads for Robust checker | Christian Schlarmann, Naman Deep Singh, Francesco Croce and Matthias Hein | MIT |
 | [OpenCLIP](https://github.com/mlfoundations/open_clip), which loads the robust checkers | OpenCLIP contributors | MIT |
 | [Diffusers](https://github.com/huggingface/diffusers), [Transformers](https://github.com/huggingface/transformers) | Hugging Face | Apache 2.0 |

@@ -1,4 +1,4 @@
-"""A small text model that works beside Disco during a render.
+"""A small text-to-image model that works beside Disco during a render.
 
 It denoises its own copy of the picture in latent space, and Disco borrows its self-attention. Those
 maps say which parts of the picture belong together. They carry no color or texture, and they are
@@ -173,7 +173,6 @@ class Partner:
     def to(self, device):
         for network in (self.unet, self.encoder, self.decoder):
             network.to(device)
-
 
     def watch(self, blocks):
         """Starts recording what the prompt changes at these blocks."""

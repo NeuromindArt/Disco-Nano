@@ -7,7 +7,8 @@ import subprocess
 import threading
 import time
 
-from web.base import LOCAL, ROOT
+import paths
+from web.base import LOCAL
 from web import places
 
 
@@ -153,7 +154,7 @@ def measure_disco():
     def walk():
         try:
             drive = os.path.splitdrive(os.path.realpath(places.OUT_DIR))[0].lower()
-            tops = [ROOT] + ([] if places.inside(places.OUT_DIR, ROOT) else [places.OUT_DIR])
+            tops = [paths.HOME] + ([] if places.inside(places.OUT_DIR, paths.HOME) else [places.OUT_DIR])
             same = [t for t in tops if os.path.splitdrive(os.path.realpath(t))[0].lower() == drive]
             _disco_size["gb"] = round(sum(folder_bytes(t) for t in same) / 2**30, 1)
         except OSError:

@@ -20,7 +20,7 @@ def pick_checkpoint(body: dict, request: Request):
     """Opens Windows' file picker for the handoff model. The checkpoint is read where it is, never copied, and
     its folder joins the checkpoint folders so the list finds its neighbours too."""
     network.local_only(request)
-    picked = pickers.pick_file(body.get("start", ""), "Choose an SD 1.5, SDXL, Z-Image, Flux or Flux.2 Klein model", "Models|*.safetensors;*.gguf")
+    picked = pickers.pick_file(body.get("start", ""), f"Choose {MODEL_KINDS}", "Models|*.safetensors;*.gguf")
     if picked["path"]:
         checked_model(picked["path"], "checkpoint")
         places.add_checkpoint_dir(os.path.dirname(picked["path"]))

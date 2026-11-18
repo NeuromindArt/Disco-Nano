@@ -11,6 +11,8 @@
 
    On the start image it works before a render, so the render never has the thing to bring back. The start image
    shows on the stage, and each Apply saves a new image beside it that becomes the start image. */
+"use strict";
+
 let eraseMode = null;     // "render" while the editor is over a render it paused, "image" over the start image
 let eraseHeld = false;    // the render has reached its pause, or been asked for one
 let erasePainted = false;
@@ -630,11 +632,11 @@ function showEraseButton(t) {
   const btn = $("eraseBtn");
   btn.hidden = !t?.active || t.kind !== "render" || animating();
   btn.disabled = stageEditor() || !erasable(t) || (t?.state === "paused" && t.pause_for !== "erase");
-  btn.title = "Pauses after this step, so you can erase or clone over something. The render then carries on from it.";
+  btn.title = "Pauses after this step, so you can erase, inpaint or clone over something. The render then carries on from it.";
   const image = $("initErase");
   image.hidden = !state.init_url || dropBusy($("initDrop"));
   image.disabled = stageEditor() || !!t?.active;
-  image.title = t?.active ? "Fix the start image when no render is running." : "Erase or clone over things in the start image";
+  image.title = t?.active ? "Fix the start image when no render is running." : "Erase, inpaint or clone over things in the start image";
 }
 
 /* Called with every status: keeps the editor in step with the render it paused. */

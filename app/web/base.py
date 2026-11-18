@@ -9,7 +9,6 @@ import paths
 
 
 APP_DIR = paths.APP_DIR
-ROOT = paths.HOME
 PYTHON = paths.PYTHON
 LOCAL = paths.local_settings()  # this PC's own settings: its folders, sharing, and what the welcome screen did
 

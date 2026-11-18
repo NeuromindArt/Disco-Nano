@@ -74,13 +74,13 @@ Every render below uses the same prompt, *A beautiful painting of a lighthouse i
 same seed, 768×512 and 200 steps, and changes only the option beside it. The guide images are
 abstract paintings and paint photos from [Pexels](https://www.pexels.com), not lighthouses, and are
 shown under their option. Each render took 4 to 6 minutes on an RTX 3070 8GB. They use Prompt
-strength 20000 and Step limit 0.09, the earlier defaults; Nano now starts a little softer.
+strength 20000 and Step limit 0.09, a little stronger than Nano's defaults of 10000 and 0.065.
 
 ### Starting points and guides
 
 <table>
   <tr>
-    <td width="40%" valign="top"><b>Default settings</b><br>The Shapes, then detail look, with nothing changed.</td>
+    <td width="40%" valign="top"><b>Default settings</b><br>The Shapes, then detail look, with nothing else changed.</td>
     <td width="60%"><img src="docs/options/default.jpg" width="100%" alt="Default settings"></td>
   </tr>
   <tr>
@@ -379,8 +379,7 @@ and a weight below 0 steers away from them.
 ## Looks and Denoise
 
 With text alone, keep **Denoise** at 100%. The first steps of a render lay out the scene, and
-skipping them leaves CLIP only texture to work with. Earlier versions of Nano skipped a quarter of
-the steps, which often gave a pleasant texture in place of the subject.
+skipping them leaves CLIP only texture to work with.
 
 A **Look** sets how the prompt shapes the picture, at any size:
 
@@ -516,10 +515,10 @@ out one scene and the full size paints the detail.
 - **Full-size denoise %** works like Denoise. At 0 the full size carries on from exactly where
   the small start stopped. Higher repaints more of it, which gives the full size more say over the
   layout: 85 with Small first at 25 starts the full size at step 31 of 200.
-- **Hold the small layout**, in the Small first section, keeps the full size's broad shapes and colors
+- **Hold the small layout**, under **Small first settings**, keeps the full size's broad shapes and colors
   close to the small picture while the detail is added, so a second subject can't grow in the empty
   areas. Fine detail is left free. About 0.5 is a good start, and its curve holds until halfway by default.
-- **Small first size**, in the Small first section once it's on, is the small start's longer side, 768
+- **Small first size**, under **Small first settings** once it's on, is the small start's longer side, 768
   by default. The shorter side follows the frame's shape in multiples of 64, with as little stretch
   as possible. Frames no larger than this aren't changed.
 
@@ -608,7 +607,7 @@ as Flux Fill, or any model Handoff takes, SD 1.5, SDXL, Z-Image, Flux.1 or Flux.
 inpainting sees the area itself, so it paints what fits inside it and blends in best. Those come first in
 the list, and are left out of Handoff's. Flux Fill (6.3GB) is in Models in Settings, and uses the Flux text
 encoders and VAE in your model folders, as ComfyUI keeps them. Choose the model under **Inpaint** in
-Settings, where its steps and guidance fill in for it. Until one is chosen, Inpaint is greyed out. Paint
+Settings, where its steps and guidance fill in for it. Until one is chosen, Inpaint is grayed out. Paint
 where it should go, and say what in the box on the bar, such as *a small sailboat*. Left empty, the model
 paints whatever fits around the area. **Start** picks what it paints from:
 
@@ -715,7 +714,7 @@ Tiles.
 
 ## Experiments
 
-The **Experiments** card holds ideas that change how the image forms. They're new,
+The **Experiments** card holds ideas that change how the image forms. They're experimental,
 so results vary a lot from seed to seed. They can't run with Tiles, symmetry, plms or the secondary
 model: whichever you choose first grays out the other, and hovering says why. Each one is shown on the
 same lighthouse under [What each option does](#experiments).
@@ -725,7 +724,7 @@ Subjects come out cleaner, for about 35% more time.
 
 ### With a partner model
 
-Four experiments use a small text-reading model, the partner, beside Disco. It never paints the final
+These experiments use a small text-reading model, the partner, beside Disco, or build on one that does. It never paints the final
 image. Get Tiny SD from Models, about 900MB.
 
 - **Prompt graft** feeds the prompt straight into Disco's own decoder, which normally can't read text.
@@ -794,7 +793,7 @@ strength** changes Prompt strength over the render along its own curve.
 turns it on, and **Size** chooses how many tiles. It needs no more VRAM than
 the frame does, and time grows with the number of tiles. The tiles take each step in turn, and
 the overlaps are merged before the next step, so neighbors settle on one image instead of being
-joined afterward. Neighbors share a quarter of each tile, and the join moves at random inside that
+joined afterward. By default neighbors share a quarter of each tile's side, and the join moves at random inside that
 overlap every step, so it can't harden into a straight line.
 
 | Tiles | Final size from a 768×512 frame |
@@ -812,7 +811,7 @@ overlap every step, so it can't harden into a straight line.
   scene with large shapes, and 0.5 is a good start. **Split the noise** paints at full size from the
   first step and uses Denoise. It is busier, and each tile can paint its own copy of the subject.
 - **Whole picture view** lets CLIP see each tile as part of the full image.
-- **Tile overlap %**, in the Tiles section once tiles are on, is how much of each tile its neighbors
+- **Tile overlap %**, under **Tiles settings** once tiles are on, is how much of each tile its neighbors
   share, as a percentage of its side. The default is 25. Lower gives a slightly larger image, but the
   joins can show in plain areas such as sky and fog.
 
@@ -877,8 +876,8 @@ Diffusion's form: `0:(1.0), 60:(1.04), 120:(1.0)`. Formulas of the frame `t` wor
 keyframes.
 
 The prompt box holds the prompt at the first frame. **Change the prompt at a frame** adds another box
-with the frame it starts at, so a clip can travel from one idea to the next. **Prompt fade** in All
-settings blends one into the next.
+with the frame it starts at, so a clip can travel from one idea to the next. **Prompt fade**, under the
+arrow beside it, blends one into the next.
 
 - **Hold colors** matches each frame's light and color to the first frame's, so long clips don't
   drift or burn out.

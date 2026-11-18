@@ -26,7 +26,7 @@ PARAMETERS = {"style_strength", "ghost_structure", "ghost_crops", "handoff_keep"
 OFF_WORDS = {"live_ghost", "route_prompts", "robust_critic"}
 
 
-def _on(cfg, name):
+def on(cfg, name):
     """True when a setting is doing something, as opposed to sitting at its off value."""
     value = cfg.get(name, DEFAULTS.get(name))
     if name == "tile_scale":
@@ -44,12 +44,6 @@ def _on(cfg, name):
     if isinstance(value, str):
         return bool(value.strip())
     return bool(value)
-
-
-def regions_on(cfg):
-    """True when the render has regional prompts: boxes with prompts of their own."""
-    regions = cfg.get("regions")
-    return isinstance(regions, dict) and any(str(b.get("text", "")).strip() for b in regions.get("boxes", []) if isinstance(b, dict))
 
 
 def _names(names):
@@ -72,28 +66,28 @@ def blocked(cfg, downloaded=_have):
             out.setdefault(name, reason)
 
     animating = cfg["animation_mode"] != "None"
-    loop = [n for n in LOOP_CHANGES if _on(cfg, n)]
-    trying = [n for n in EXPERIMENTS if _on(cfg, n)]
+    loop = [n for n in LOOP_CHANGES if on(cfg, n)]
+    trying = [n for n in EXPERIMENTS if on(cfg, n)]
     if loop:
         block(EXPERIMENTS, f"Experiments can't run with {_names(loop)}.")
     if trying:
         block(LOOP_CHANGES, f"Can't run with {_names(trying)}. Turn the experiments off first.")
-    if _on(cfg, "tile_scale"):
+    if on(cfg, "tile_scale"):
         block(["diffusion_sampling_mode", "use_horizontal_symmetry", "use_vertical_symmetry"], "Tiles always use ddim, with no mirroring.")
-    if _on(cfg, "diffusion_sampling_mode"):
+    if on(cfg, "diffusion_sampling_mode"):
         block(["use_horizontal_symmetry", "use_vertical_symmetry", "tile_scale"], "Needs the ddim sampler.")
-    if _on(cfg, "use_horizontal_symmetry") or _on(cfg, "use_vertical_symmetry"):
+    if on(cfg, "use_horizontal_symmetry") or on(cfg, "use_vertical_symmetry"):
         block(["diffusion_sampling_mode", "tile_scale"], "Mirroring needs ddim and no tiles.")
-    sized = [n for n in FRAME_SIZED if _on(cfg, n)]
-    if _on(cfg, "small_first"):
+    sized = [n for n in FRAME_SIZED if on(cfg, n)]
+    if on(cfg, "small_first"):
         block(FRAME_SIZED, "Can't run with Small first %, which paints the start at another size.")
         block(["tile_scale"], "Can't run with Small first %. Tiles have their own small start, Render first.")
     if sized:
         block(["small_first"], f"Can't run with {_names(sized)}, which are sized to the frame.")
-    if _on(cfg, "tile_scale"):
+    if on(cfg, "tile_scale"):
         block(["small_first"], "Tiles have their own small start: Render first, under Text start.")
-    steering = [n for n in CONTROLS + ["face_detail"] if _on(cfg, n)]
-    if _on(cfg, "tile_scale"):
+    steering = [n for n in CONTROLS + ["face_detail"] if on(cfg, n)]
+    if on(cfg, "tile_scale"):
         block(CONTROLS + ["face_detail"], "Controls can't run with Tiles.")
     if steering:
         block(["tile_scale"], f"Can't run with {_names(steering)}.")
@@ -109,14 +103,14 @@ def blocked(cfg, downloaded=_have):
         block(["prompt_graft"], "Needs Tiny SD as the partner model.")
     if cfg["diffusion_model"] != models.MAIN:
         block(["prompt_graft"], "Works only with the 512x512 model.")
-    if _on(cfg, "prompt_graft"):
+    if on(cfg, "prompt_graft"):
         block(["partner_model"], "Prompt graft needs Tiny SD.")
     robust = models.ROBUST_CHOICES.get(cfg["robust_critic"])
     if robust and not downloaded(robust[0]):
         block(["robust_critic"], f"Get {models.LABELS[robust[0]]} from Models in Settings first.")
     if not downloaded(models.DEPTH):
         block(["depth_target", "depth_control", "face_shape"], "Get Depth Anything from Models in Settings first.")
-    elif not (_on(cfg, "live_ghost") or _on(cfg, "ghost_image") or (animating and cfg["frame_ghost"])):
+    elif not (on(cfg, "live_ghost") or on(cfg, "ghost_image") or (animating and cfg["frame_ghost"])):
         block(["depth_target"], "Needs Live ghost, a Ghost image or Last frame as ghost.")
     resnets = [n for n in RESNETS if cfg[n]]
     vits = [n for n in VITS if cfg[n]]
@@ -124,11 +118,11 @@ def blocked(cfg, downloaded=_have):
         block(["style_image", "style_strength"], "Needs a ResNet checker, such as RN50.")
     if not vits:
         block(["ghost_structure", "ghost_crops", "one_subject"], "Needs a ViT checker.")
-    elif _on(cfg, "one_subject") and len(vits) == 1:
+    elif on(cfg, "one_subject") and len(vits) == 1:
         block(vits, "One subject needs a ViT checker.")
-    if _on(cfg, "style_image") and len(resnets) == 1:
+    if on(cfg, "style_image") and len(resnets) == 1:
         block(resnets, "Style image needs a ResNet checker.")
-    if _on(cfg, "ghost_image") and (cfg["ghost_structure"] or cfg["ghost_crops"]):
+    if on(cfg, "ghost_image") and (cfg["ghost_structure"] or cfg["ghost_crops"]):
         if not vits:
             block(["ghost_image"], "Ghost shapes and Ghost areas need a ViT checker.")
         elif len(vits) == 1:
@@ -150,7 +144,7 @@ def clashing(cfg, downloaded=_have, ruled=None):
     full = {**DEFAULTS, **cfg}
     return [name for name in ruled
             if (name == "animation_mode" and full["animation_mode"] == "3D")
-            or (name != "animation_mode" and name not in PARAMETERS and name not in CHECKERS and _on(full, name))]
+            or (name != "animation_mode" and name not in PARAMETERS and name not in CHECKERS and on(full, name))]
 
 
 def conflicts(cfg, downloaded=_have, ruled=None):

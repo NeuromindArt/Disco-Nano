@@ -153,6 +153,7 @@ def run_job(job_dir):
     try:
         import torch
         torch.cuda.reset_peak_memory_stats()
+        # DISCO_NANO_THREADS overrides the setting, for scripts that time renders at several thread counts
         threads = int(os.environ.get("DISCO_NANO_THREADS") or settings.get("cpu_threads", 4))
         if threads > 0:  # more threads mostly spin while they wait for the GPU, which slows the rest of the PC
             torch.set_num_threads(threads)

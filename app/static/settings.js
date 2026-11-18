@@ -49,7 +49,7 @@ const CHEVRON_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 
 /* Options that are switched on and off. While off, an option is a plain row. Switched on, it becomes a section
    with its settings open under it, which its arrow folds away. An option not listed here is always in use, and
-   its arrow starts folded, like More settings. */
+   its arrow starts folded. */
 const isOn = (name) => { const v = lookValue(name); return !!v && v !== "Off" && Number(v) !== 0; };
 const OPT_ON = {
   checkpoint: () => !!state.handoff_file,
@@ -360,8 +360,7 @@ function advChanged(f, input, wrap) {
   wrap.classList.remove("bad");
   try {
     const value = parseAdv(f, input);
-    if (JSON.stringify(value) === JSON.stringify(f.default)) delete state.advanced[f.name];
-    else state.advanced[f.name] = value;
+    setAdvanced(f.name, value);
   } catch {
     wrap.classList.add("bad");
     return;
@@ -402,7 +401,7 @@ function filterAdvanced() {
   const q = $("advSearch").value.trim().toLowerCase();
   $("namesBox").hidden = !!q && !"setting names plain official".includes(q);
   $("lookBox").hidden = !!q && !"accent color colour theme grid background".includes(q);
-  $("foldersBox").hidden = !!q && !"save images folders upscalers".includes(q);
+  $("foldersBox").hidden = !!q && !"save images folders checkpoints upscalers".includes(q);
   $("modelsBox").hidden = !!q && !"models downloads upscalers".includes(q);
   $("networkBox").hidden = !!q && !"network share this pc render on another pc remote address code".includes(q);
   document.querySelectorAll(".app-fields").forEach((sec) => {

@@ -57,14 +57,14 @@ function showPromptChanges() {
     Object.assign(text, { rows: 2, value: change.text, placeholder: "The prompt from this frame on" });
     text.setAttribute("aria-label", `Prompt from frame ${change.frame}`);
     text.addEventListener("input", () => { change.text = text.value; save(); });
-    frame.addEventListener("change", () => {
+    frame.addEventListener("change", (e) => {
+      e.stopPropagation();
       const wanted = Math.max(1, Math.round(Number(frame.value) || 1));
       change.frame = state.prompt_changes.some((c) => c !== change && c.frame === wanted) ? wanted + 1 : wanted;
       state.prompt_changes.sort((a, b) => a.frame - b.frame);
       save();
       showPromptChanges();
     });
-    frame.addEventListener("change", (e) => e.stopPropagation(), { capture: false });
     remove.addEventListener("click", () => { state.prompt_changes.splice(state.prompt_changes.indexOf(change), 1); save(); showPromptChanges(); });
     row.append(head, text);
     return row;

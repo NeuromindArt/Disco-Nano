@@ -1,4 +1,4 @@
-"""What makes the renderer fit and run quickly on an 8GB card. Used by renderer.py.
+"""What makes the renderer fit and run quickly on an 8GB card.
 
 Disco Diffusion's memory problem is the opposite of Stable Diffusion's. Weights are only about 1GB.
 The rest is the full-size working data kept for the guidance backward pass, so that is what these
@@ -332,8 +332,8 @@ def limit_vram():
     """
     global cap_bytes
     free, total = torch.cuda.mem_get_info()
-    # What this worker already holds is its own to use, not another app's. Counted as taken, it was taken twice:
-    # once here and again in room(), which subtracts it from the cap.
+    # What this worker already holds is its own to use, not another app's. Counting it as taken would take it twice:
+    # here and again in room(), which subtracts it from the cap.
     cap = free + torch.cuda.memory_reserved() - int(VRAM_HEADROOM_GB * GB)
     cap_bytes = max(cap, GB)
     torch.cuda.set_per_process_memory_fraction(cap_bytes / total)

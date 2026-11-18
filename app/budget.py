@@ -21,9 +21,8 @@ BASE_GB, WORK_PER_MPX = 2.67, 5.62
 OFFLOAD_BASE_GB, OFFLOAD_WORK_PER_MPX = 2.53, 2.27  # the rest of the working data waits in RAM
 SECONDARY_BASE_GB, SECONDARY_WORK_PER_MPX = 2.75, 2.42  # the small model skips the big backward pass
 SMALL_MODEL_SAVING_GB = 1.9  # the style models are smaller than the main one
-# What each checker adds over the default three, or saves when it is off. Each one's working data is small
-# next to the UNet's, so only the fixed part counts. On 8GB, adding RN50x16 by itself
-# runs out of memory at 512x512.
+# What each checker adds over the default three, or saves when it is off. Each one's working data is small next to
+# the UNet's, so only the fixed part counts. On 8GB, adding RN50x16 by itself runs out of memory at 512x512.
 CHECKERS = {"ViTB32": 0.35, "ViTB16": 0.5, "RN50": 0.43, "ViTL14": 0.58, "RN101": 0.23, "RN50x4": 1.38, "RN50x16": 2.3, "RN50x64": 4.5}
 CHECKER_RAM = {"ViTL14": 1.5, "RN101": 1.9, "RN50x4": 3.8, "RN50x16": 6.0, "RN50x64": 12.0}
 DEFAULT_CHECKERS = ("ViTB32", "ViTB16", "RN50")
@@ -72,7 +71,7 @@ def plan(settings, gpu, ram):
     extras, ram_extras = [], []
     if setting_list.uses_partner(cfg):
         extras.append(PARTNER)
-    if rules._on(cfg, "depth_target") or cfg["animation_mode"] == "3D" or float(cfg.get("depth_control") or 0) \
+    if rules.on(cfg, "depth_target") or cfg["animation_mode"] == "3D" or float(cfg.get("depth_control") or 0) \
             or float(cfg.get("face_shape") or 0):
         extras.append(DEPTH)
     clip = cfg["animation_mode"] != "None"
@@ -126,7 +125,7 @@ def plan(settings, gpu, ram):
     ram_parts += ram_extras
 
     return {
-        "vram": {"total": gpu["total_gb"], "other": gpu["used_gb"], "keep": KEEP_GB,
+        "vram": {"total": gpu["total_gb"], "other": gpu["used_gb"],
                  "parts": [{"kind": "models", "label": label, "gb": fixed}, {"kind": "work", "label": work_label, "gb": work}, *extra_parts]},
         "ram": {"total": ram["total_gb"], "other": ram["used_gb"], "parts": ram_parts},
         "offload": offload,
@@ -134,21 +133,12 @@ def plan(settings, gpu, ram):
     }
 
 
-_kinds = {}
-
-
-def checkpoint_kind(path):
-    """"sd15", "sdxl", "zimage" or "flux" for a model Handoff can use, or None for anything else, such as SD 3,
-    SD 2 or Flux.2. It reads the names in the file's header, which is quick and needs no torch. File size can't
-    tell: some SD 1.5 files are over 5GB."""
-    return (describe_checkpoint(path) or {}).get("kind")
-
-
 # SD 1.5 and SDXL models made for few steps, such as SDXL Lightning, are told apart by these words in their names; the
 # weights look the same. Z-Image and Flux say so through their variant. They start with the steps and CFG they want,
 # and with their steps spaced as they expect.
 FEW_STEPS = ("lightning", "turbo", "hyper", "lcm", "schnell")
 FEW_STEP_DEFAULTS = {"handoff_steps": 8, "handoff_guidance": 1.5, "handoff_few_steps": True}
+_kinds = {}  # what describe_checkpoint found, by path, change time and size
 
 
 def describe_checkpoint(path):

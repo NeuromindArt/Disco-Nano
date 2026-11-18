@@ -106,12 +106,12 @@ def tv_loss(input):
 
 
 # LPIPS runs VGG on the whole frame with gradients, about 3.9KB per pixel: 3.6GB at 1280x768, which an 8GB card
-# doesn't have to spare. There, frames larger than 768x512 are compared at 768x512, which was tested at every
-# size and still shows the start image's layout and colors that LPIPS guards. A larger card compares at the
+# doesn't have to spare. There, frames larger than 768x512 are compared at 768x512, which at every frame size
+# still shows the start image's layout and colors that LPIPS guards. A larger card compares at the
 # largest size that fits in what is free at the first step, full size when it can.
 LPIPS_FLOOR_PIXELS = 768 * 512
 LPIPS_BYTES_PER_PIXEL = 3930  # what its forward and backward pass add per compared pixel, measured from 512x320 to 1280x768
-LPIPS_FIXED_UP_TO_GB = 8.5  # cards this size or smaller keep the tested 768x512
+LPIPS_FIXED_UP_TO_GB = 8.5  # cards this size or smaller compare at 768x512
 _lpips_pixels = {}
 
 

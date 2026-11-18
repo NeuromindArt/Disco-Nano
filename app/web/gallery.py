@@ -9,7 +9,8 @@ from fastapi.responses import FileResponse
 from PIL import Image
 
 import atomic
-from web.base import ROOT, app, lock
+import paths
+from web.base import app, lock
 from web import jobs, places
 
 
@@ -25,7 +26,7 @@ def top_folder(path):
 
 def gallery_folders():
     try:
-        return sorted(e.name for e in os.scandir(places.OUT_DIR) if e.is_dir() and e.name.lower() not in ("partials",) and not e.name.endswith("_frames"))
+        return sorted(e.name for e in os.scandir(places.OUT_DIR) if e.is_dir() and e.name.lower() != "partials" and not e.name.endswith("_frames"))
     except OSError:
         return []
 
@@ -130,7 +131,7 @@ def scan_gallery():
 def image_settings(rel: str):
     """The settings a past image was made with, from the file saved beside it."""
     path = places.safe_output_path(rel)
-    match = re.match(r"(.*\(\d+\))_", os.path.basename(path))
+    match = RUN.match(os.path.basename(path))
     if not match:
         raise HTTPException(404, "No settings saved for this image.")
     txt = os.path.join(os.path.dirname(path), match.group(1) + "_settings.txt")
@@ -177,7 +178,7 @@ def images(rel: str):
     return FileResponse(places.safe_output_path(rel))  # not a static mount, because the folder can change
 
 
-THUMBS = os.path.join(ROOT, "cache", "thumbs")
+THUMBS = os.path.join(paths.HOME, "cache", "thumbs")
 THUMB_SIZE = 320
 
 

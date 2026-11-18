@@ -68,7 +68,7 @@ def start_image(body):
 
 def fixed_path(path):
     """Where a fix of the start image at `path` goes: beside the start images, as a new image, so the original is kept."""
-    stem = re.sub(r"_(erased|fixed)\d*$", "", os.path.splitext(os.path.basename(path))[0])
+    stem = re.sub(r"_fixed\d*$", "", os.path.splitext(os.path.basename(path))[0])
     n = 1
     while os.path.exists(os.path.join(places.INIT_DIR, f"{stem}_fixed{n}.png")):
         n += 1
@@ -136,12 +136,10 @@ def mask_from(data):
         raise HTTPException(400, "The mask isn't a PNG.")
 
 
-INPAINT_MODES = ("remove", "fresh", "rework")
-
-
 def inpaint_from(asked):
     """The inpaint a page sent, checked: {"mask": PNG, "prompt", "mode": remove, fresh or rework, "strength": 0 to 1,
-    "file": the Inpaint model, "steps", "guidance"}, with the mask as an image. Or None for none."""
+    "file": the Inpaint model, "steps", "guidance", "context": 1 to 4, "grow" and "blend" in pixels, and "chosen": the
+    try picked, {"id", "k"}}, with the mask as an image. Or None for none."""
     if asked is None:
         return None
     if not isinstance(asked, dict):
@@ -151,7 +149,7 @@ def inpaint_from(asked):
         raise HTTPException(400, "Choose an Inpaint model in Settings first.")
     checkpoints.checked_model(path, "inpaint")
     mode, strength, steps, guidance = asked.get("mode"), asked.get("strength"), asked.get("steps"), asked.get("guidance")
-    if mode not in INPAINT_MODES:
+    if mode not in inpaint.MODES:
         raise HTTPException(400, "Inpaint starts from remove, fresh or rework.")
     for value, low, high, what in ((strength, 0, 1, "Strength is a share from 0 to 1."), (steps, 1, 200, "Inpaint steps are 1 to 200."),
                                    (guidance, 0, 30, "Inpaint guidance is 0 to 30.")):
@@ -175,7 +173,7 @@ def inpaint_from(asked):
 
 
 def fix_from(body):
-    """The erase mask, or None, the clone layers a page sent: each {"mask": PNG, "dx": , "dy": }, how far right and
+    """The erase mask, or None, the clone layers a page sent: each {"mask": PNG, "dx", "dy"}, how far right and
     down its source is as a share of the picture's width and height, and the inpaint, as inpaint_from() reads it, or
     None. At least one of them."""
     mask = None if body.get("mask") is None else mask_from(body.get("mask"))

@@ -110,8 +110,6 @@ async function previewOf(path) {
   return PREVIEW_CACHE[path];
 }
 
-const baseName = (path) => String(path || "").split(/[\\/]/).filter(Boolean).pop() || "";
-
 // ---- start image ----
 function showInit() {
   updateFit();
@@ -126,7 +124,7 @@ function showInit() {
     });
   }
   $("initOptions").hidden = !state.init_image;
-  if (typeof showEraseButton === "function") showEraseButton(lastStatus?.task);  // the start image's Erase button
+  showEraseButton(lastStatus?.task);  // the start image's Fix button
   $("startBlock").hidden = animating() && state.animation_mode === "Video Input";
   $("matchImage").disabled = !state.init_size;
   for (const btn of document.querySelectorAll("[data-init-fit]")) {
@@ -202,8 +200,8 @@ function uploadVideo(files) {
 }
 
 // ---- guide images ----
-/* Ghost and style images live with the other Experimental settings, as full paths. Their boxes upload a copy and
-   set the path. Image prompts are a folder: a drop of many images, or of a folder, becomes a new folder of them. */
+/* Ghost, style and control images are kept in state.advanced as full paths. Their boxes upload a copy and set the
+   path. Image prompts are a folder: a drop of many images, or of a folder, becomes a new folder of them. */
 const LAB_IMAGES = ["ghost_image", "style_image", "control_image"];
 
 function showLabImages() {

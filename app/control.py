@@ -4,12 +4,12 @@ step, beside the prompt's push.
 
 Edges hold the control picture's outlines, Depth its near and far, Pose the skeletons of the people in it, Person
 their real silhouettes, clothes and broad colors, Face each face's features, and Face shape each face's outline and
-near and far, measured close up, which holds which way a head is turned. Face detail gives every face close-ups
-of its own, found in the control picture or, with none, in Disco's own estimate as the render goes. Person works on the picture between steps, as a ghost does, since
-an outline alone can be met with a few painted strokes and a filled shape can't. The
-control picture is read once, while it is clean, so nothing needs to see Disco's blurry early estimate except the
-measures that are cheap and steady on it. Edges and Pose only ever ask for more edge where the control has one,
-never less, so plain areas stay free for the prompt to paint.
+near and far, measured close up, which holds which way a head is turned. Face detail gives every face close-ups of
+its own, found in the control picture or, with none, in Disco's own estimate as the render goes. Person works on the
+picture between steps, as a ghost does, since an outline alone can be met with a few painted strokes and a filled
+shape can't. The control picture is read once, while it is clean, so nothing needs to see Disco's blurry early
+estimate except the measures that are cheap and steady on it. Edges and Pose only ever ask for more edge where the
+control has one, never less, so plain areas stay free for the prompt to paint.
 """
 import contextlib
 import math
@@ -199,11 +199,11 @@ def _inside(xs, ys, corners):
 
 
 class Control:
-    """Pushes a render toward a control picture's edges, depth and pose. Pushes are measured against the prompt's
-    push, so a strength of 1 is about as strong as the prompt when the render is furthest from the control, and
-    each one eases off as the render comes to match."""
+    """Pushes a render toward a control picture's edges, depth, pose, people and faces. Pushes are measured against
+    the prompt's push, so a strength of 1 is about as strong as the prompt when the render is furthest from the
+    control, and each one eases off as the render comes to match."""
 
-    def __init__(self, cfg, schedule, device, status, depth_model=None, keep=lambda key, build: build()):
+    def __init__(self, cfg, schedule, device, status, depth_model, keep):
         """`depth_model` gives the render's one depth model, which Depth control and Face shape share, and `keep`
         keeps the other helper models in RAM between renders."""
         self.device = device
@@ -214,9 +214,6 @@ class Control:
         self.face_shape = float(cfg.get("face_shape") or 0)
         self.depth = None
         if self.strength["depth"] or self.face_shape:
-            if depth_model is None:
-                import depth
-                depth_model = lambda: depth.Depth(device, status)
             self.depth = depth_model()
         self.pose = None
         if self.strength["pose"]:
@@ -233,7 +230,6 @@ class Control:
         self.source = None  # the control picture, 0 to 1, at the frame size
         self.targets = {}
         self.peaks = {}
-        self.found_nobody = False
 
     def set_source(self, image):
         """A new control picture, as a tensor of 0 to 1. The targets are made again when they are first needed."""
@@ -249,7 +245,6 @@ class Control:
                 self.status("Face control found no face in the control picture")
         if self.source is not None and self.strength["pose"]:
             body = self.pose.body(self.source, self.device)
-            self.found_nobody = body is None
             if body is None:
                 self.status("Pose control found nobody in the control picture")
             self.targets["body"] = body
@@ -370,7 +365,7 @@ class Control:
             picture = F.interpolate(self.source, size=(height, width), mode="bilinear", align_corners=False, antialias=True)
             self.targets[key] = (mask, picture.mul(2).sub(1))
         mask, target = self.targets[key]
-        size = max(4, min(height, width) // 48)  # shapes broader than this are held: about 7 pixels at 576x320
+        size = max(4, min(height, width) // 48)  # shapes broader than this are held: 6 pixels at 576x320
         change = lab.low_pass(mask * (target - estimate.detach().float()), size)
         return x + (self.hold * weight * scale * change).to(x.dtype)
 

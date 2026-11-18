@@ -27,7 +27,7 @@ function refreshPlan() {
   clearTimeout(planTimer);
   planTimer = setTimeout(async () => {
     try { plan = await post("/api/plan", JSON.parse(body)); } catch { return; }
-    showPlan();
+    showMemory();
     showBlocked();
     showTime();
   }, 100);
@@ -35,33 +35,20 @@ function refreshPlan() {
 
 const gb = (n) => `${n.toFixed(1)}GB`;
 
-/* Draws parts end to end, as shares of the whole. A part past `limit` turns red where it crosses. Each part's
-   kind is its color: other is the rest of the PC in gray, vram, ram and disk are Disco's own, and moved is
-   working data offloaded from VRAM, drawn green inside RAM. A planned part is lighter than a measured one. */
-function drawTrack(track, total, parts, keep = 0) {
-  const limit = total - keep;
+/* Draws parts end to end, as shares of the whole. Each part's kind is its color: other is the rest of the PC in
+   gray, vram, ram and disk are Disco's own, and moved is working data offloaded from VRAM, drawn green inside RAM. */
+function drawTrack(track, total, parts) {
   const spans = [];
   let at = 0;
   for (const part of parts) {
     if (!(part.gb >= 0.01)) continue;
-    const start = at, end = at + part.gb;
-    at = end;
-    const pieces = part.kind === "other" ? [[start, end, part.kind]] : [[start, Math.min(end, limit), part.kind], [Math.max(start, limit), end, "spill"]];
-    for (const [a, b, kind] of pieces) {
-      const shown = Math.min(b, total) - a;
-      if (shown <= 0.004) continue;
-      const span = document.createElement("span");
-      span.className = kind + (part.plan && kind !== "spill" ? " plan" : "");
-      span.style.width = `${(shown / total) * 100}%`;
-      span.title = kind === "spill" ? `${part.label}: ${gb(part.gb)}, more than is free` : `${part.label}: ${gb(part.gb)}`;
-      spans.push(span);
-    }
-  }
-  if (keep > 0) {
+    const shown = Math.min(at + part.gb, total) - at;
+    at += part.gb;
+    if (shown <= 0.004) continue;
     const span = document.createElement("span");
-    span.className = "keep";
-    span.style.width = `${(keep / total) * 100}%`;
-    span.title = `Kept free so Windows can draw the screen: ${gb(keep)}`;
+    span.className = part.kind;
+    span.style.width = `${(shown / total) * 100}%`;
+    span.title = `${part.label}: ${gb(part.gb)}`;
     spans.push(span);
   }
   track.replaceChildren(...spans);
@@ -75,9 +62,8 @@ function movedOf(p) {
 
 let renderPlan = null;  // the plan of the render that is running, for the part of its RAM that came from VRAM
 
-/* The status bar's VRAM and RAM. Solid is what is in use now: gray for the rest of the PC, and Disco in color while
-   it renders. Between renders a hollow outline after it shows what the next render will add. The number is always
-   what is in use now. */
+/* The status bar's VRAM and RAM, as what is in use now: gray for the rest of the PC, and Disco in color. What the
+   next render needs is in the hover text. */
 function showMemory() {
   const s = lastStatus;
   const busy = !!s?.task?.active && s.task.kind === "render";
@@ -98,7 +84,6 @@ function showMemory() {
     drawTrack($("vramPlan"), s.gpu.total_gb, [{ kind: "other", label: "Other apps and the desktop", gb: other },
       { kind: "vram", label: "Disco, now", gb: s.gpu.used_gb - other }]);
     $("vramText").textContent = `${s.gpu.used_gb.toFixed(1)} / ${s.gpu.total_gb.toFixed(0)} GB`;
-    $("vramText").classList.remove("over");
   } else {  // the driver didn't answer this time, so show nothing rather than an old reading
     drawTrack($("vramPlan"), 1, []);
     $("vramText").textContent = "–";
@@ -110,7 +95,6 @@ function showMemory() {
     drawTrack($("ramPlan"), s.ram.total_gb, [{ kind: "other", label: "Other apps", gb: other },
       { kind: "ram", label: "Disco, now", gb: disco - moved }, { kind: "moved", label: "Offloaded from VRAM", gb: moved }]);
     $("ramText").textContent = `${s.ram.used_gb.toFixed(0)} / ${s.ram.total_gb.toFixed(0)} GB`;
-    $("ramText").classList.remove("over");
   }
   $("memPlan").title = $("ramMeter").title = busy ? "What Disco uses now, after what the rest of the PC used before it started." : ahead;
 }
@@ -131,8 +115,6 @@ function showDisk(disk) {
   $("diskText").classList.toggle("low", low);
   $("diskMeter").title = `The drive that holds ${disk.folder}.${disk.disco_gb == null ? " Measuring Disco's files." : ` Disco Nano uses ${gb(disco)} of it.`}`;
 }
-
-const showPlan = showMemory;
 
 function controlsFor(name) {
   if (name === "animation_mode") return [...document.querySelectorAll('[data-anim="3D"]')];

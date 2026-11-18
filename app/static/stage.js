@@ -10,6 +10,8 @@
    - picture: what the editor puts on the stage, such as the start image, or null to keep what was showing.
    - keys(e): the editor's own keys.
    - beforeRender(): called by Render, returns why a render can't start yet, or nothing. */
+"use strict";
+
 const stage = {
   shows: { src: "", video: "" },  // what the stage shows outside an editor; empty until there is something
   editor: null,

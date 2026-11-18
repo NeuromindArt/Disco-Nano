@@ -9,7 +9,7 @@ async function startRender() {
   const prompts = promptLines();
   if (!prompts.length || /^\d+\s*:/.test(prompts[0])) { formError("Add a prompt first."); $("prompt").focus(); return; }
   if (animating() && state.prompt_changes?.some((c) => !c.text.trim())) { formError("A prompt change is empty. Write its prompt or remove it."); return; }
-  if (!CLIPS.some(([n]) => state[n]) && !Object.keys(state.advanced).length) { formError("Choose at least one CLIP model."); return; }
+  if (!CLIPS.some(([n]) => state[n]) && !Object.keys(state.advanced).length) { formError(worded("Choose at least one of the {clip_lower}.")); return; }
   if (state.skip_steps >= state.steps) { formError(worded("{Denoise must be above 0%.|skip_steps must be lower than steps.}")); return; }
   if (plan?.conflicts?.length) { formError(worded(plan.conflicts[0])); return; }
 

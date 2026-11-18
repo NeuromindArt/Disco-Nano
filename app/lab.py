@@ -1,7 +1,8 @@
 """Experimental changes to the generation loop. Every one is off until its setting is changed.
 
-With all of them off, render() takes its normal path and none of this code runs. With any on, a picture is painted
-through denoise() here, the normal ddim loop with room for the ones that work between steps.
+With all of them off, Render.paint goes through the sampler's own loop in Render.denoise and none of this code runs.
+With any on, a picture is painted through denoise() here, the normal ddim loop with room for the ones that work
+between steps.
 """
 import math
 
@@ -142,7 +143,7 @@ class Ghost:
         if needs_vit and self.vit is None:
             raise ValueError("Ghost guidance needs a ViT CLIP model.")
         if style is not None and self.net is None:
-            raise ValueError("Style image needs RN50.")
+            raise ValueError("Style image needs a ResNet checker.")
         with torch.no_grad():
             self.shapes = self.relations(ghost) if needs_vit else None
             self.style = self.textures(style) if style is not None else None
@@ -160,7 +161,7 @@ class Ghost:
         return patches @ patches.transpose(1, 2)
 
     def textures(self, image):
-        """Gram matrices of the first RN50 layers, the classic measure of texture and palette."""
+        """Gram matrices of a ResNet checker's first layers, the classic measure of texture and palette."""
         seen = []
         visual = self.net.visual
         hooks = [layer.register_forward_hook(lambda m, i, out: seen.append(out)) for layer in (visual.layer1, visual.layer2, visual.layer3)]

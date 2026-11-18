@@ -1,8 +1,8 @@
 /* Checkpoints: the model lists for Handoff and Inpaint, and the settings each checkpoint keeps. */
 "use strict";
 
-/* The list shows checkpoints in the checkpoint folders on the PC that renders. Browse, on that PC only, picks a
-   file anywhere and adds its folder. */
+/* The list shows checkpoints in the checkpoint folders on the PC that renders. Browse picks a file anywhere on the
+   PC that renders and adds its folder. */
 let checkpointList = [];
 
 async function loadCheckpoints() {
@@ -13,9 +13,8 @@ async function loadCheckpoints() {
 
 /* Fills a model list: the checkpoints grouped by the subfolder each is in, as ComfyUI sorts them, with `current`
    kept even when it isn't in a checkpoint folder. `none` labels the empty choice, which `always` keeps; otherwise it
-   shows only until a model is chosen. */
-/* A model list from the checkpoints, grouped by folder. Models made only for inpainting, such as Flux Fill, are
-   left out of Handoff's list and come first in Inpaint's. */
+   shows only until a model is chosen. Models made only for inpainting, such as Flux Fill, are left out of Handoff's
+   list and come first in Inpaint's. */
 function fillModelPick(select, current, none, always = true, inpainting = false) {
   const options = always || !current ? [option("", none)] : [];
   const groups = new Map();
@@ -32,7 +31,7 @@ function fillModelPick(select, current, none, always = true, inpainting = false)
   }
   if (made.children.length) options.splice(options.length && !options[0].value ? 1 : 0, 0, made);
   options.push(...groups.values());
-  if (current && !checkpointList.some((c) => c.path === current)) options.push(option(current, baseName(current).replace(/\.(safetensors|gguf)$/i, "")));
+  if (current && !checkpointList.some((c) => c.path === current)) options.push(option(current, modelName(current)));
   select.replaceChildren(...options);
   select.value = current;
 }
@@ -41,9 +40,7 @@ function fillModelPick(select, current, none, always = true, inpainting = false)
 function pickInpaintModel(path) {
   const own = { inpaint_file: path, ...(path && checkpointList.find((c) => c.path === path)?.inpaint) };
   for (const [name, value] of Object.entries(own)) {
-    if (!byName[name]) continue;
-    if (JSON.stringify(value) === JSON.stringify(byName[name].default)) delete state.advanced[name];
-    else state.advanced[name] = value;
+    if (byName[name]) setAdvanced(name, value);
   }
   resetAdvancedPanel();
   save();
@@ -73,9 +70,7 @@ function pickCheckpoint(path) {
   const own = path && (state.handoff_models?.[path] || checkpointList.find((c) => c.path === path)?.defaults);
   if (own) {
     for (const [name, value] of Object.entries(own)) {
-      if (!byName[name]) continue;
-      if (JSON.stringify(value) === JSON.stringify(byName[name].default)) delete state.advanced[name];
-      else state.advanced[name] = value;
+      if (byName[name]) setAdvanced(name, value);
     }
   }
   $("handoff_file").value = path;

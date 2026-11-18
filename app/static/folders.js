@@ -90,7 +90,7 @@ async function browseTo(path) {
   $("browseUp").disabled = r.parent == null;
   $("browsePick").disabled = !r.path;
   $("browseWhere").textContent = kind === "checkpoint"
-    ? `Folders on ${r.machine}, the PC that renders. Choose a .safetensors checkpoint.`
+    ? `Folders on ${r.machine}, the PC that renders. Choose a .safetensors or .gguf model.`
     : `Folders on ${r.machine}, the PC that renders. Open a folder, then use it.`;
   const rows = [];
   for (const f of r.folders) {

@@ -81,7 +81,7 @@ def inputs(rel: str):
 @app.post("/api/init-from-output")
 def init_from_output(body: dict):
     path = places.safe_output_path(str(body.get("rel", "")))
-    name = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename(path))
+    name = places.safe_name(path)
     target = os.path.join(places.INIT_DIR, name)
     shutil.copyfile(path, target)
     return {"path": target, "name": name, "size": places.image_size(target), "url": places.input_url(target)}

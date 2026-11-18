@@ -32,7 +32,7 @@ function save() {
 
 /* The main panel's values are saved in the browser, so a new default would never reach anyone who has opened
    Nano before. A value still at the default it was saved under moves to the new default, and one changed by
-   hand stays. QUICK_DEFAULTS_BEFORE holds the defaults from before this was recorded. */
+   hand stays. QUICK_DEFAULTS_BEFORE stands in for saved settings that have no record of their defaults. */
 const QUICK_DEFAULTS_BEFORE = { clip_guidance_scale: 20000 };
 
 function followNewDefaults() {
@@ -56,6 +56,13 @@ async function api(path, options) {
   }
   return res.json();
 }
+/* Keeps a setting in state.advanced only while it differs from `standard`, the setting's default unless given, so
+   a default that changes reaches it. */
+function setAdvanced(name, value, standard = byName[name]?.default) {
+  if (JSON.stringify(value) === JSON.stringify(standard)) delete state.advanced[name];
+  else state.advanced[name] = value;
+}
+
 const post = (path, data) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data || {}) });
 
 /* An error line under what it's about: shows `msg`, or hides with none. */
@@ -85,6 +92,10 @@ function fmtTime(s) {
   const m = Math.floor(s / 60);
   return m < 60 ? `${m}m ${Math.round(s % 60)}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
+
+/* The last part of a path, and a model file's name without its extension. */
+const baseName = (path) => String(path || "").split(/[\\/]/).filter(Boolean).pop() || "";
+const modelName = (path) => baseName(path).replace(/\.(safetensors|gguf)$/i, "");
 
 function option(value, label) {
   const o = document.createElement("option");

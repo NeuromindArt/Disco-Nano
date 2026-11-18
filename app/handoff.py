@@ -477,8 +477,8 @@ class Handoff(HandoffModel):
         return latent.half()
 
     def decode(self, latent, common=None, preview=False):
-        """Pixels from a latent. For the preview, while the UNet is on the GPU, it decodes in full, as a shrunken
-        latent decodes to blur and stripes, in small tiles."""
+        """Pixels from a latent. For the preview, while the UNet is on the GPU, it decodes the full latent in small
+        tiles: a shrunken latent decodes to blur and stripes."""
         with self.vae_in_float() as vae:
             wide = vae.tile_sample_min_size, vae.tile_latent_min_size
             if preview:

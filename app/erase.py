@@ -11,17 +11,17 @@ through the render the erase is. Up to FRESH_FROM it is all fresh: the step's ow
 holds the old thing's shape, and the next steps would rebuild it in the same place. From FRESH_TO there is none, only
 the step's own: by then that noise is too weak to rebuild anything, and fresh noise can't all be painted out in the
 steps left, so it turns to speckle in the area and grain across the rest of the tile. Between the two, the share of
-fresh noise falls in a straight line. Tested at 768x512 with Tiles, erasing a lighthouse: with only the step's own
-noise it came back at 60%, 70% and 75%, and not at 80%. All fresh noise at 70% and half at 75% kept it gone with no
-grain, while all fresh noise at 75% spread grain across the tile.
+fresh noise falls in a straight line. With only the step's own noise, an erased thing comes back until about 80% of
+the way through. All fresh noise up to 70%, and half at 75%, keep it gone with no grain, while all fresh noise at 75%
+spreads grain across the tile.
 
 With fresh noise, the area first goes back BACK of the schedule and comes down again in BACK_STEPS quick steps of
 the model alone, before the render carries on. Partway through a render, the steps only build on the broad shapes
 an area already holds, and LaMa fills smoothly, so a fill carried straight on is painted as haze. Back at more
-noise, the model draws broad shapes of its own, and the area keeps as much detail as what is around it. Tested on
-the same render: a fill carried straight on lost its detail within a few steps, while a detailed piece of the
-picture put in its place kept it, as did the fill after going back 40%, but not 25%. A late erase has too few steps
-left after coming down to add detail, so it doesn't go back.
+noise, the model draws broad shapes of its own, and the area keeps as much detail as what is around it. A fill
+carried straight on loses its detail within a few steps, while a detailed piece of the picture put in its place keeps
+it. Going back about 40% is enough for the area to keep its detail; 25% is not. A late erase has too few steps left
+after coming down to add detail, so it doesn't go back.
 
 With Tiles, the picture is the whole tiled image, held in RAM, so LaMa fills a crop around what was painted over,
 made smaller if it is very large. Each erase keeps the picture before it and LaMa's fill in the job's folder, as
@@ -34,12 +34,12 @@ Clone copies part of the picture over another, as painted with a source offset, 
 Each source the page picked is a layer: a soft mask and how far away it copies from. The copy's colors are matched to
 where it lands, by the difference along its edge spread smoothly across it, so a piece from a lighter part of the
 sky doesn't show as a patch. A clone gets fresh noise as an erase does, so what it covers doesn't come back, but it
-doesn't go back to be drawn again: it is already as detailed as the picture, and tested at 85%, a detailed piece of
-the picture put over a lighthouse kept its detail to the end and blended in, where LaMa's fill was painted as haze.
+doesn't go back to be drawn again: it is already as detailed as the picture, so even late it keeps its detail and
+blends in, where LaMa's fill would be painted as haze.
 Late in a render, cloning is the way to fix something and keep detail.
 
 What the render is held to forgets the thing too, through cover(): the start image Init scale compares against,
-Small first's picture and the Controls' picture. Otherwise they would keep pulling it back.
+Small first's picture, the Controls' picture and the ghost's picture. Otherwise they would keep pulling it back.
 
 Run as a script, it fixes an image file, for a start image before a render:
     erase.py --image start.png [--mask mask.png] [--clones clones.json] [--inpaint inpaint.json] --out fixed.png [--device cpu]

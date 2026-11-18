@@ -18,10 +18,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.6 2.6 0 0 1 5 1c0 1.8-2.5 2.2-2.5 3.8"/><path d="M12 17.2v.1"/></svg>
   </button>
   <a class="icon-link" href="https://neuromind.art" target="_blank" rel="noopener" title="neuromind.art" aria-label="Visit neuromind.art">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9S9.500 5.500 12 3z"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9S9.5 5.5 12 3z"/></svg>
   </a>
   <a class="icon-link" href="https://ko-fi.com/neuromindart" target="_blank" rel="noopener" title="Support on Ko-fi" aria-label="Support on Ko-fi">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M17 11h1.500a2.500 2.500 0 0 1 0 5H16.500"/><path d="M8 3v3M12 3v3"/></svg>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M17 11h1.5a2.5 2.5 0 0 1 0 5H16.5"/><path d="M8 3v3M12 3v3"/></svg>
   </a>
   <button type="button" id="advancedBtn" class="settings-btn" title="How the app works: names, color, network, folders and models. Picture settings are in the cards.">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg>
@@ -109,7 +109,7 @@
             <input type="hidden" id="video_init_path">
             <label class="line" data-sub="clip_style"><span class="field-name">Clip style</span><select id="clip_style"></select></label>
             <div class="slider-row"><label class="field-name" for="extract_nth_frame" data-words="{extract_nth_frame}">Every nth frame</label><input type="range" data-for="extract_nth_frame" min="1" max="10" step="1"><input id="extract_nth_frame" class="readout" type="number" min="1" max="10"></div>
-            <div class="slider-row" data-sub="video_blend"><label class="field-name" for="video_blend" data-words="{video_blend}">Blend last frame</label><input type="range" data-for="video_blend" min="0" max="0.9" step="0.05"><input id="video_blend" class="readout" type="number" min="0" max="0.9" step="0.05"></div>
+            <div class="slider-row" data-sub="video_blend"><label class="field-name" for="video_blend" data-words="{video_blend}">Blend last frame</label><input type="range" data-for="video_blend" min="0" max="0.7" step="0.05"><input id="video_blend" class="readout" type="number" min="0" max="0.7" step="0.05"></div>
           </div>
           <div class="slider-row"><label class="field-name" for="max_frames" data-words="{max_frames}">Frames</label><input type="range" data-for="max_frames" min="1" max="600" step="1"><input id="max_frames" class="readout" type="number" min="1" max="10000"></div>
           <div class="slider-row" data-sub="fps" data-sub-label="Saved video"><label class="field-name" for="fps" data-words="{fps}">Frames per second</label><input type="range" data-for="fps" min="1" max="60" step="1"><input id="fps" class="readout" type="number" min="1" max="60"></div>
@@ -237,11 +237,11 @@
         </div>
       </section>
 
-      <section class="card" data-card="guides" id="guideSection">
+      <section class="card" data-card="guides">
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Guide images</span><span class="card-sum" id="sum-guides"></span></button>
         <div class="card-body">
           <div class="guides">
-            <div class="guide" id="ghostGuide">
+            <div class="guide">
               <div class="field-name" data-words="{ghost_image}">Ghost image</div>
               <div class="drop small" data-drop="ghost_image" tabindex="0" role="button" aria-label="Ghost image: drop an image or click to choose">
                 <div class="drop-empty"><span>Drop</span></div>
@@ -249,7 +249,7 @@
                 <button type="button" class="drop-clear" title="Remove" aria-label="Remove the ghost image" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
               </div>
             </div>
-            <div class="guide" id="styleGuide">
+            <div class="guide">
               <div class="field-name" data-words="{style_image}">Style image</div>
               <div class="drop small" data-drop="style_image" tabindex="0" role="button" aria-label="Style image: drop an image or click to choose">
                 <div class="drop-empty"><span>Drop</span></div>
@@ -257,7 +257,7 @@
                 <button type="button" class="drop-clear" title="Remove" aria-label="Remove the style image" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
               </div>
             </div>
-            <div class="guide" id="promptGuide">
+            <div class="guide">
               <div class="field-name" data-words="{image_prompts}">Image prompts</div>
               <div class="drop small many" data-drop="image_prompts" tabindex="0" role="button" aria-label="Image prompts: drop images or a folder, or click to choose">
                 <div class="drop-empty"><span>Drop many</span></div>
@@ -281,7 +281,7 @@
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Controls</span><span class="card-sum" id="sum-controls"></span></button>
         <div class="card-body">
           <div class="guides image-only">
-            <div class="guide" id="controlGuide">
+            <div class="guide">
               <div class="field-name" data-words="{control_image}">Control image</div>
               <div class="drop small" data-drop="control_image" tabindex="0" role="button" aria-label="Control image: drop an image or click to choose">
                 <div class="drop-empty"><span>Drop</span></div>
@@ -302,7 +302,7 @@
         </div>
       </section>
 
-      <section class="card" data-card="lab" id="labSection">
+      <section class="card" data-card="lab">
         <button type="button" class="card-head" aria-expanded="true"><span class="chev" aria-hidden="true"></span><span class="card-title">Experiments</span><span class="card-sum" id="sum-lab"></span></button>
         <div class="card-body">
           <div class="group-label">With a partner model</div>
@@ -315,7 +315,7 @@
           <div class="group-label">Each step</div>
           <label class="check" data-sub="time_travel"><input type="checkbox" id="time_travel"> Time travel</label>
           <label class="check" data-sub="detail_bands"><input type="checkbox" id="detail_bands"> Broad shapes first</label>
-          <label class="check" data-sub="shaped_guidance"><input type="checkbox" id="shaped_guidance"> <span data-words="Shaped {clip_guidance_scale}">Shaped Prompt strength</span></label>
+          <label class="check" data-sub="shaped_guidance"><input type="checkbox" id="shaped_guidance"> <span data-words="{shaped_guidance}">Shaped prompt strength</span></label>
           <div class="slider-row"><label class="field-name" for="gradient_momentum">Push momentum</label><input type="range" data-for="gradient_momentum" min="0" max="0.95" step="0.05"><input id="gradient_momentum" class="readout" type="number" min="0" max="0.95" step="0.05"></div>
           <div class="slider-row" data-sub="correct_steps"><label class="field-name" for="correct_steps">Corrector steps</label><input type="range" data-for="correct_steps" min="0" max="3" step="1"><input id="correct_steps" class="readout" type="number" min="0" max="3" step="1"></div>
           <div class="group-label">Prompt checkers</div>
@@ -382,7 +382,7 @@
                 <option value="remove" title="LaMa clears what's there first, then the model paints over its fill at Strength">Over a cleared area</option>
               </select>
               <label id="inpaintStrengthBox" class="region-strength" title="How much the model repaints. Lower keeps more of what it starts from.">Strength <input type="range" id="inpaintStrength" min="5" max="100" step="5"><span id="inpaintStrengthShown" class="brush-size"></span></label>
-              <label id="inpaintCountBox" class="region-strength" title="How many tries to paint at once, to choose from">Tries
+              <label class="region-strength" title="How many tries to paint at once, to choose from">Tries
                 <select id="inpaintCount"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
             </div>
             <div id="inpaintTryRow" class="fix-row inpaint-tries" hidden>
@@ -584,7 +584,7 @@
     <dl id="helpLooks"></dl>
     <h3 data-words="{Cutouts} and schedules">Cutouts and schedules</h3>
     <p data-words="Each step, the {clip_lower} judge {cuts_lower} of the picture: whole-image views and close-ups. The {Cutouts} card sets how many of each there are and how close the close-ups get."></p>
-    <p data-words="The default close-up ramp keeps {cut_ic_pow} low at the start, so close-ups are wide and lay out the scene, and raises it toward the end for detail. It made real scenes where flat settings gave texture. Mostly shapes and Mostly detail under Look give more of the steps to one or the other."></p>
+    <p data-words="The default close-up ramp keeps {cut_ic_pow} low at the start, so close-ups are wide and lay out the scene, and raises it toward the end for detail. Flat settings tend to give texture rather than scenes. Mostly shapes and Mostly detail under Look give more of the steps to one or the other."></p>
     <p>The bar at the top of the card counts which steps are skipped, which a Handoff checkpoint paints, which lay out shapes and which paint detail, for the steps, Denoise or Frame skip and schedules you have set, and each schedule's graph marks where shapes end. A step lays out shapes while Whole-image views at least match Close-up views, so editing those two moves the split. The schedules run over 1000 points from noise to the finished picture. The first 400 lay out the scene with whole-image views and wide close-ups, and the rest paint detail with tighter and tighter close-ups. A start image skips the first steps, so at Denoise 50% Disco starts at point 500 and paints only detail over the image's shapes, which suits a restyle. Video frames do the same with Frame skip %. Fit views to the painted steps spreads the schedules over only the steps that are painted, so they start with a pass of shapes of their own and the prompt can turn what is in the image into what it describes. It's on for start images by default, and Start images and clip frames fits each frame of a clip too. Shapes share % sets how many of the steps that pass gets: 40 keeps the schedules as drawn, and 20 gives a fifth to shapes and the rest to detail.</p>
     <p>Settings that change over the render are schedules. Each one shows as a graph from the start of the render on the left to the end on the right, with its values in the corner. Click a graph to open its editor. Drag a level up or down to change it, and drag the line between two levels to move the change. Double-click a level to split it there, and double-click a line to join its two sides. The text box takes the same schedule as text, such as [12]*400+[4]*600: 12 for the first 400 of 1000 parts, then 4. A value that differs from the default shows in the accent color. Hover over a setting's name to read what it does.</p>
     <p>Guidance holds how the push toward the prompt is smoothed and limited, and how the picture is sampled. An option with settings of its own becomes a section when you switch it on, with its settings right under it, and its arrow folds them away. Settings that are always in use, such as those for Frames per second, start folded behind an arrow. A dot on an arrow means a setting inside is changed.</p>
@@ -598,8 +598,8 @@
     <p data-words="{init_scale} pulls the render toward the start image at every step, using a comparison of how similar the two look. Higher follows the image more closely, and 0 turns it off. It uses a little more VRAM and only applies when there is a start image."></p>
     <h3>Memory and CPU</h3>
     <p>CPU threads in Settings limits how much of the CPU a render uses. More threads rarely make it faster, and the default of 4 keeps the PC responsive. Renders also run at below normal priority, so the desktop comes first.</p>
-    <p>The bars at the bottom read the same way. Gray on the left is what the rest of the PC uses. Color on the right of it is Disco: green on VRAM, blue on RAM, purple for its files on the disk. Before a render, the colored part is lighter and shows what the next render will take, so it grows as you add to it. While a render runs, it turns solid and shows what Disco really uses. Hover any part to see its size.</p>
-    <p>The striped end of VRAM is kept free so Windows can draw the screen. When a render won't fit in what is left, part of its working data moves to system RAM by itself, which is slower but works: that part leaves the green VRAM bar and shows green inside the RAM bar. Red means it's too big even then, so lower the size or use fewer prompt checkers. The secondary model is faster and lighter, at lower quality.</p>
+    <p>The bars at the bottom show what is in use now. Gray on the left is what the rest of the PC uses. Color on the right of it is Disco: green on VRAM, blue on RAM, purple for its files on the disk. Hover any part to see its size, and hover the VRAM or RAM bar between renders to see what the next render needs.</p>
+    <p>When a render won't fit in VRAM, part of its working data moves to system RAM by itself, which is slower but works: that part shows green inside the RAM bar. If it's too big even then, the hover text says so; lower the size or use fewer prompt checkers. The secondary model is faster and lighter, at lower quality.</p>
     <h3>Guide images</h3>
     <p>Each box takes an image dropped on it, or click it to choose one. A ghost image guides the layout and a style image the texture and palette; their strengths are under Ghost settings and Style image settings in Guide images.</p>
     <p>Image prompts take many images at once: drop a set of images or a whole folder. They guide the render beside your text. Every prompt checker reads each image, and what the images have in common counts: a subject, a style, a palette, a mood. It's close to what an embedding does, but nothing is trained, so it takes seconds and works with any set. Ten to fifty images that share one idea work best. Image prompt weight sets how much they count beside a text line weighted 1, and below 0 steers away from them.</p>
@@ -626,12 +626,12 @@
     <p>Z-Image and Flux come as separate files, as in ComfyUI: Z-Image needs its Qwen3-4B text encoder, Flux needs T5-XXL and CLIP-L, both with Flux's autoencoder, ae.safetensors. Klein 4B needs Qwen3-4B and Klein 9B Qwen3-8B, both with flux2-vae.safetensors. Nano finds them in the models folder the model is in, subfolders included. Choosing one sets the steps and CFG it was made for, and the settings it doesn't use gray out.</p>
     <p>The Handoff list shows the SD 1.5 and SDXL checkpoints in your checkpoint folders on the PC that renders, and the Z-Image, Flux and Flux.2 Klein models in the unet and diffusion_models folders beside them, grouped by subfolder. The welcome screen fills in the folders of ComfyUI or a Stable Diffusion web UI it finds, and Find in other apps, beside Checkpoint folders in Settings, looks again. Browse picks a file anywhere on the PC that renders and adds its folder.</p>
     <h3>Controls</h3>
-    <p>ControlNet's idea, done through guidance, since Disco's model has nowhere to plug a ControlNet in. At every step the render is compared with a control picture and nudged closer, beside the prompt. A still follows the Control image, or else its start image. A clip needs none: a Video Input clip follows each frame of the video as it is before any painting, so the subject stays where it really is, and a 2D or 3D clip follows the frame each repaint starts from. Edge control holds its outlines, and only asks for an outline where it has one. Depth control holds its near and far. Pose control finds each person's skeleton and holds a body in that stance. Person control cuts out each person and holds their silhouette, clothes and broad colors, while everything around them is painted freely; it is the strongest for keeping someone in a clip. Face control finds each face and holds its features while the layout forms, where the eyes, nose and mouth are and their light and dark, then lets the paint finish them; a head turned to the side can still be painted facing forward; Face shape holds more of a turn. Face shape holds each face's outline and its near and far, measured close up, so the face keeps its own shape and a turned head keeps more of its turn, most of all with a Control image; it pushes beside the prompt as Edge and Depth do, so the face is still painted freely. Face detail gives every face close-ups of its own at each step, so faces are painted with more care; with no control picture it finds faces in the render itself, so it works with text alone. About 0.5 is a good start, and Person control holds well at 0.3. Each one has its own curve, in its section, which sets when it counts: Face lets go at 50% of the render, Depth at 60%, Pose, Person and Face shape at 70%, and Edge at 80%. They don't work with Tiles.</p>
+    <p>ControlNet's idea, done through guidance, since Disco's model has nowhere to plug a ControlNet in. At every step the render is compared with a control picture and nudged closer, beside the prompt. A still follows the Control image, or else its start image. A clip needs none: a Video Input clip follows each frame of the video as it is before any painting, so the subject stays where it really is, and a 2D or 3D clip follows the frame each repaint starts from. Edge control holds its outlines, and only asks for an outline where it has one. Depth control holds its near and far. Pose control finds each person's skeleton and holds a body in that stance. Person control cuts out each person and holds their silhouette, clothes and broad colors, while everything around them is painted freely; it is the strongest for keeping someone in a clip. Face control finds each face and holds its features while the layout forms, where the eyes, nose and mouth are and their light and dark, then lets the paint finish them; a head turned to the side can still be painted facing forward. Face shape holds each face's outline and its near and far, measured close up, so the face keeps its own shape and a turned head keeps more of its turn, most of all with a Control image; it pushes beside the prompt as Edge and Depth do, so the face is still painted freely. Face detail gives every face close-ups of its own at each step, so faces are painted with more care; with no control picture it finds faces in the render itself, so it works with text alone. About 0.5 is a good start, and Person control holds well at 0.3. Each one has its own curve, in its section, which sets when it counts: Face lets go at 50% of the render, Depth at 60%, Pose, Person and Face shape at 70%, and Edge at 80%. They don't work with Tiles.</p>
     <h3>Experiments</h3>
     <p>These change how the image forms. They're new, so results vary a lot from seed to seed, and they can't run with tiles, symmetry, plms or the secondary model. Whichever you choose first grays out the other, and hovering a grayed setting says why.</p>
     <p>Time travel backs up and repeats some steps, so the painter can absorb the prompt's push. Subjects get cleaner, for about 35% more time.</p>
     <p>Four experiments use a small text model, the partner, beside Disco. Get Tiny SD from Models in Settings, about 900MB.</p>
-    <p>Prompt graft adds the effect of your prompt straight into Disco's own decoder, which normally can't read text. Subjects often come out whole, and Disco's paint and color stay. About 3 is a good start. It adds about 0.6GB of VRAM and works only with the 512x512 model.</p>
+    <p>Prompt graft adds the effect of your prompt straight into Disco's own decoder, which normally can't read text. Subjects often come out whole, and Disco's paint and color stay. About 3 is a good start. It adds about 0.6GB of VRAM and works only with the 512×512 model.</p>
     <p>Live ghost lets the partner guide the picture's broad light and dark, and leaves color and detail to Disco. Sketch first paints a quick sketch before the render and takes it out of memory again, so it needs no extra VRAM during the render. Live keeps repainting during the render.</p>
     <p>Depth target keeps near and far where the ghost has them. A small depth model reads the ghost once and then checks the render at every step, so it works with Live ghost or a Ghost image. About 1 is a good start, and it pairs well with Sketch first and Prompt graft. It adds about 0.1 to 0.25GB of VRAM and a few seconds. Get Depth Anything from Models in Settings, about 100MB.</p>
     <p>Two painters shares every step between the two models. The partner owns the broad shapes until the layout is set, at 40%, and Disco owns detail and finishes alone. Holding the shapes longer, in Two painters curve, flattens the light and dark.</p>

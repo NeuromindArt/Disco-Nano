@@ -27,8 +27,8 @@ from torch.nn import functional as F
 import animate
 import control
 import critic
-import erase
 import depth
+import erase
 import graft
 import imaging
 import keyframes
@@ -96,9 +96,6 @@ class Render:
         self.small_steps = min(round(cfg["steps"] * float(cfg["small_first"]) / 100), cfg["steps"] - 1) if self.small else 0
         trying = lab.wanted(cfg) or critic.wanted(cfg)
         self.animating = cfg["animation_mode"] != "None"
-        mirrored = cfg["use_horizontal_symmetry"] or cfg["use_vertical_symmetry"]
-        if trying and (self.grid > 1 or self.secondary or mirrored or cfg["diffusion_sampling_mode"] != "ddim"):
-            raise ValueError("Experimental settings need the ddim sampler, with no tiles, symmetry or secondary model.")
         if self.grid > 1:
             cfg["diffusion_sampling_mode"] = "ddim"  # plms can't hold finished pixels still
         self.batch_name = cfg.get("batch_name", "Disco")
@@ -152,11 +149,7 @@ class Render:
                 self.lpips_model = load_lpips()
 
         drawing = cfg["live_ghost"] != "Off"
-        if cfg["prompt_graft"] and cfg["partner_model"] != "Tiny SD":
-            raise ValueError("Prompt graft needs Tiny SD as the partner model.")
         self.frame_ghost = self.animating and cfg["frame_ghost"]
-        if cfg["depth_target"] and not (drawing or cfg["ghost_image"] or self.frame_ghost):
-            raise ValueError("Depth target follows a ghost. Set Live ghost, choose a Ghost image, or turn on Last frame as ghost in a clip.")
         experiment = self.experiment = lab.Lab(cfg, schedule) if trying else None
 
         if uses_partner(cfg):
@@ -183,7 +176,7 @@ class Render:
                                          sized(cfg["style_image"]) if cfg["style_image"] else None, [s["model"] for s in stats], normalize,
                                          self.depth_model() if cfg["depth_target"] else None)
 
-        self.steer = None  # the controls: edges, depth and pose held to a control picture
+        self.steer = None  # the controls: edges, depth, pose, people and faces held to a control picture
         self.fixed_control = None  # the Control image, when one is set; otherwise the start image or each frame's video frame
         if control.wanted(cfg):
             self.steer = control.Control(cfg, schedule, device, hooks.status, self.depth_model, kept)
@@ -273,7 +266,7 @@ class Render:
     def fit_views(self, skip, frame=False):
         """`frame` is a clip's frame, which is fitted only with Start images and clip frames."""
         mode = self.cfg["views_fit"]
-        if isinstance(mode, bool):  # settings saved while it was a switch
+        if isinstance(mode, bool):  # older settings files store it as true or false
             mode = "Start images and clip frames" if mode else "Off"
         fit = mode == "Start images and clip frames" or (mode == "Start images" and not frame)
         self.views_from = min(round(POINTS * skip / self.diffusion.num_timesteps), POINTS - 1) if fit else 0

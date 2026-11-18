@@ -4,8 +4,9 @@ sharing is on.
 Never imports torch, so the idle server holds no VRAM. Renders and upscales each run in their own process, so their
 memory is fully released when they end and an out-of-memory failure cannot take the app down.
 
-Each part of the server is a module of the web package, which adds its own routes to the app: render, fix, gallery,
-inputs, pickers, checkpoints, downloads and network. This file starts them.
+Each part of the server is a module of the web package. Render, fix, gallery, inputs, pickers, checkpoints, downloads
+and network each add their own routes to the app, jobs runs the GPU jobs one at a time, and system reads the PC's GPU,
+RAM and drive. This file starts them.
 """
 import atexit
 import os
@@ -30,7 +31,7 @@ def open_when_ready():
         time.sleep(0.1)
     print(f"Ready at {URL}. Close this window to shut the app down.", flush=True)
     network.share_at_start()
-    if not os.environ.get("NANO_NO_BROWSER"):
+    if not os.environ.get("NANO_NO_BROWSER"):  # a server run without opening a browser, for scripts
         webbrowser.open(URL)
 
 

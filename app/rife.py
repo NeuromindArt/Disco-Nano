@@ -85,7 +85,7 @@ def load(device):
     """RIFE on the device, or None when it isn't downloaded."""
     import os
     path = models.path_of(models.RIFE)
-    if not os.path.exists(path) or os.environ.get("NANO_NO_RIFE"):  # set it to try the fallback
+    if not os.path.exists(path) or os.environ.get("NANO_NO_RIFE"):  # set it to make a clip with the flow fallback
         return None
     weights = torch.load(path, map_location="cpu", weights_only=True)
     net = IFNet()

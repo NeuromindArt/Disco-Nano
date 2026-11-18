@@ -40,6 +40,7 @@ def first_values(path, name, count):
         values.append(-value if b & 128 else value)
     return values
 
+
 def header(path):
     """{tensor name: shape} from a .safetensors or .gguf file, without reading the weights. GGUF lists shapes
     reversed, so they're turned around to match."""

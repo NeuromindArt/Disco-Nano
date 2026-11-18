@@ -15,7 +15,7 @@ from PIL import Image, ImageOps
 
 import keyframes
 import tiles
-from imaging import size_start_image
+from imaging import size_start_image, to_pil
 from keyframes import motion
 from loaders import device, load_lpips
 
@@ -249,7 +249,7 @@ def add_between(frames, count, folder, device, status, wrap=False):
         after = load(frames[(n + 1) % len(frames)])
         for k, image in enumerate(smoother.between(before, after, count)):
             path = os.path.join(folder, f"{n:05d}_{k + 1}.png")
-            TF.to_pil_image(image[0].add(1).div(2).clamp(0, 1).cpu()).save(path)
+            to_pil(image, signed=True).save(path)
             out.append(path)
         before = after
     return out

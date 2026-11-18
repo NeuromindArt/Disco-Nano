@@ -15,6 +15,8 @@ in the Experiments card, and their settings are in settings.py with the other ex
 import torch
 from torch.nn import functional as F
 
+from guidance import spherical_dist_loss
+
 GRIDS = {"All": (16, 32, 64), "Coarse": (32, 64), "Coarsest": (64,)}
 
 SUBJECT, STYLE, BOTH = 0, 1, 2
@@ -67,11 +69,6 @@ def shuffle_tiles(batch, generator):
         tiles = tiles[:, order].reshape(1, grid, grid, c, tile, tile).permute(0, 3, 1, 4, 2, 5).reshape(1, c, tile * grid, tile * grid)
         out.append(F.interpolate(tiles, size=(h, w), mode="bilinear", align_corners=False))
     return torch.cat(out)
-
-
-def spherical(x, y):
-    x, y = F.normalize(x, dim=-1), F.normalize(y, dim=-1)
-    return (x - y).norm(dim=-1).div(2).arcsin().pow(2).mul(2)
 
 
 # ---- the robust critic ----
@@ -201,7 +198,7 @@ class Critic:
         cut_grad = 0
         for i in range(0, count, chunk):
             embeds = stat["model"].encode_image(leaf[i:i + chunk]).float()
-            d = spherical(embeds.unsqueeze(1), stat["embeds"].unsqueeze(0)).view(-1, n, len(stat["weights"]))
+            d = spherical_dist_loss(embeds.unsqueeze(1), stat["embeds"].unsqueeze(0)).view(-1, n, len(stat["weights"]))
             rows = slice(i // n, i // n + d.shape[0])
             w = stat["weights"] if row_weights is None else row_weights[rows, None, :]
             mixed = (d * w).sum(-1)

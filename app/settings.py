@@ -147,7 +147,7 @@ FIELDS = [
     field("turbo_steps", 3, ANIMATION, "With {turbo_mode}, how often a frame is repainted."),
     field("save_mp4", True, ANIMATION, "Saves an MP4 video."),
     field("save_webp", True, ANIMATION, "Saves an animated WebP, which browsers play like a GIF at much better quality."),
-    field("save_gif", False, ANIMATION, "Saves a GIF at most 512 pixels wide. GIFs are large and have only 256 colors."),
+    field("save_gif", False, ANIMATION, "Saves a GIF at most 512 pixels on its longer side. GIFs are large and have only 256 colors."),
 
     field("time_travel", False, LAB, "Backs up and repeats some steps, so the prompt takes better hold. Cleaner subjects, but slower."),
     field("prompt_graft", 0.0, LAB, "Passes the partner model's sense of the prompt straight into Disco. About 3 is a good start. 0 is off."),
@@ -215,7 +215,7 @@ FIELDS = [
     field("one_subject", 0.0, LAB, "Pulls each subject into one place so it isn't repeated, and keeps separate subjects apart. About 1 for one subject, 2 for two. Needs the {ViTB32}, {ViTB16} or {ViTL14}. 0 is off."),
     field("subject_words", "", LAB, "The subjects for {one_subject}, separated by semicolons, such as: a woman; a white horse. Empty uses the first phrase of the prompt."),
     field("one_subject_curve", "[1]*500+[0]*500", LAB, "How much {one_subject} applies, over the 1000-step schedule."),
-    field("correct_steps", 0, LAB, "Extra small steps early in the render that settle the picture before it moves on. Each one adds about 30% time. 0 is off."),
+    field("correct_steps", 0, LAB, "Extra small steps early in the render that settle the picture before it moves on. Each one adds about 45% time. 0 is off."),
     field("correct_curve", "[1]*400+[0]*600", LAB, "Where {correct_steps} run, over the 1000-step schedule."),
     field("correct_snr", 0.1, LAB, "How far each of {correct_steps} moves. Higher changes more and can turn noisy."),
     field("correct_clip", True, LAB, "{correct_steps} also follow the prompt. Off, they only settle the painting."),
