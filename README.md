@@ -39,6 +39,33 @@ web app with live previews and a gallery, and fits full-size renders on an 8GB c
 - Render on the PC with the GPU from any browser on your network
 - Plain names for every setting, or Disco Diffusion's official ones, with help on hover
 
+## Requirements
+
+- Windows 10 or 11
+- An NVIDIA GPU with 8GB of VRAM or more
+- About 15GB of free disk space
+- An internet connection during setup
+
+Setup uses your Python 3.12 if you have one, and otherwise downloads its own.
+
+## Install
+
+1. Download the zip from the [latest release](https://github.com/NeuromindArt/Disco-Nano/releases/latest), under **Assets**.
+2. Extract it outside OneDrive, such as to `C:\`.
+3. Double-click **setup.bat**. It installs everything into a `data` folder, and uses models that
+   ComfyUI or a Stable Diffusion web UI already has instead of downloading them again.
+4. Double-click the **Disco Nano** shortcut setup makes. The app opens in your browser at
+   http://127.0.0.1:7861. Closing the black window shuts it down.
+
+If Windows says "Windows protected your PC", choose **More info**, then **Run anyway**. To keep the
+`data` folder somewhere else, put its path in a `home.txt` file beside `setup.bat` before running setup.
+
+**Updating:** extract the new release over the old folder and run **setup.bat** again. Your `data`
+folder, with models, images and settings, is kept. Or clone the repository and `git pull`.
+
+**Rendering on another PC:** turn on **Share this PC** in Settings on the PC with the GPU. It shows an
+address and a code to open from any browser on your network.
+
 ## What each option does
 
 The same prompt, *A beautiful painting of a lighthouse in a stormy sea*, and seed at 768×512 and 200
@@ -146,33 +173,6 @@ steps, changing only the option beside it. Guide images are from [Pexels](https:
     <td width="60%"><img src="docs/options/route.jpg" width="100%" alt="Prompt routing: Split"></td>
   </tr>
 </table>
-
-## Requirements
-
-- Windows 10 or 11
-- An NVIDIA GPU with 8GB of VRAM or more
-- About 15GB of free disk space
-- An internet connection during setup
-
-Setup uses your Python 3.12 if you have one, and otherwise downloads its own.
-
-## Install
-
-1. Download the zip from the [latest release](https://github.com/NeuromindArt/Disco-Nano/releases/latest), under **Assets**.
-2. Extract it outside OneDrive, such as to `C:\`.
-3. Double-click **setup.bat**. It installs everything into a `data` folder, and uses models that
-   ComfyUI or a Stable Diffusion web UI already has instead of downloading them again.
-4. Double-click the **Disco Nano** shortcut setup makes. The app opens in your browser at
-   http://127.0.0.1:7861. Closing the black window shuts it down.
-
-If Windows says "Windows protected your PC", choose **More info**, then **Run anyway**. To keep the
-`data` folder somewhere else, put its path in a `home.txt` file beside `setup.bat` before running setup.
-
-**Updating:** extract the new release over the old folder and run **setup.bat** again. Your `data`
-folder, with models, images and settings, is kept. Or clone the repository and `git pull`.
-
-**Rendering on another PC:** turn on **Share this PC** in Settings on the PC with the GPU. It shows an
-address and a code to open from any browser on your network.
 
 ## Models
 
